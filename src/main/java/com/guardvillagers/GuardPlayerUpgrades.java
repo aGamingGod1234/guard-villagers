@@ -114,6 +114,9 @@ public final class GuardPlayerUpgrades {
 	}
 
 	public ArmorTier rollArmorTier(Random random) {
+		if (this.armorLevel >= MAX_ARMOR_LEVEL) {
+			return ArmorTier.NETHERITE;
+		}
 		int maxIndex = ArmorTier.values().length - 1;
 		int linearIndex = Math.min(maxIndex, (this.armorLevel * maxIndex) / MAX_ARMOR_LEVEL);
 		if (linearIndex < maxIndex && random.nextInt(100) < 30) {

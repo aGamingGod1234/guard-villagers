@@ -583,64 +583,70 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.setEquipmentDropChance(EquipmentSlot.MAINHAND, 0.0F);
 		this.playerMainHand = false;
 
-		GuardPlayerUpgrades.ArmorTier tier = upgrades.rollArmorTier(this.getRandom());
-		this.equipArmorTier(world, tier, upgrades.getArmorLevel());
+		this.equipArmorPieces(world, upgrades);
 	}
 
-	private void equipArmorTier(ServerWorld world, GuardPlayerUpgrades.ArmorTier tier, int armorLevel) {
-		Item helmet;
-		Item chest;
-		Item legs;
-		Item feet;
-		switch (tier) {
-			case CHAINMAIL -> {
-				helmet = Items.CHAINMAIL_HELMET;
-				chest = Items.CHAINMAIL_CHESTPLATE;
-				legs = Items.CHAINMAIL_LEGGINGS;
-				feet = Items.CHAINMAIL_BOOTS;
-			}
-			case IRON -> {
-				helmet = Items.IRON_HELMET;
-				chest = Items.IRON_CHESTPLATE;
-				legs = Items.IRON_LEGGINGS;
-				feet = Items.IRON_BOOTS;
-			}
-			case GOLD -> {
-				helmet = Items.GOLDEN_HELMET;
-				chest = Items.GOLDEN_CHESTPLATE;
-				legs = Items.GOLDEN_LEGGINGS;
-				feet = Items.GOLDEN_BOOTS;
-			}
-			case DIAMOND -> {
-				helmet = Items.DIAMOND_HELMET;
-				chest = Items.DIAMOND_CHESTPLATE;
-				legs = Items.DIAMOND_LEGGINGS;
-				feet = Items.DIAMOND_BOOTS;
-			}
-			case NETHERITE -> {
-				helmet = Items.NETHERITE_HELMET;
-				chest = Items.NETHERITE_CHESTPLATE;
-				legs = Items.NETHERITE_LEGGINGS;
-				feet = Items.NETHERITE_BOOTS;
-			}
-			default -> {
-				helmet = Items.LEATHER_HELMET;
-				chest = Items.LEATHER_CHESTPLATE;
-				legs = Items.LEATHER_LEGGINGS;
-				feet = Items.LEATHER_BOOTS;
-			}
-		}
-
+	private void equipArmorPieces(ServerWorld world, GuardPlayerUpgrades upgrades) {
+		int armorLevel = upgrades.getArmorLevel();
 		int protectionLevel = Math.min(4, Math.max(0, armorLevel / 2));
-		this.equipArmorPiece(world, EquipmentSlot.HEAD, helmet, protectionLevel);
-		this.equipArmorPiece(world, EquipmentSlot.CHEST, chest, protectionLevel);
-		this.equipArmorPiece(world, EquipmentSlot.LEGS, legs, protectionLevel);
-		this.equipArmorPiece(world, EquipmentSlot.FEET, feet, protectionLevel);
+		GuardPlayerUpgrades.ArmorTier forcedTier = armorLevel >= GuardPlayerUpgrades.MAX_ARMOR_LEVEL ? GuardPlayerUpgrades.ArmorTier.NETHERITE : null;
+
+		for (EquipmentSlot slot : List.of(EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET)) {
+			GuardPlayerUpgrades.ArmorTier tier = forcedTier == null ? upgrades.rollArmorTier(this.getRandom()) : forcedTier;
+			this.equipArmorPiece(world, slot, getArmorItemForSlot(tier, slot), protectionLevel);
+		}
 
 		for (EquipmentSlot slot : List.of(EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET)) {
 			this.setEquipmentDropChance(slot, 0.0F);
 			this.playerArmor.put(slot, false);
 		}
+	}
+
+	private Item getArmorItemForSlot(GuardPlayerUpgrades.ArmorTier tier, EquipmentSlot slot) {
+		return switch (tier) {
+			case CHAINMAIL -> switch (slot) {
+				case HEAD -> Items.CHAINMAIL_HELMET;
+				case CHEST -> Items.CHAINMAIL_CHESTPLATE;
+				case LEGS -> Items.CHAINMAIL_LEGGINGS;
+				case FEET -> Items.CHAINMAIL_BOOTS;
+				default -> Items.LEATHER_BOOTS;
+			};
+			case IRON -> switch (slot) {
+				case HEAD -> Items.IRON_HELMET;
+				case CHEST -> Items.IRON_CHESTPLATE;
+				case LEGS -> Items.IRON_LEGGINGS;
+				case FEET -> Items.IRON_BOOTS;
+				default -> Items.LEATHER_BOOTS;
+			};
+			case GOLD -> switch (slot) {
+				case HEAD -> Items.GOLDEN_HELMET;
+				case CHEST -> Items.GOLDEN_CHESTPLATE;
+				case LEGS -> Items.GOLDEN_LEGGINGS;
+				case FEET -> Items.GOLDEN_BOOTS;
+				default -> Items.LEATHER_BOOTS;
+			};
+			case DIAMOND -> switch (slot) {
+				case HEAD -> Items.DIAMOND_HELMET;
+				case CHEST -> Items.DIAMOND_CHESTPLATE;
+				case LEGS -> Items.DIAMOND_LEGGINGS;
+				case FEET -> Items.DIAMOND_BOOTS;
+				default -> Items.LEATHER_BOOTS;
+			};
+			case NETHERITE -> switch (slot) {
+				case HEAD -> Items.NETHERITE_HELMET;
+				case CHEST -> Items.NETHERITE_CHESTPLATE;
+				case LEGS -> Items.NETHERITE_LEGGINGS;
+				case FEET -> Items.NETHERITE_BOOTS;
+				default -> Items.LEATHER_BOOTS;
+			};
+			default -> switch (slot) {
+				case HEAD -> Items.LEATHER_HELMET;
+				case CHEST -> Items.LEATHER_CHESTPLATE;
+				case LEGS -> Items.LEATHER_LEGGINGS;
+				case FEET -> Items.LEATHER_BOOTS;
+				default -> Items.LEATHER_BOOTS;
+			};
+		};
 	}
 
 	private void equipArmorPiece(ServerWorld world, EquipmentSlot slot, Item item, int protectionLevel) {
