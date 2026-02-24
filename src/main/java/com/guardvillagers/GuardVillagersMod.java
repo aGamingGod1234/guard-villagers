@@ -300,6 +300,9 @@ public class GuardVillagersMod implements ModInitializer {
 			for (Entity entity : world.iterateEntities()) {
 				if (entity instanceof GuardEntity guard && guard.isOwnedBy(player.getUuid())) {
 					guard.setStaying(staying);
+					if (!staying) {
+						guard.clearCombatTarget();
+					}
 					changed++;
 				}
 			}
@@ -313,6 +316,7 @@ public class GuardVillagersMod implements ModInitializer {
 			for (Entity entity : world.iterateEntities()) {
 				if (entity instanceof GuardEntity guard && guard.isOwnedBy(player.getUuid())) {
 					guard.setBehavior(behavior);
+					guard.clearCombatTarget();
 					changed++;
 				}
 			}
@@ -327,6 +331,7 @@ public class GuardVillagersMod implements ModInitializer {
 			for (Entity entity : world.iterateEntities()) {
 				if (entity instanceof GuardEntity guard && guard.isOwnedBy(player.getUuid())) {
 					guard.setFormationType(formationType);
+					guard.clearCombatTarget();
 					changed++;
 				}
 			}
@@ -344,6 +349,7 @@ public class GuardVillagersMod implements ModInitializer {
 			entity -> entity.isOwnedBy(player.getUuid()))
 		) {
 			guard.setHome(home, radius);
+			guard.clearCombatTarget();
 			changed++;
 		}
 		return changed;

@@ -153,6 +153,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private boolean retreating;
 	private UUID priorityTarget;
 	private int combatCooldown;
+	private int noSightTicks;
+	private int stuckTargetTicks;
+	private Vec3d lastProgressPos = Vec3d.ZERO;
 	private int rallyTicks;
 	private BlockPos rallyPoint;
 	private BlockPos home;
@@ -308,9 +311,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	public void setStaying(boolean staying) {
 		this.staying = staying;
 		if (staying) {
-			this.priorityTarget = null;
-			this.setTarget(null);
-			this.getNavigation().stop();
+			this.clearCombatTarget();
 		}
 	}
 
@@ -346,6 +347,15 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	public void setPatrolRadius(int patrolRadius) {
 		this.patrolRadius = MathHelper.clamp(patrolRadius, 0, 128);
+	}
+
+	public void clearCombatTarget() {
+		this.priorityTarget = null;
+		this.setTarget(null);
+		this.noSightTicks = 0;
+		this.stuckTargetTicks = 0;
+		this.combatCooldown = 0;
+		this.getNavigation().stop();
 	}
 
 	public boolean canTargetWithinZone(BlockPos pos) {
@@ -773,7 +783,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	public void setPriorityTarget(LivingEntity target) {
-		if (target == null || !target.isAlive() || this.isAlly(target) || !this.canTargetWithinZone(target.getBlockPos())) {
+		if (target == null || !target.isAlive() || this.isAlly(target) || !this.canTargetWithinZone(target.getBlockPos()) || !this.canSee(target)) {
 			return;
 		}
 
@@ -805,6 +815,8 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 		this.syncPriorityTarget(world);
 		this.pickFallbackTarget(world);
+		this.enforceTargetLineOfSight();
+		this.breakOutOfStuckChasing();
 		this.applyRallyBehavior();
 		this.enforceZoneTethering();
 		this.handleOwnerTrust(world);
@@ -833,9 +845,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 		LivingEntity target = this.getTarget();
 		if (target != null && !this.canTargetWithinZone(target.getBlockPos())) {
-			this.setTarget(null);
-			this.priorityTarget = null;
-			this.getNavigation().stop();
+			this.clearCombatTarget();
 		}
 
 		if (this.getTarget() == null && this.home.getSquaredDistance(this.getBlockPos()) > (double) (this.patrolRadius + 8) * (this.patrolRadius + 8)) {
@@ -849,7 +859,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 
 		Entity entity = world.getEntity(this.priorityTarget);
-		if (entity instanceof LivingEntity living && living.isAlive() && !this.isAlly(living) && this.canTargetWithinZone(living.getBlockPos())) {
+		if (entity instanceof LivingEntity living && living.isAlive() && !this.isAlly(living) && this.canTargetWithinZone(living.getBlockPos()) && this.canSee(living)) {
 			this.setTarget(living);
 			this.combatCooldown = 80;
 		} else {
@@ -928,7 +938,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	private void receiveSquadTarget(LivingEntity target) {
-		if (target == null || !target.isAlive() || this.isAlly(target) || !this.canTargetWithinZone(target.getBlockPos())) {
+		if (target == null || !target.isAlive() || this.isAlly(target) || !this.canTargetWithinZone(target.getBlockPos()) || !this.canSee(target)) {
 			return;
 		}
 		this.priorityTarget = target.getUuid();
@@ -940,7 +950,51 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		return hostile.isAlive()
 			&& !hostile.isRemoved()
 			&& !this.isAlly(hostile)
+			&& this.canSee(hostile)
 			&& this.canTargetWithinZone(hostile.getBlockPos());
+	}
+
+	private void enforceTargetLineOfSight() {
+		LivingEntity target = this.getTarget();
+		if (target == null || !target.isAlive()) {
+			this.noSightTicks = 0;
+			return;
+		}
+
+		if (this.canSee(target)) {
+			this.noSightTicks = 0;
+			return;
+		}
+
+		this.noSightTicks++;
+		if (this.noSightTicks > 40) {
+			this.clearCombatTarget();
+		}
+	}
+
+	private void breakOutOfStuckChasing() {
+		LivingEntity target = this.getTarget();
+		if (target == null || !target.isAlive()) {
+			this.stuckTargetTicks = 0;
+			return;
+		}
+
+		if (this.squaredDistanceTo(target) < 9.0D) {
+			this.lastProgressPos = this.getEntityPos();
+			this.stuckTargetTicks = 0;
+			return;
+		}
+
+		if (this.squaredDistanceTo(this.lastProgressPos) < 0.01D) {
+			this.stuckTargetTicks++;
+		} else {
+			this.lastProgressPos = this.getEntityPos();
+			this.stuckTargetTicks = 0;
+		}
+
+		if (this.stuckTargetTicks > 60) {
+			this.clearCombatTarget();
+		}
 	}
 
 	private boolean isAlly(Entity entity) {
@@ -1026,7 +1080,11 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 		this.combatCooldown = 160;
 		if (source.getAttacker() instanceof LivingEntity attacker) {
-			if (!this.isAlly(attacker)) {
+			if (attacker instanceof PlayerEntity playerAttacker && this.ownerUuid != null && this.ownerUuid.equals(playerAttacker.getUuid())) {
+				this.clearCombatTarget();
+				return true;
+			}
+			if (!this.isAlly(attacker) && this.canSee(attacker)) {
 				this.setPriorityTarget(attacker);
 				this.rallyNearbyGuards(world, attacker);
 			}

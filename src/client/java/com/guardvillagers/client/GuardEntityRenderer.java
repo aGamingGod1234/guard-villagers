@@ -13,7 +13,7 @@ import net.minecraft.util.Identifier;
 import net.minecraft.util.Formatting;
 
 public class GuardEntityRenderer extends MobEntityRenderer<GuardEntity, VillagerEntityRenderState, VillagerResemblingModel> {
-	private static final Identifier TEXTURE = GuardVillagersMod.id("textures/entity/guard_villager.png");
+	private static final Identifier TEXTURE = Identifier.of("minecraft", "textures/entity/villager/villager.png");
 
 	public GuardEntityRenderer(EntityRendererFactory.Context context) {
 		super(context, new VillagerResemblingModel(context.getPart(EntityModelLayers.VILLAGER)), 0.5F);
