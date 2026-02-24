@@ -144,8 +144,8 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		Map.entry(Items.NETHERITE_BOOTS, new ArmorDefinition(EquipmentSlot.FEET, 5))
 	);
 
-	private final MeleeAttackGoal meleeGoal = new MeleeAttackGoal(this, 1.2D, true);
-	private final ProjectileAttackGoal rangedGoal = new ProjectileAttackGoal(this, 1.0D, 30, 15.0F);
+	private MeleeAttackGoal meleeGoal;
+	private ProjectileAttackGoal rangedGoal;
 
 	private UUID ownerUuid;
 	private UUID squadId;
@@ -177,6 +177,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	@Override
 	protected void initGoals() {
+		this.meleeGoal = new MeleeAttackGoal(this, 1.2D, true);
+		this.rangedGoal = new ProjectileAttackGoal(this, 1.0D, 30, 15.0F);
+
 		this.goalSelector.add(0, new SwimGoal(this));
 		this.goalSelector.add(1, new TacticalRetreatGoal(this, 1.35D));
 		this.goalSelector.add(3, new RaidTacticsGoal(this, 1.2D));
@@ -1184,6 +1187,10 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	private void updateCombatGoals() {
+		if (this.meleeGoal == null || this.rangedGoal == null) {
+			return;
+		}
+
 		this.goalSelector.remove(this.meleeGoal);
 		this.goalSelector.remove(this.rangedGoal);
 		if (this.getRole() == GuardRole.BOWMAN) {

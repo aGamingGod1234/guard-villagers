@@ -15,6 +15,7 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
+import net.fabricmc.fabric.api.itemgroup.v1.FabricItemGroup;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
 import net.minecraft.command.CommandRegistryAccess;
 import net.minecraft.entity.Entity;
@@ -25,6 +26,8 @@ import net.minecraft.entity.SpawnReason;
 import net.minecraft.entity.passive.IronGolemEntity;
 import net.minecraft.entity.passive.VillagerEntity;
 import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.registry.Registries;
 import net.minecraft.registry.Registry;
 import net.minecraft.registry.RegistryKey;
@@ -67,6 +70,51 @@ public class GuardVillagersMod implements ModInitializer {
 		new GuardWhistleItem(new Item.Settings()
 			.registryKey(RegistryKey.of(RegistryKeys.ITEM, id("guard_whistle")))
 			.maxCount(1))
+	);
+
+	public static final net.minecraft.item.ItemGroup GUARD_KIT_GROUP = Registry.register(
+		Registries.ITEM_GROUP,
+		id("guard_kit"),
+		FabricItemGroup.builder()
+			.displayName(Text.translatable("itemGroup.guardvillagers.guard_kit"))
+			.icon(() -> new ItemStack(GUARD_WHISTLE))
+			.entries((context, entries) -> {
+				entries.add(GUARD_WHISTLE);
+				entries.add(Items.EMERALD);
+				entries.add(Items.WOODEN_SWORD);
+				entries.add(Items.STONE_SWORD);
+				entries.add(Items.GOLDEN_SWORD);
+				entries.add(Items.IRON_SWORD);
+				entries.add(Items.DIAMOND_SWORD);
+				entries.add(Items.NETHERITE_SWORD);
+				entries.add(Items.BOW);
+				entries.add(Items.ARROW);
+				entries.add(Items.LEATHER_HELMET);
+				entries.add(Items.LEATHER_CHESTPLATE);
+				entries.add(Items.LEATHER_LEGGINGS);
+				entries.add(Items.LEATHER_BOOTS);
+				entries.add(Items.CHAINMAIL_HELMET);
+				entries.add(Items.CHAINMAIL_CHESTPLATE);
+				entries.add(Items.CHAINMAIL_LEGGINGS);
+				entries.add(Items.CHAINMAIL_BOOTS);
+				entries.add(Items.GOLDEN_HELMET);
+				entries.add(Items.GOLDEN_CHESTPLATE);
+				entries.add(Items.GOLDEN_LEGGINGS);
+				entries.add(Items.GOLDEN_BOOTS);
+				entries.add(Items.IRON_HELMET);
+				entries.add(Items.IRON_CHESTPLATE);
+				entries.add(Items.IRON_LEGGINGS);
+				entries.add(Items.IRON_BOOTS);
+				entries.add(Items.DIAMOND_HELMET);
+				entries.add(Items.DIAMOND_CHESTPLATE);
+				entries.add(Items.DIAMOND_LEGGINGS);
+				entries.add(Items.DIAMOND_BOOTS);
+				entries.add(Items.NETHERITE_HELMET);
+				entries.add(Items.NETHERITE_CHESTPLATE);
+				entries.add(Items.NETHERITE_LEGGINGS);
+				entries.add(Items.NETHERITE_BOOTS);
+			})
+			.build()
 	);
 
 	@Override
@@ -152,9 +200,6 @@ public class GuardVillagersMod implements ModInitializer {
 						context.getSource().sendFeedback(() -> Text.literal("Assigned home zone to " + updated + " guards."), false);
 						return updated;
 					})))
-		);
-
-		dispatcher.register(CommandManager.literal("guard")
 			.then(CommandManager.literal("count")
 				.executes(context -> {
 					ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
