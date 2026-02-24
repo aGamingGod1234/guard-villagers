@@ -64,7 +64,9 @@ public class GuardVillagersMod implements ModInitializer {
 	public static final Item GUARD_WHISTLE = Registry.register(
 		Registries.ITEM,
 		id("guard_whistle"),
-		new GuardWhistleItem(new Item.Settings().maxCount(1))
+		new GuardWhistleItem(new Item.Settings()
+			.registryKey(RegistryKey.of(RegistryKeys.ITEM, id("guard_whistle")))
+			.maxCount(1))
 	);
 
 	@Override
