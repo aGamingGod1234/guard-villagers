@@ -130,7 +130,10 @@ public final class VillageManagerHandler {
 			int chunkX = ChunkSectionPos.getSectionCoord(villager.getBlockX());
 			int chunkZ = ChunkSectionPos.getSectionCoord(villager.getBlockZ());
 			long chunkKey = (((long) chunkX) << 32) ^ (chunkZ & 0xffffffffL);
-			Optional<VillageDescriptor> descriptor = chunkCache.computeIfAbsent(chunkKey, ignored -> findVillageDescriptor(world, villager.getBlockPos()));
+			Optional<VillageDescriptor> descriptor = chunkCache.computeIfAbsent(chunkKey, ignored -> {
+				Optional<VillageDescriptor> structured = findVillageDescriptor(world, villager.getBlockPos());
+				return structured.isPresent() ? structured : findFallbackVillageDescriptor(world, villager.getBlockPos());
+			});
 			if (descriptor.isEmpty()) {
 				continue;
 			}
@@ -141,6 +144,35 @@ public final class VillageManagerHandler {
 		}
 
 		return villages;
+	}
+
+	private static Optional<VillageDescriptor> findFallbackVillageDescriptor(ServerWorld world, BlockPos origin) {
+		Optional<BlockPos> poiCenter = world.getPointOfInterestStorage().getNearestPosition(
+			entry -> entry.matchesKey(PointOfInterestTypes.HOME),
+			origin,
+			48,
+			PointOfInterestStorage.OccupationStatus.ANY
+		);
+		if (poiCenter.isEmpty()) {
+			return Optional.empty();
+		}
+
+		BlockPos center = poiCenter.get();
+		int radius = 32;
+		BlockBox bounds = new BlockBox(
+			center.getX() - radius,
+			world.getBottomY(),
+			center.getZ() - radius,
+			center.getX() + radius,
+			world.getTopYInclusive(),
+			center.getZ() + radius
+		);
+		String id = world.getRegistryKey().getValue()
+			+ "|poi|"
+			+ ChunkSectionPos.getSectionCoord(center.getX())
+			+ "|"
+			+ ChunkSectionPos.getSectionCoord(center.getZ());
+		return Optional.of(new VillageDescriptor(id, bounds, center, radius));
 	}
 
 	private static double calculateDensity(VillageDescriptor village, int villagerCount) {

@@ -541,19 +541,19 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		return best;
 	}
 
-	public void assignRandomRole() {
-		this.setRole(GuardRole.random(this.getRandom()));
+	public void assignRandomRole(ServerWorld world) {
+		this.setRole(GuardRole.random(world.getRandom()));
 	}
 
 	public void applyNaturalLoadout(ServerWorld world) {
-		this.assignRandomRole();
+		this.assignRandomRole(world);
 		this.setBehavior(GuardBehavior.random(world.getRandom()));
 		this.setFormationType(FormationType.LINE);
 		this.equipGuardGear(world, 0, new GuardPlayerUpgrades());
 	}
 
 	public void applyPurchasedLoadout(ServerWorld world, GuardPlayerUpgrades upgrades) {
-		this.assignRandomRole();
+		this.assignRandomRole(world);
 		this.setBehavior(GuardBehavior.BODYGUARD);
 		this.setFormationType(FormationType.WEDGE);
 		this.equipGuardGear(world, upgrades.getWeaponLevel(), upgrades);
@@ -733,6 +733,10 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	private boolean tryApplyArmorUpgrade(PlayerEntity player, Hand hand, ItemStack offered) {
+		if (!player.isSneaking() || this.squaredDistanceTo(player) > 25.0D) {
+			return false;
+		}
+
 		ArmorDefinition definition = ARMOR_DEFINITIONS.get(offered.getItem());
 		if (definition == null) {
 			return false;
@@ -740,15 +744,13 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 		ItemStack equipped = this.getEquippedStack(definition.slot());
 		int currentScore = this.getArmorScore(equipped);
-		if (!player.isSneaking()) {
-			int offeredProtection = this.getEnchantmentLevel(offered, Enchantments.PROTECTION);
-			int currentProtection = this.getEnchantmentLevel(equipped, Enchantments.PROTECTION);
-			if (definition.score() < currentScore) {
-				return false;
-			}
-			if (definition.score() == currentScore && offeredProtection <= currentProtection) {
-				return false;
-			}
+		int offeredProtection = this.getEnchantmentLevel(offered, Enchantments.PROTECTION);
+		int currentProtection = this.getEnchantmentLevel(equipped, Enchantments.PROTECTION);
+		if (definition.score() < currentScore) {
+			return false;
+		}
+		if (definition.score() == currentScore && offeredProtection <= currentProtection) {
+			return false;
 		}
 
 		this.equipStack(definition.slot(), offered.copyWithCount(1));
@@ -758,6 +760,14 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			player.getStackInHand(hand).decrement(1);
 		}
 		return true;
+	}
+
+	public UUID getPriorityTargetUuid() {
+		return this.priorityTarget;
+	}
+
+	public int getCombatCooldown() {
+		return this.combatCooldown;
 	}
 
 	private boolean tryApplyWeaponUpgrade(PlayerEntity player, Hand hand, ItemStack offered) {

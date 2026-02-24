@@ -4,6 +4,7 @@ import com.guardvillagers.data.GuardUpgradeState;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.FormationType;
+import com.guardvillagers.item.GuardSpawnEggItem;
 import com.guardvillagers.item.GuardWhistleItem;
 import com.guardvillagers.shop.GuardShopScreenHandler;
 import com.guardvillagers.tactics.GuardTacticsScreenHandler;
@@ -28,6 +29,7 @@ import net.minecraft.entity.passive.VillagerEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.particle.ParticleTypes;
 import net.minecraft.registry.Registries;
 import net.minecraft.registry.Registry;
 import net.minecraft.registry.RegistryKey;
@@ -43,17 +45,26 @@ import net.minecraft.util.ActionResult;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Vec3d;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class GuardVillagersMod implements ModInitializer {
 	public static final String MOD_ID = "guardvillagers";
 	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
 	private static final int FOLLOW_DISTANCE = 64;
+	private static final int DEBUG_SCAN_RANGE = 96;
+	private static final int DEBUG_TEXT_UPDATE_INTERVAL = 10;
+	private static final int DEBUG_PARTICLE_INTERVAL = 20;
+	private static final String DEBUG_PREFIX = "[DBG] ";
+	private static final Set<UUID> DEBUG_PLAYERS = ConcurrentHashMap.newKeySet();
 
 	public enum GuardPurchaseResult {
 		SUCCESS,
@@ -80,13 +91,20 @@ public class GuardVillagersMod implements ModInitializer {
 			.maxCount(1))
 	);
 
+	public static final Item GUARD_SPAWN_EGG = Registry.register(
+		Registries.ITEM,
+		id("guard_spawn_egg"),
+		new GuardSpawnEggItem(new Item.Settings().registryKey(RegistryKey.of(RegistryKeys.ITEM, id("guard_spawn_egg"))))
+	);
+
 	public static final net.minecraft.item.ItemGroup GUARD_KIT_GROUP = Registry.register(
 		Registries.ITEM_GROUP,
-		id("guard_kit"),
+		id("guards"),
 		FabricItemGroup.builder()
-			.displayName(Text.translatable("itemGroup.guardvillagers.guard_kit"))
-			.icon(() -> new ItemStack(GUARD_WHISTLE))
+			.displayName(Text.translatable("itemGroup.guardvillagers.guards"))
+			.icon(() -> new ItemStack(GUARD_SPAWN_EGG))
 			.entries((context, entries) -> {
+				entries.add(GUARD_SPAWN_EGG);
 				entries.add(GUARD_WHISTLE);
 				entries.add(Items.EMERALD);
 				entries.add(Items.WOODEN_SWORD);
@@ -215,6 +233,12 @@ public class GuardVillagersMod implements ModInitializer {
 					context.getSource().sendFeedback(() -> Text.literal("You own " + count + " guards."), false);
 					return count;
 				}))
+			.then(CommandManager.literal("debug")
+				.executes(context -> toggleDebug(context.getSource().getPlayerOrThrow()))
+				.then(CommandManager.literal("on")
+					.executes(context -> setDebug(context.getSource().getPlayerOrThrow(), true)))
+				.then(CommandManager.literal("off")
+					.executes(context -> setDebug(context.getSource().getPlayerOrThrow(), false))))
 		);
 	}
 
@@ -381,6 +405,37 @@ public class GuardVillagersMod implements ModInitializer {
 		return count;
 	}
 
+	private static int toggleDebug(ServerPlayerEntity player) {
+		boolean enable = !DEBUG_PLAYERS.contains(player.getUuid());
+		return setDebug(player, enable);
+	}
+
+	private static int setDebug(ServerPlayerEntity player, boolean enable) {
+		UUID playerId = player.getUuid();
+		if (enable) {
+			DEBUG_PLAYERS.add(playerId);
+			player.sendMessage(Text.literal("Guard debug enabled."), false);
+		} else {
+			DEBUG_PLAYERS.remove(playerId);
+			clearDebugOverlays(player.getCommandSource().getServer(), playerId);
+			player.sendMessage(Text.literal("Guard debug disabled."), false);
+		}
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private static void clearDebugOverlays(MinecraftServer server, UUID ownerUuid) {
+		for (ServerWorld world : server.getWorlds()) {
+			for (GuardEntity guard : world.getEntitiesByClass(
+				GuardEntity.class,
+				new Box(-30_000_000, world.getBottomY(), -30_000_000, 30_000_000, world.getTopYInclusive(), 30_000_000),
+				entity -> entity.isOwnedBy(ownerUuid) && isDebugName(entity))
+			) {
+				guard.setCustomNameVisible(false);
+				guard.setCustomName(null);
+			}
+		}
+	}
+
 	private void registerEvents() {
 		AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
 			if (world.isClient() || !(player instanceof ServerPlayerEntity serverPlayer) || !(entity instanceof LivingEntity livingTarget)) {
@@ -428,6 +483,7 @@ public class GuardVillagersMod implements ModInitializer {
 
 		ServerTickEvents.END_WORLD_TICK.register(world -> {
 			try {
+				updateGuardDebug(world);
 				VillageManagerHandler.maintainVillageGuards(world);
 				if (world.getTime() % 200 == 0) {
 					for (ServerPlayerEntity player : world.getPlayers()) {
@@ -445,5 +501,124 @@ public class GuardVillagersMod implements ModInitializer {
 				LOGGER.error("Village manager tick failed in world {}", world.getRegistryKey().getValue(), exception);
 			}
 		});
+	}
+
+	private static void updateGuardDebug(ServerWorld world) {
+		if (DEBUG_PLAYERS.isEmpty()) {
+			return;
+		}
+
+		for (ServerPlayerEntity player : world.getPlayers()) {
+			if (!DEBUG_PLAYERS.contains(player.getUuid())) {
+				continue;
+			}
+
+			List<GuardEntity> ownedGuards = world.getEntitiesByClass(
+				GuardEntity.class,
+				player.getBoundingBox().expand(DEBUG_SCAN_RANGE),
+				guard -> guard.isOwnedBy(player.getUuid())
+			);
+			Set<UUID> seen = new HashSet<>();
+			for (GuardEntity guard : ownedGuards) {
+				seen.add(guard.getUuid());
+
+				if (world.getTime() % DEBUG_TEXT_UPDATE_INTERVAL == 0) {
+					guard.setCustomName(buildDebugName(world, guard));
+					guard.setCustomNameVisible(true);
+				}
+
+				if (world.getTime() % DEBUG_PARTICLE_INTERVAL == 0) {
+					renderDebugRanges(world, guard);
+					renderDebugTargetLine(world, guard);
+				}
+			}
+
+			if (world.getTime() % DEBUG_TEXT_UPDATE_INTERVAL == 0) {
+				clearOutOfRangeDebug(world, player, seen);
+			}
+		}
+	}
+
+	private static void clearOutOfRangeDebug(ServerWorld world, ServerPlayerEntity player, Set<UUID> seen) {
+		List<GuardEntity> allOwned = world.getEntitiesByClass(
+			GuardEntity.class,
+			new Box(-30_000_000, world.getBottomY(), -30_000_000, 30_000_000, world.getTopYInclusive(), 30_000_000),
+			guard -> guard.isOwnedBy(player.getUuid()) && isDebugName(guard)
+		);
+		for (GuardEntity guard : allOwned) {
+			if (seen.contains(guard.getUuid())) {
+				continue;
+			}
+			guard.setCustomNameVisible(false);
+			guard.setCustomName(null);
+		}
+	}
+
+	private static boolean isDebugName(GuardEntity guard) {
+		Text customName = guard.getCustomName();
+		return customName != null && customName.getString().startsWith(DEBUG_PREFIX);
+	}
+
+	private static Text buildDebugName(ServerWorld world, GuardEntity guard) {
+		String targetName = "none";
+		LivingEntity target = guard.getTarget();
+		if (target != null && target.isAlive()) {
+			targetName = target.getName().getString();
+		} else if (guard.getPriorityTargetUuid() != null) {
+			Entity tracked = world.getEntity(guard.getPriorityTargetUuid());
+			if (tracked != null) {
+				targetName = tracked.getName().getString();
+			}
+		}
+
+		double followRange = guard.getAttributeValue(net.minecraft.entity.attribute.EntityAttributes.FOLLOW_RANGE);
+		String home = guard.getHome().map(pos -> pos.getX() + "," + pos.getY() + "," + pos.getZ()).orElse("none");
+		return Text.literal(
+			DEBUG_PREFIX
+				+ "Lv " + guard.getLevel()
+				+ " XP " + guard.getExperience()
+				+ " | " + guard.getRole().name()
+				+ " | " + guard.getBehavior().name()
+				+ " | HP " + Math.round(guard.getHealth()) + "/" + Math.round(guard.getMaxHealth())
+				+ " | Stay " + guard.isStaying()
+				+ " | Cd " + guard.getCombatCooldown()
+				+ " | Follow " + String.format("%.1f", followRange)
+				+ " | Patrol " + guard.getPatrolRadius()
+				+ " | Home " + home
+				+ " | Target " + targetName
+		);
+	}
+
+	private static void renderDebugRanges(ServerWorld world, GuardEntity guard) {
+		double followRange = guard.getAttributeValue(net.minecraft.entity.attribute.EntityAttributes.FOLLOW_RANGE);
+		spawnCircleParticles(world, guard.getEntityPos(), Math.max(2.0D, followRange), ParticleTypes.WAX_OFF, 20);
+		guard.getHome().ifPresent(home -> spawnCircleParticles(world, Vec3d.ofCenter(home), Math.max(2.0D, guard.getPatrolRadius()), ParticleTypes.HAPPY_VILLAGER, 24));
+	}
+
+	private static void renderDebugTargetLine(ServerWorld world, GuardEntity guard) {
+		LivingEntity target = guard.getTarget();
+		if (target == null || !target.isAlive()) {
+			return;
+		}
+
+		Vec3d start = guard.getEntityPos().add(0.0D, 1.5D, 0.0D);
+		Vec3d end = target.getEntityPos().add(0.0D, target.getHeight() * 0.5D, 0.0D);
+		Vec3d delta = end.subtract(start);
+		int segments = Math.max(4, (int) Math.ceil(delta.length() * 2.0D));
+		Vec3d step = delta.multiply(1.0D / segments);
+		Vec3d cursor = start;
+		for (int i = 0; i <= segments; i++) {
+			world.spawnParticles(ParticleTypes.CRIT, cursor.x, cursor.y, cursor.z, 1, 0.0D, 0.0D, 0.0D, 0.0D);
+			cursor = cursor.add(step);
+		}
+	}
+
+	private static void spawnCircleParticles(ServerWorld world, Vec3d center, double radius, net.minecraft.particle.ParticleEffect particle, int points) {
+		for (int i = 0; i < points; i++) {
+			double angle = (Math.PI * 2.0D * i) / points;
+			double x = center.x + Math.cos(angle) * radius;
+			double z = center.z + Math.sin(angle) * radius;
+			world.spawnParticles(particle, x, center.y + 0.1D, z, 1, 0.0D, 0.0D, 0.0D, 0.0D);
+		}
 	}
 }

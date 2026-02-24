@@ -1,7 +1,8 @@
 {
   "entity.guardvillagers.guard": "Guard Villager",
+  "item.guardvillagers.guard_spawn_egg": "Guard Spawn Egg",
   "screen.guardvillagers.shop": "Guard Shop",
   "screen.guardvillagers.tactics": "Guard Tactics",
   "item.guardvillagers.guard_whistle": "Guard Whistle",
-  "itemGroup.guardvillagers.guard_kit": "Guard Kit"
+  "itemGroup.guardvillagers.guards": "Guards"
 }
