@@ -563,15 +563,16 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		if (this.getRole() == GuardRole.SWORDSMAN) {
 			Item sword = switch (weaponLevel) {
 				case 1 -> Items.IRON_SWORD;
-				case 2 -> Items.DIAMOND_SWORD;
+				case 2, 3 -> Items.DIAMOND_SWORD;
+				case 4, 5 -> Items.NETHERITE_SWORD;
 				default -> Items.STONE_SWORD;
 			};
 			ItemStack swordStack = new ItemStack(sword);
-			this.applyEnchantment(world, swordStack, Enchantments.SHARPNESS, Math.max(1, weaponLevel + 1));
+			this.applyEnchantment(world, swordStack, Enchantments.SHARPNESS, Math.min(5, Math.max(1, weaponLevel + 1)));
 			this.equipStack(EquipmentSlot.MAINHAND, swordStack);
 		} else {
 			ItemStack bowStack = new ItemStack(Items.BOW);
-			this.applyEnchantment(world, bowStack, Enchantments.POWER, Math.max(1, weaponLevel + 1));
+			this.applyEnchantment(world, bowStack, Enchantments.POWER, Math.min(5, Math.max(1, weaponLevel + 1)));
 			this.equipStack(EquipmentSlot.MAINHAND, bowStack);
 		}
 
@@ -579,15 +580,21 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.playerMainHand = false;
 
 		GuardPlayerUpgrades.ArmorTier tier = upgrades.rollArmorTier(this.getRandom());
-		this.equipArmorTier(tier);
+		this.equipArmorTier(world, tier, upgrades.getArmorLevel());
 	}
 
-	private void equipArmorTier(GuardPlayerUpgrades.ArmorTier tier) {
+	private void equipArmorTier(ServerWorld world, GuardPlayerUpgrades.ArmorTier tier, int armorLevel) {
 		Item helmet;
 		Item chest;
 		Item legs;
 		Item feet;
 		switch (tier) {
+			case CHAINMAIL -> {
+				helmet = Items.CHAINMAIL_HELMET;
+				chest = Items.CHAINMAIL_CHESTPLATE;
+				legs = Items.CHAINMAIL_LEGGINGS;
+				feet = Items.CHAINMAIL_BOOTS;
+			}
 			case IRON -> {
 				helmet = Items.IRON_HELMET;
 				chest = Items.IRON_CHESTPLATE;
@@ -606,6 +613,12 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 				legs = Items.DIAMOND_LEGGINGS;
 				feet = Items.DIAMOND_BOOTS;
 			}
+			case NETHERITE -> {
+				helmet = Items.NETHERITE_HELMET;
+				chest = Items.NETHERITE_CHESTPLATE;
+				legs = Items.NETHERITE_LEGGINGS;
+				feet = Items.NETHERITE_BOOTS;
+			}
 			default -> {
 				helmet = Items.LEATHER_HELMET;
 				chest = Items.LEATHER_CHESTPLATE;
@@ -614,15 +627,24 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			}
 		}
 
-		this.equipStack(EquipmentSlot.HEAD, new ItemStack(helmet));
-		this.equipStack(EquipmentSlot.CHEST, new ItemStack(chest));
-		this.equipStack(EquipmentSlot.LEGS, new ItemStack(legs));
-		this.equipStack(EquipmentSlot.FEET, new ItemStack(feet));
+		int protectionLevel = Math.min(4, Math.max(0, armorLevel / 2));
+		this.equipArmorPiece(world, EquipmentSlot.HEAD, helmet, protectionLevel);
+		this.equipArmorPiece(world, EquipmentSlot.CHEST, chest, protectionLevel);
+		this.equipArmorPiece(world, EquipmentSlot.LEGS, legs, protectionLevel);
+		this.equipArmorPiece(world, EquipmentSlot.FEET, feet, protectionLevel);
 
 		for (EquipmentSlot slot : List.of(EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET)) {
 			this.setEquipmentDropChance(slot, 0.0F);
 			this.playerArmor.put(slot, false);
 		}
+	}
+
+	private void equipArmorPiece(ServerWorld world, EquipmentSlot slot, Item item, int protectionLevel) {
+		ItemStack stack = new ItemStack(item);
+		if (protectionLevel > 0) {
+			this.applyEnchantment(world, stack, Enchantments.PROTECTION, protectionLevel);
+		}
+		this.equipStack(slot, stack);
 	}
 
 	private void applyEnchantment(ServerWorld world, ItemStack stack, RegistryKey<Enchantment> enchantment, int level) {
@@ -679,6 +701,8 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			if (this.tryApplyPlayerUpgrade(player, hand, stack)) {
 				return ActionResult.SUCCESS;
 			}
+			player.sendMessage(Text.literal("That item is not an upgrade for this guard."), true);
+			return ActionResult.SUCCESS;
 		}
 
 		return super.interactMob(player, hand);
@@ -716,8 +740,15 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 		ItemStack equipped = this.getEquippedStack(definition.slot());
 		int currentScore = this.getArmorScore(equipped);
-		if (definition.score() <= currentScore) {
-			return false;
+		if (!player.isSneaking()) {
+			int offeredProtection = this.getEnchantmentLevel(offered, Enchantments.PROTECTION);
+			int currentProtection = this.getEnchantmentLevel(equipped, Enchantments.PROTECTION);
+			if (definition.score() < currentScore) {
+				return false;
+			}
+			if (definition.score() == currentScore && offeredProtection <= currentProtection) {
+				return false;
+			}
 		}
 
 		this.equipStack(definition.slot(), offered.copyWithCount(1));

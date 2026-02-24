@@ -6,8 +6,8 @@ import net.minecraft.text.Text;
 import net.minecraft.util.math.random.Random;
 
 public final class GuardPlayerUpgrades {
-	public static final int MAX_ARMOR_LEVEL = 4;
-	public static final int MAX_WEAPON_LEVEL = 2;
+	public static final int MAX_ARMOR_LEVEL = 8;
+	public static final int MAX_WEAPON_LEVEL = 5;
 	private static final Codec<Integer> ARMOR_LEVEL_CODEC = Codec.intRange(0, MAX_ARMOR_LEVEL);
 	private static final Codec<Integer> WEAPON_LEVEL_CODEC = Codec.intRange(0, MAX_WEAPON_LEVEL);
 
@@ -84,11 +84,11 @@ public final class GuardPlayerUpgrades {
 	}
 
 	public int getArmorUpgradeCost() {
-		return 4 + this.armorLevel * 4;
+		return 2 << this.armorLevel;
 	}
 
 	public int getWeaponUpgradeCost() {
-		return 4 + this.weaponLevel * 4;
+		return 2 << this.weaponLevel;
 	}
 
 	public int getHealingUpgradeCost() {
@@ -101,27 +101,25 @@ public final class GuardPlayerUpgrades {
 
 	public ArmorDistribution getArmorDistribution() {
 		return switch (this.armorLevel) {
-			case 1 -> new ArmorDistribution(70, 20, 8, 2);
-			case 2 -> new ArmorDistribution(45, 35, 15, 5);
-			case 3 -> new ArmorDistribution(20, 45, 25, 10);
-			case 4 -> new ArmorDistribution(5, 45, 35, 15);
+			case 1 -> new ArmorDistribution(80, 15, 5, 0);
+			case 2 -> new ArmorDistribution(60, 25, 12, 3);
+			case 3 -> new ArmorDistribution(40, 35, 18, 7);
+			case 4 -> new ArmorDistribution(25, 40, 23, 12);
+			case 5 -> new ArmorDistribution(12, 43, 28, 17);
+			case 6 -> new ArmorDistribution(6, 40, 32, 22);
+			case 7 -> new ArmorDistribution(2, 36, 35, 27);
+			case 8 -> new ArmorDistribution(0, 30, 35, 35);
 			default -> new ArmorDistribution(100, 0, 0, 0);
 		};
 	}
 
 	public ArmorTier rollArmorTier(Random random) {
-		int roll = random.nextInt(100);
-		ArmorDistribution distribution = this.getArmorDistribution();
-		if (roll < distribution.leather()) {
-			return ArmorTier.LEATHER;
+		int maxIndex = ArmorTier.values().length - 1;
+		int linearIndex = Math.min(maxIndex, (this.armorLevel * maxIndex) / MAX_ARMOR_LEVEL);
+		if (linearIndex < maxIndex && random.nextInt(100) < 30) {
+			linearIndex++;
 		}
-		if (roll < distribution.leather() + distribution.iron()) {
-			return ArmorTier.IRON;
-		}
-		if (roll < distribution.leather() + distribution.iron() + distribution.gold()) {
-			return ArmorTier.GOLD;
-		}
-		return ArmorTier.DIAMOND;
+		return ArmorTier.values()[linearIndex];
 	}
 
 	public Text toArmorPercentText() {
@@ -131,9 +129,11 @@ public final class GuardPlayerUpgrades {
 
 	public enum ArmorTier {
 		LEATHER,
+		CHAINMAIL,
 		IRON,
 		GOLD,
-		DIAMOND
+		DIAMOND,
+		NETHERITE
 	}
 
 	public record ArmorDistribution(int leather, int iron, int gold, int diamond) {

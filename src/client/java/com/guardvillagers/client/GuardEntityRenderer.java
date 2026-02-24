@@ -5,6 +5,7 @@ import com.guardvillagers.entity.GuardEntity;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.entity.EntityRendererFactory;
 import net.minecraft.client.render.entity.MobEntityRenderer;
+import net.minecraft.client.render.entity.feature.VillagerHeldItemFeatureRenderer;
 import net.minecraft.client.render.entity.model.EntityModelLayers;
 import net.minecraft.client.render.entity.model.VillagerResemblingModel;
 import net.minecraft.client.render.entity.state.VillagerEntityRenderState;
@@ -17,6 +18,7 @@ public class GuardEntityRenderer extends MobEntityRenderer<GuardEntity, Villager
 
 	public GuardEntityRenderer(EntityRendererFactory.Context context) {
 		super(context, new VillagerResemblingModel(context.getPart(EntityModelLayers.VILLAGER)), 0.5F);
+		this.addFeature(new VillagerHeldItemFeatureRenderer<>(this));
 	}
 
 	@Override

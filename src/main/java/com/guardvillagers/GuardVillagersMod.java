@@ -55,6 +55,14 @@ public class GuardVillagersMod implements ModInitializer {
 
 	private static final int FOLLOW_DISTANCE = 64;
 
+	public enum GuardPurchaseResult {
+		SUCCESS,
+		NOT_TRUSTED,
+		INSUFFICIENT_FUNDS,
+		SPAWN_FAILED,
+		INTERNAL_ERROR
+	}
+
 	public static final EntityType<GuardEntity> GUARD_ENTITY_TYPE = Registry.register(
 		Registries.ENTITY_TYPE,
 		id("guard"),
@@ -234,30 +242,34 @@ public class GuardVillagersMod implements ModInitializer {
 		}
 	}
 
-	public static boolean purchaseGuard(ServerPlayerEntity player) {
+	public static int getAdjustedGuardCost(ServerPlayerEntity player) {
+		GuardPlayerUpgrades upgrades = getUpgrades(player);
+		return GuardReputationManager.getAdjustedGuardCost(player, upgrades.getGuardCost());
+	}
+
+	public static GuardPurchaseResult purchaseGuard(ServerPlayerEntity player) {
 		if (!GuardReputationManager.isTrustedByGuards(player.getEntityWorld(), player.getUuid(), player.getBlockPos())) {
-			player.sendMessage(Text.literal("Village trust is too low to hire guards."), true);
-			return false;
+			return GuardPurchaseResult.NOT_TRUSTED;
 		}
 
 		GuardPlayerUpgrades upgrades = getUpgrades(player);
 		int cost = GuardReputationManager.getAdjustedGuardCost(player, upgrades.getGuardCost());
 		if (!GuardEconomy.spendEmeraldBlocks(player, cost)) {
-			return false;
+			return GuardPurchaseResult.INSUFFICIENT_FUNDS;
 		}
 
 		ServerWorld world = player.getEntityWorld();
 		try {
 			if (trySpawnPurchasedGuard(world, player, upgrades)) {
-				return true;
+				return GuardPurchaseResult.SUCCESS;
 			}
 			GuardEconomy.refundEmeraldBlocks(player, cost);
 			LOGGER.warn("Guard purchase failed to spawn for {} in world {}", player.getName().getString(), world.getRegistryKey().getValue());
-			return false;
+			return GuardPurchaseResult.SPAWN_FAILED;
 		} catch (RuntimeException exception) {
 			GuardEconomy.refundEmeraldBlocks(player, cost);
 			LOGGER.error("Guard purchase crashed for {}", player.getName().getString(), exception);
-			return false;
+			return GuardPurchaseResult.INTERNAL_ERROR;
 		}
 	}
 
@@ -282,7 +294,9 @@ public class GuardVillagersMod implements ModInitializer {
 			if (guard == null) {
 				continue;
 			}
-			guard.refreshPositionAndAngles(player.getX() + offset[0], player.getY(), player.getZ() + offset[1], player.getYaw(), 0.0F);
+			BlockPos candidate = new BlockPos((int) Math.floor(player.getX() + offset[0]), player.getBlockY(), (int) Math.floor(player.getZ() + offset[1]));
+			BlockPos top = world.getTopPosition(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, candidate);
+			guard.refreshPositionAndAngles(top.getX() + 0.5D, top.getY(), top.getZ() + 0.5D, player.getYaw(), 0.0F);
 			guard.setOwnerUuid(player.getUuid());
 			guard.setStaying(false);
 			guard.applyPurchasedLoadout(world, upgrades);

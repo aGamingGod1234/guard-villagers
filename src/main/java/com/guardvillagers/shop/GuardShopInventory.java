@@ -56,10 +56,13 @@ public class GuardShopInventory extends SimpleInventory {
 	}
 
 	private void buyGuard() {
-		if (GuardVillagersMod.purchaseGuard(this.player)) {
-			this.player.sendMessage(Text.literal("Guard hired."), true);
-		} else {
-			this.player.sendMessage(Text.literal("Not enough emerald blocks for a guard."), true);
+		int cost = GuardVillagersMod.getAdjustedGuardCost(this.player);
+		switch (GuardVillagersMod.purchaseGuard(this.player)) {
+			case SUCCESS -> this.player.sendMessage(Text.literal("Guard hired."), true);
+			case NOT_TRUSTED -> this.player.sendMessage(Text.literal("Village trust is too low to hire guards."), true);
+			case INSUFFICIENT_FUNDS -> this.player.sendMessage(Text.literal("Need " + cost + " emerald block(s) to hire a guard."), true);
+			case SPAWN_FAILED -> this.player.sendMessage(Text.literal("Could not find space to spawn a guard. Move to open ground."), true);
+			case INTERNAL_ERROR -> this.player.sendMessage(Text.literal("Guard purchase failed due to an internal error. Check logs."), true);
 		}
 	}
 
@@ -147,7 +150,7 @@ public class GuardShopInventory extends SimpleInventory {
 			Formatting.GREEN,
 			"Cost: " + guardCost + " emerald block(s)",
 			"Spawns with your current",
-			"armor and weapon upgrade odds."
+			"armor and weapon upgrade levels."
 		));
 
 		int armorCost = upgrades.getArmorUpgradeCost();
@@ -156,8 +159,9 @@ public class GuardShopInventory extends SimpleInventory {
 			"Upgrade Armor",
 			Formatting.AQUA,
 			"Cost: " + armorCost + " emerald block(s)",
-			"Reduces leather odds and",
-			"raises iron/gold/diamond odds."
+			"Current: Lv " + upgrades.getArmorLevel() + "/" + GuardPlayerUpgrades.MAX_ARMOR_LEVEL,
+			"Power increases linearly;",
+			"cost scales exponentially."
 		));
 
 		int weaponCost = upgrades.getWeaponUpgradeCost();
@@ -166,8 +170,8 @@ public class GuardShopInventory extends SimpleInventory {
 			"Upgrade Weapons",
 			Formatting.RED,
 			"Cost: " + weaponCost + " emerald block(s)",
-			"Improves starter sword/bow",
-			"enchantment levels."
+			"Current: " + describeWeaponLevel(upgrades.getWeaponLevel()),
+			"Next: " + describeWeaponLevel(Math.min(GuardPlayerUpgrades.MAX_WEAPON_LEVEL, upgrades.getWeaponLevel() + 1))
 		));
 
 		if (upgrades.hasHealingUpgrade()) {
@@ -198,6 +202,17 @@ public class GuardShopInventory extends SimpleInventory {
 			"Weapon Lv: " + upgrades.getWeaponLevel() + "/" + GuardPlayerUpgrades.MAX_WEAPON_LEVEL,
 			"Healing: " + (upgrades.hasHealingUpgrade() ? "Unlocked" : "Locked")
 		));
+	}
+
+	private String describeWeaponLevel(int level) {
+		return switch (Math.max(0, level)) {
+			case 0 -> "Stone/Basic Bow";
+			case 1 -> "Iron + enchant I";
+			case 2 -> "Diamond + enchant II";
+			case 3 -> "Diamond + enchant III";
+			case 4 -> "Netherite + enchant IV";
+			default -> "Netherite + enchant V";
+		};
 	}
 
 	private boolean isInteractiveSlot(int slot) {
