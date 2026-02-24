@@ -574,18 +574,14 @@ public class GuardVillagersMod implements ModInitializer {
 		double followRange = guard.getAttributeValue(net.minecraft.entity.attribute.EntityAttributes.FOLLOW_RANGE);
 		String home = guard.getHome().map(pos -> pos.getX() + "," + pos.getY() + "," + pos.getZ()).orElse("none");
 		return Text.literal(
-			DEBUG_PREFIX
-				+ "Lv " + guard.getLevel()
-				+ " XP " + guard.getExperience()
-				+ " | " + guard.getRole().name()
-				+ " | " + guard.getBehavior().name()
-				+ " | HP " + Math.round(guard.getHealth()) + "/" + Math.round(guard.getMaxHealth())
-				+ " | Stay " + guard.isStaying()
-				+ " | Cd " + guard.getCombatCooldown()
-				+ " | Follow " + String.format("%.1f", followRange)
-				+ " | Patrol " + guard.getPatrolRadius()
-				+ " | Home " + home
-				+ " | Target " + targetName
+			DEBUG_PREFIX + "Guard " + guard.getUuid().toString().substring(0, 8)
+				+ "\nLv " + guard.getLevel() + "  XP " + guard.getExperience()
+				+ "\nType: " + guard.getRole().name() + "  Behavior: " + guard.getBehavior().name()
+				+ "\nHP: " + Math.round(guard.getHealth()) + "/" + Math.round(guard.getMaxHealth())
+				+ "  Staying: " + guard.isStaying() + "  Cooldown: " + guard.getCombatCooldown()
+				+ "\nFollowRange: " + String.format("%.1f", followRange) + "  PatrolRadius: " + guard.getPatrolRadius()
+				+ "\nHome: " + home
+				+ "\nTarget: " + targetName
 		);
 	}
 

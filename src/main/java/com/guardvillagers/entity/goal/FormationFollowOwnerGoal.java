@@ -12,6 +12,7 @@ public final class FormationFollowOwnerGoal extends Goal {
 	private final GuardEntity guard;
 	private final double speed;
 	private ServerPlayerEntity owner;
+	private int repathCooldown;
 
 	public FormationFollowOwnerGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
@@ -36,6 +37,7 @@ public final class FormationFollowOwnerGoal extends Goal {
 	@Override
 	public void stop() {
 		this.owner = null;
+		this.repathCooldown = 0;
 		this.guard.getNavigation().stop();
 	}
 
@@ -47,15 +49,21 @@ public final class FormationFollowOwnerGoal extends Goal {
 
 		Vec3d formationPoint = this.guard.getFormationAnchor(this.owner);
 		double distanceSq = this.guard.squaredDistanceTo(formationPoint);
-		if (distanceSq > 324.0D) {
-			this.guard.teleportToFormationAnchor(formationPoint);
+		double ownerDistanceSq = this.guard.squaredDistanceTo(this.owner);
+		if (ownerDistanceSq > 2304.0D && this.repathCooldown <= 0) {
+			this.guard.getNavigation().startMovingTo(this.owner, this.speed + 0.15D);
+			this.repathCooldown = 10;
 			return;
 		}
 
-		if (distanceSq > 4.0D) {
+		if (distanceSq > 9.0D && this.repathCooldown <= 0) {
 			this.guard.getNavigation().startMovingTo(formationPoint.x, formationPoint.y, formationPoint.z, this.speed);
+			this.repathCooldown = 10;
 		} else {
 			this.guard.getNavigation().stop();
+		}
+		if (this.repathCooldown > 0) {
+			this.repathCooldown--;
 		}
 	}
 }

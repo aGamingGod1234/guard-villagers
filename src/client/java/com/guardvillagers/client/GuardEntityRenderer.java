@@ -15,7 +15,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 
 public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, ZombieVillagerRenderState, ZombieVillagerEntityModel<ZombieVillagerRenderState>> {
-	private static final Identifier TEXTURE = Identifier.of("guardvillagers", "textures/entity/guard_villager.png");
+	private static final Identifier TEXTURE = Identifier.of("minecraft", "textures/entity/villager/villager.png");
 
 	public GuardEntityRenderer(EntityRendererFactory.Context context) {
 		super(

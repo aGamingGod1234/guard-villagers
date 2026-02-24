@@ -42,7 +42,6 @@ import net.minecraft.entity.passive.IronGolemEntity;
 import net.minecraft.entity.passive.VillagerEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.projectile.PersistentProjectileEntity;
-import net.minecraft.entity.projectile.ProjectileUtil;
 import net.minecraft.entity.raid.RaiderEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
@@ -77,6 +76,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+
+import com.guardvillagers.entity.projectile.GuardArrowEntity;
 
 public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private static final TrackedData<Integer> ROLE = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.INTEGER);
@@ -486,10 +487,13 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		double yawRad = Math.toRadians(owner.getYaw());
 		Vec3d forward = new Vec3d(-Math.sin(yawRad), 0.0D, Math.cos(yawRad));
 		Vec3d right = new Vec3d(Math.cos(yawRad), 0.0D, Math.sin(yawRad));
+		double phase = (this.age * 0.08D) + ((this.getId() % 23) * 0.45D);
+		double wobbleBack = Math.sin(phase) * 0.65D;
+		double wobbleSide = Math.cos(phase * 1.13D) * 0.85D;
 		Vec3d ownerPos = owner.getEntityPos();
 		return ownerPos
-			.subtract(forward.multiply(backDistance))
-			.add(right.multiply(sideOffset));
+			.subtract(forward.multiply(backDistance + wobbleBack))
+			.add(right.multiply(sideOffset + wobbleSide));
 	}
 
 	public void teleportToFormationAnchor(Vec3d anchor) {
@@ -1091,7 +1095,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	@Override
 	public void shootAt(LivingEntity target, float pullProgress) {
 		ItemStack bow = this.getMainHandStack();
-		if (!bow.isOf(Items.BOW)) {
+		if (!bow.isOf(Items.BOW) || !(this.getEntityWorld() instanceof ServerWorld world)) {
 			return;
 		}
 
@@ -1100,16 +1104,21 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			arrowStack = new ItemStack(Items.ARROW);
 		}
 
-		PersistentProjectileEntity arrow = ProjectileUtil.createArrowProjectile(this, arrowStack, pullProgress, bow);
+		PersistentProjectileEntity arrow = new GuardArrowEntity(world, this, arrowStack.copyWithCount(1), bow.copy());
+		arrow.pickupType = PersistentProjectileEntity.PickupPermission.DISALLOWED;
+		int power = this.getEnchantmentLevel(bow, Enchantments.POWER);
+		double baseDamage = 2.0D + Math.max(0.0F, pullProgress) * 1.6D + (double) power * 0.6D;
+		arrow.setDamage(baseDamage);
+		if (this.getEnchantmentLevel(bow, Enchantments.FLAME) > 0) {
+			arrow.setOnFireFor(5.0F);
+		}
 		double dx = target.getX() - this.getX();
 		double dz = target.getZ() - this.getZ();
 		double horizontal = Math.sqrt(dx * dx + dz * dz);
 		double dy = target.getBodyY(0.3333333333333333D) - arrow.getY() + horizontal * 0.2D;
 		arrow.setVelocity(dx, dy, dz, 1.6F, (float) (14 - this.getEntityWorld().getDifficulty().getId() * 4));
 		this.playSound(SoundEvents.ENTITY_SKELETON_SHOOT, 1.0F, 1.0F / (this.getRandom().nextFloat() * 0.4F + 0.8F));
-		if (this.getEntityWorld() instanceof ServerWorld world) {
-			world.spawnEntity(arrow);
-		}
+		world.spawnEntity(arrow);
 	}
 
 	@Override
