@@ -19,6 +19,8 @@ import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
 import net.fabricmc.fabric.api.itemgroup.v1.FabricItemGroup;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
+import net.minecraft.block.DispenserBlock;
+import net.minecraft.block.dispenser.ItemDispenserBehavior;
 import net.minecraft.command.CommandRegistryAccess;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
@@ -49,6 +51,7 @@ import net.minecraft.util.ActionResult;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -122,9 +125,35 @@ public class GuardVillagersMod implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		FabricDefaultAttributeRegistry.register(GUARD_ENTITY_TYPE, GuardEntity.createAttributes());
+		registerDispenserBehavior();
 		registerCommands();
 		registerEvents();
 		LOGGER.info("Guard Villagers initialized");
+	}
+
+	private static void registerDispenserBehavior() {
+		DispenserBlock.registerBehavior(GUARD_SPAWN_EGG, new ItemDispenserBehavior() {
+			@Override
+			protected ItemStack dispenseSilently(net.minecraft.util.math.BlockPointer pointer, ItemStack stack) {
+				ServerWorld world = pointer.world();
+				Direction direction = pointer.state().get(DispenserBlock.FACING);
+				BlockPos spawnPos = pointer.pos().offset(direction);
+
+				GuardEntity guard = GUARD_ENTITY_TYPE.create(world, SpawnReason.DISPENSER);
+				if (guard == null) {
+					return stack;
+				}
+
+				BlockPos top = world.getTopPosition(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, spawnPos);
+				guard.refreshPositionAndAngles(top.getX() + 0.5D, top.getY(), top.getZ() + 0.5D, direction.getPositiveHorizontalDegrees(), 0.0F);
+				guard.applyNaturalLoadout(world);
+				guard.setBehavior(GuardBehavior.random(world.getRandom()));
+				if (world.spawnEntity(guard)) {
+					stack.decrement(1);
+				}
+				return stack;
+			}
+		});
 	}
 
 	public static Identifier id(String path) {
