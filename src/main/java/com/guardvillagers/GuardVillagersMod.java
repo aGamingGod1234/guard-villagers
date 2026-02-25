@@ -22,11 +22,14 @@ import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRe
 import net.minecraft.command.CommandRegistryAccess;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
+import net.minecraft.entity.TypedEntityData;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.SpawnGroup;
 import net.minecraft.entity.SpawnReason;
 import net.minecraft.entity.passive.IronGolemEntity;
 import net.minecraft.entity.passive.VillagerEntity;
+import net.minecraft.nbt.NbtCompound;
+import net.minecraft.component.DataComponentTypes;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
@@ -97,7 +100,9 @@ public class GuardVillagersMod implements ModInitializer {
 	public static final Item GUARD_SPAWN_EGG = Registry.register(
 		Registries.ITEM,
 		id("guard_spawn_egg"),
-		new GuardSpawnEggItem(new Item.Settings().registryKey(RegistryKey.of(RegistryKeys.ITEM, id("guard_spawn_egg"))))
+		new GuardSpawnEggItem(new Item.Settings()
+			.registryKey(RegistryKey.of(RegistryKeys.ITEM, id("guard_spawn_egg")))
+			.component(DataComponentTypes.ENTITY_DATA, TypedEntityData.create(GUARD_ENTITY_TYPE, new NbtCompound())))
 	);
 
 	public static final net.minecraft.item.ItemGroup GUARD_KIT_GROUP = Registry.register(

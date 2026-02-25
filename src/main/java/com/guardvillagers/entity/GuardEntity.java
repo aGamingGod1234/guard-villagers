@@ -17,7 +17,9 @@ import net.minecraft.enchantment.Enchantments;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.EquipmentSlot;
+import net.minecraft.entity.EntityData;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.SpawnReason;
 import net.minecraft.entity.ai.RangedAttackMob;
 import net.minecraft.entity.ai.goal.ActiveTargetGoal;
 import net.minecraft.entity.ai.goal.LookAroundGoal;
@@ -66,6 +68,8 @@ import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.village.VillagerProfession;
 import net.minecraft.world.Heightmap;
+import net.minecraft.world.LocalDifficulty;
+import net.minecraft.world.ServerWorldAccess;
 import net.minecraft.world.poi.PointOfInterestStorage;
 import net.minecraft.world.poi.PointOfInterestTypes;
 
@@ -177,6 +181,16 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			.add(EntityAttributes.MOVEMENT_SPEED, 0.32D)
 			.add(EntityAttributes.ATTACK_DAMAGE, 5.0D)
 			.add(EntityAttributes.FOLLOW_RANGE, 32.0D);
+	}
+
+	@Override
+	public EntityData initialize(ServerWorldAccess world, LocalDifficulty difficulty, SpawnReason spawnReason, EntityData entityData) {
+		EntityData data = super.initialize(world, difficulty, spawnReason, entityData);
+		if ((spawnReason == SpawnReason.SPAWN_ITEM_USE || spawnReason == SpawnReason.DISPENSER) && this.getMainHandStack().isEmpty()) {
+			this.applyNaturalLoadout(world.toServerWorld());
+			this.setBehavior(GuardBehavior.random(world.toServerWorld().getRandom()));
+		}
+		return data;
 	}
 
 	@Override
