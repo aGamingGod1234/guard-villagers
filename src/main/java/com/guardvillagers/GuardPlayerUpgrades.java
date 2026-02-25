@@ -114,15 +114,34 @@ public final class GuardPlayerUpgrades {
 	}
 
 	public ArmorTier rollArmorTier(Random random) {
-		if (this.armorLevel >= MAX_ARMOR_LEVEL) {
+		ArmorDistribution distribution = this.getArmorDistribution();
+		int roll = random.nextInt(100);
+		ArmorTier baseTier;
+		if (roll < distribution.leather()) {
+			baseTier = ArmorTier.LEATHER;
+		} else if (roll < distribution.leather() + distribution.iron()) {
+			baseTier = ArmorTier.IRON;
+		} else if (roll < distribution.leather() + distribution.iron() + distribution.gold()) {
+			baseTier = ArmorTier.GOLD;
+		} else {
+			baseTier = ArmorTier.DIAMOND;
+		}
+
+		int netheriteChance = switch (this.armorLevel) {
+			case 6 -> 2;
+			case 7 -> 5;
+			case 8 -> 10;
+			default -> 0;
+		};
+		if (baseTier == ArmorTier.DIAMOND && netheriteChance > 0 && random.nextInt(100) < netheriteChance) {
 			return ArmorTier.NETHERITE;
 		}
-		int maxIndex = ArmorTier.values().length - 1;
-		int linearIndex = Math.min(maxIndex, (this.armorLevel * maxIndex) / MAX_ARMOR_LEVEL);
-		if (linearIndex < maxIndex && random.nextInt(100) < 30) {
-			linearIndex++;
+
+		if (baseTier == ArmorTier.LEATHER && this.armorLevel >= 2 && random.nextInt(100) < 35) {
+			return ArmorTier.CHAINMAIL;
 		}
-		return ArmorTier.values()[linearIndex];
+
+		return baseTier;
 	}
 
 	public Text toArmorPercentText() {

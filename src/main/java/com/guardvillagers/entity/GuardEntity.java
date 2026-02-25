@@ -589,10 +589,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private void equipArmorPieces(ServerWorld world, GuardPlayerUpgrades upgrades) {
 		int armorLevel = upgrades.getArmorLevel();
 		int protectionLevel = Math.min(4, Math.max(0, armorLevel / 2));
-		GuardPlayerUpgrades.ArmorTier forcedTier = armorLevel >= GuardPlayerUpgrades.MAX_ARMOR_LEVEL ? GuardPlayerUpgrades.ArmorTier.NETHERITE : null;
 
 		for (EquipmentSlot slot : List.of(EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET)) {
-			GuardPlayerUpgrades.ArmorTier tier = forcedTier == null ? upgrades.rollArmorTier(this.getRandom()) : forcedTier;
+			GuardPlayerUpgrades.ArmorTier tier = upgrades.rollArmorTier(this.getRandom());
 			this.equipArmorPiece(world, slot, getArmorItemForSlot(tier, slot), protectionLevel);
 		}
 

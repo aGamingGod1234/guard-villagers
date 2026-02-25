@@ -63,13 +63,13 @@ public final class VillageManagerHandler {
 			}
 
 			double density = calculateDensity(village, villagerCount);
-			if (density < 0.35D) {
+			if (density < 0.10D) {
 				continue;
 			}
 
 			int beds = countBeds(world, village);
 			int doors = countDoors(world, village);
-			int deterministicCap = Math.max(villagerCount / 2, Math.max(beds, doors));
+			int deterministicCap = Math.max(1, Math.max(villagerCount / 2, Math.max(beds, doors)));
 			if (deterministicCap <= 0) {
 				continue;
 			}
