@@ -1,6 +1,7 @@
 package com.guardvillagers.entity;
 
 import com.guardvillagers.GuardDiplomacyManager;
+import com.guardvillagers.GuardOwnershipIndex;
 import com.guardvillagers.GuardPlayerUpgrades;
 import com.guardvillagers.GuardReputationManager;
 import com.guardvillagers.GuardVillagersMod;
@@ -60,6 +61,7 @@ import net.minecraft.storage.ReadView;
 import net.minecraft.storage.WriteView;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
+import net.minecraft.util.Formatting;
 import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
@@ -112,6 +114,11 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private static final String HOME_Y_KEY = "HomeY";
 	private static final String HOME_Z_KEY = "HomeZ";
 	private static final String PATROL_RADIUS_KEY = "PatrolRadius";
+	private static final String HIERARCHY_ROW_KEY = "HierarchyRow";
+	private static final String HIERARCHY_COLUMN_KEY = "HierarchyColumn";
+	private static final String HIERARCHY_ROLE_KEY = "HierarchyRole";
+	private static final String HIERARCHY_NAME_PREFIX = "[H] ";
+	private static final String DEBUG_NAME_PREFIX = "[DBG] ";
 
 	private static final Map<Item, Integer> SWORD_SCORE = Map.ofEntries(
 		Map.entry(Items.WOODEN_SWORD, 1),
@@ -149,6 +156,12 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		Map.entry(Items.NETHERITE_BOOTS, new ArmorDefinition(EquipmentSlot.FEET, 5))
 	);
 
+	private static final Comparator<GuardEntity> FORMATION_PRIORITY = Comparator
+		.comparingInt(GuardEntity::getHierarchyRow)
+		.thenComparingInt(GuardEntity::getHierarchyColumn)
+		.thenComparing(Comparator.comparingInt(GuardEntity::getLevel).reversed())
+		.thenComparing(guard -> guard.getUuid().toString());
+
 	private MeleeAttackGoal meleeGoal;
 	private ProjectileAttackGoal rangedGoal;
 
@@ -165,6 +178,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private BlockPos rallyPoint;
 	private BlockPos home;
 	private int patrolRadius = 0;
+	private int hierarchyRow = 0;
+	private int hierarchyColumn = 1;
+	private String hierarchyRole = "Vanguard";
 	private boolean playerMainHand;
 	private final EnumMap<EquipmentSlot, Boolean> playerArmor = new EnumMap<>(EquipmentSlot.class);
 
@@ -293,6 +309,11 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		if (ownerUuid != null && this.squadId == null) {
 			this.squadId = ownerUuid;
 		}
+		if (this.getEntityWorld() instanceof ServerWorld) {
+			GuardOwnershipIndex.track(this);
+		} else if (ownerUuid == null) {
+			GuardOwnershipIndex.untrack(this);
+		}
 	}
 
 	public UUID getSquadId() {
@@ -362,6 +383,38 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	public void setPatrolRadius(int patrolRadius) {
 		this.patrolRadius = MathHelper.clamp(patrolRadius, 0, 128);
+	}
+
+	public int getHierarchyRow() {
+		return this.hierarchyRow;
+	}
+
+	public void setHierarchyRow(int hierarchyRow) {
+		this.hierarchyRow = MathHelper.clamp(hierarchyRow, 0, 31);
+	}
+
+	public int getHierarchyColumn() {
+		return this.hierarchyColumn;
+	}
+
+	public void setHierarchyColumn(int hierarchyColumn) {
+		this.hierarchyColumn = MathHelper.clamp(hierarchyColumn, 0, 2);
+	}
+
+	public String getHierarchyRole() {
+		if (this.hierarchyRole == null || this.hierarchyRole.isBlank()) {
+			return "Role";
+		}
+		return this.hierarchyRole;
+	}
+
+	public void setHierarchyRole(String hierarchyRole) {
+		if (hierarchyRole == null || hierarchyRole.isBlank()) {
+			this.hierarchyRole = "Role";
+			return;
+		}
+		String trimmed = hierarchyRole.trim();
+		this.hierarchyRole = trimmed.length() <= 24 ? trimmed : trimmed.substring(0, 24);
 	}
 
 	public void clearCombatTarget() {
@@ -471,43 +524,76 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			owner.getBoundingBox().expand(96.0D),
 			guard -> guard.isOwnedBy(owner.getUuid()) && !guard.isStaying()
 		));
-		squad.sort(Comparator.comparing(guard -> guard.getUuid().toString()));
-		int index = Math.max(0, squad.indexOf(this));
-		int count = Math.max(1, squad.size());
+		squad.sort(FORMATION_PRIORITY);
 
+		int hierarchyRow = this.getHierarchyRow();
+		int column = this.getHierarchyColumn();
+		int row = Math.min(8, hierarchyRow);
+		int rowIndex = 0;
+		int rowColumnIndex = 0;
+		int rowCount = 0;
+		int rowColumnCount = 0;
+		for (GuardEntity guard : squad) {
+			if (guard.getHierarchyRow() != hierarchyRow) {
+				continue;
+			}
+			if (guard == this) {
+				rowIndex = rowCount;
+			}
+			rowCount++;
+			if (guard.getHierarchyColumn() == column) {
+				if (guard == this) {
+					rowColumnIndex = rowColumnCount;
+				}
+				rowColumnCount++;
+			}
+		}
+		rowCount = Math.max(1, rowCount);
+		rowColumnCount = Math.max(1, rowColumnCount);
+
+		double rankBackOffset = 1.8D + row * 1.85D;
+		double columnOffset = (column - 1) * 2.25D;
 		double backDistance;
 		double sideOffset;
 		switch (this.getFormationType()) {
 			case WEDGE -> {
-				int row = index / 2 + 1;
-				boolean right = (index % 2) == 0;
-				backDistance = 2.5D + row * 2.0D;
-				sideOffset = (right ? 1.0D : -1.0D) * row * 1.8D;
+				double wingSpread = 1.25D + rowColumnIndex * 0.9D;
+				double wingDirection;
+				if (column == 1) {
+					wingDirection = (rowColumnIndex % 2 == 0) ? -1.0D : 1.0D;
+				} else {
+					wingDirection = column == 0 ? -1.0D : 1.0D;
+				}
+				backDistance = rankBackOffset + 0.8D + rowColumnIndex * 1.25D + (rowIndex / 4) * 0.8D;
+				sideOffset = wingDirection * wingSpread + (column == 1 ? 0.0D : wingDirection * 0.75D);
 			}
 			case CIRCLE -> {
-				double angle = (Math.PI * 2.0D * index) / count;
-				double radius = Math.min(8.0D, Math.max(3.0D, count * 0.65D));
+				double angle = (Math.PI * 2.0D * rowIndex) / rowCount;
+				double radius = 2.5D + row * 1.2D + (column * 0.35D);
 				backDistance = Math.cos(angle) * radius;
 				sideOffset = Math.sin(angle) * radius;
 			}
 			default -> {
-				int row = index / 5;
-				int column = (index % 5) - 2;
-				backDistance = 3.0D + row * 2.2D;
-				sideOffset = column * 1.8D;
+				double rowSpread = rowIndex - ((rowCount - 1) / 2.0D);
+				double columnSpread = rowColumnIndex - ((rowColumnCount - 1) / 2.0D);
+				backDistance = rankBackOffset + (Math.abs(columnSpread) * 0.35D);
+				sideOffset = columnOffset + rowSpread * 0.9D + columnSpread * 0.6D;
 			}
 		}
 
 		double yawRad = Math.toRadians(owner.getYaw());
 		Vec3d forward = new Vec3d(-Math.sin(yawRad), 0.0D, Math.cos(yawRad));
 		Vec3d right = new Vec3d(Math.cos(yawRad), 0.0D, Math.sin(yawRad));
-		double phase = (this.age * 0.08D) + ((this.getId() % 23) * 0.45D);
-		double wobbleBack = Math.sin(phase) * 0.65D;
-		double wobbleSide = Math.cos(phase * 1.13D) * 0.85D;
+		long seed = this.getUuid().getMostSignificantBits() ^ this.getUuid().getLeastSignificantBits();
+		double staticBackOffset = ((((seed >>> 8) & 1023) / 1023.0D) - 0.5D) * 1.0D;
+		double staticSideOffset = ((((seed >>> 18) & 1023) / 1023.0D) - 0.5D) * 1.35D;
+		double phase = (this.age * 0.12D) + (((seed >>> 28) & 255) * 0.05D);
+		double wobbleBack = Math.sin(phase) * 0.35D;
+		double wobbleSide = Math.cos(phase * 1.19D) * 0.5D;
 		Vec3d ownerPos = owner.getEntityPos();
 		return ownerPos
-			.subtract(forward.multiply(backDistance + wobbleBack))
-			.add(right.multiply(sideOffset + wobbleSide));
+			.subtract(forward.multiply(backDistance + staticBackOffset + wobbleBack))
+			.add(right.multiply(sideOffset + staticSideOffset + wobbleSide));
 	}
 
 	public void teleportToFormationAnchor(Vec3d anchor) {
@@ -567,6 +653,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.assignRandomRole(world);
 		this.setBehavior(GuardBehavior.random(world.getRandom()));
 		this.setFormationType(FormationType.LINE);
+		this.setHierarchyRow(2);
+		this.setHierarchyColumn(world.getRandom().nextBetween(0, 2));
+		this.setHierarchyRole("Reserve");
 		this.equipGuardGear(world, 0, new GuardPlayerUpgrades());
 	}
 
@@ -576,6 +665,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 		this.setBehavior(GuardBehavior.BODYGUARD);
 		this.setFormationType(FormationType.WEDGE);
+		this.setHierarchyRow(Math.max(0, 2 - Math.min(2, this.getLevel() / 4)));
+		this.setHierarchyColumn(world.getRandom().nextBetween(0, 2));
+		this.setHierarchyRole("Vanguard");
 		this.equipGuardGear(world, upgrades.getWeaponLevel(), upgrades);
 	}
 
@@ -884,6 +976,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	@Override
 	protected void mobTick(ServerWorld world) {
 		super.mobTick(world);
+		if (this.age % 40 == 0 || this.ownerUuid == null) {
+			GuardOwnershipIndex.track(this);
+		}
 
 		if (this.combatCooldown > 0) {
 			this.combatCooldown--;
@@ -908,6 +1003,8 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.handleOwnerTrust(world);
 		this.handleSquadTargetSharing(world);
 		this.syncSupportEquipment(world);
+		this.updateShieldUsage();
+		this.updateHierarchyNameplate();
 
 		if (this.getRole() == GuardRole.BOWMAN) {
 			this.keepBowRange();
@@ -930,6 +1027,67 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			this.setEquipmentDropChance(EquipmentSlot.OFFHAND, 0.0F);
 		} else if (!shouldHaveShield && hasShield) {
 			this.equipStack(EquipmentSlot.OFFHAND, ItemStack.EMPTY);
+		}
+	}
+
+	private void updateShieldUsage() {
+		ItemStack shield = this.getEquippedStack(EquipmentSlot.OFFHAND);
+		if (!shield.isOf(Items.SHIELD)) {
+			if (this.isUsingItem()) {
+				this.clearActiveItem();
+			}
+			return;
+		}
+
+		LivingEntity target = this.getTarget();
+		boolean shouldBlock = false;
+		if (target != null && target.isAlive()) {
+			double distanceSq = this.squaredDistanceTo(target);
+			boolean rangedThreat = target instanceof RangedAttackMob
+				|| target.getMainHandStack().isOf(Items.BOW)
+				|| target.getMainHandStack().isOf(Items.CROSSBOW)
+				|| target.getMainHandStack().isOf(Items.TRIDENT);
+			boolean meleeWindow = this.getRole() != GuardRole.BOWMAN && distanceSq < 9.0D && !rangedThreat;
+			shouldBlock = !meleeWindow && distanceSq <= (rangedThreat ? 256.0D : 81.0D);
+			if (this.getRole() == GuardRole.BOWMAN && distanceSq <= 196.0D) {
+				shouldBlock = false;
+			}
+		}
+
+		if (shouldBlock) {
+			if (!this.isUsingItem()) {
+				this.setCurrentHand(Hand.OFF_HAND);
+			}
+		} else if (this.isUsingItem()) {
+			this.clearActiveItem();
+		}
+	}
+
+	private void updateHierarchyNameplate() {
+		if (this.age % 10 != 0) {
+			return;
+		}
+		Text current = this.getCustomName();
+		String currentText = current == null ? "" : current.getString();
+		if (currentText.startsWith(DEBUG_NAME_PREFIX)) {
+			return;
+		}
+
+		if (!this.hasOwner()) {
+			if (currentText.startsWith(HIERARCHY_NAME_PREFIX)) {
+				this.setCustomName(null);
+				this.setCustomNameVisible(false);
+			}
+			return;
+		}
+
+		String rowCol = "R" + (this.hierarchyRow + 1) + " C" + (this.hierarchyColumn + 1);
+		String badge = HIERARCHY_NAME_PREFIX + rowCol + "  " + this.getHierarchyRole() + "  Lv " + this.getLevel();
+		if (!badge.equals(currentText)) {
+			this.setCustomName(Text.literal(badge).formatted(Formatting.AQUA));
+		}
+		if (!this.isCustomNameVisible()) {
+			this.setCustomNameVisible(true);
 		}
 	}
 
@@ -1185,8 +1343,11 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	@Override
 	public boolean damage(ServerWorld world, DamageSource source, float amount) {
-		if (this.ownerUuid != null && GuardVillagersMod.hasShieldUpgrade(world, this.ownerUuid)) {
-			amount *= 0.75F;
+		boolean activelyBlockingWithShield = this.getEquippedStack(EquipmentSlot.OFFHAND).isOf(Items.SHIELD)
+			&& this.isUsingItem()
+			&& this.getActiveHand() == Hand.OFF_HAND;
+		if (this.ownerUuid != null && GuardVillagersMod.hasShieldUpgrade(world, this.ownerUuid) && activelyBlockingWithShield) {
+			amount *= 0.55F;
 		}
 		boolean damaged = super.damage(world, source, amount);
 		if (!damaged) {
@@ -1315,6 +1476,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			view.putInt(HOME_Z_KEY, this.home.getZ());
 		}
 		view.putInt(PATROL_RADIUS_KEY, this.patrolRadius);
+		view.putInt(HIERARCHY_ROW_KEY, this.hierarchyRow);
+		view.putInt(HIERARCHY_COLUMN_KEY, this.hierarchyColumn);
+		view.putString(HIERARCHY_ROLE_KEY, this.getHierarchyRole());
 	}
 
 	@Override
@@ -1344,8 +1508,20 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			this.home = null;
 		}
 		this.patrolRadius = MathHelper.clamp(view.getInt(PATROL_RADIUS_KEY, 0), 0, 128);
+		this.hierarchyRow = MathHelper.clamp(view.getInt(HIERARCHY_ROW_KEY, 0), 0, 31);
+		this.hierarchyColumn = MathHelper.clamp(view.getInt(HIERARCHY_COLUMN_KEY, 1), 0, 2);
+		this.setHierarchyRole(view.getString(HIERARCHY_ROLE_KEY, "Role"));
 		this.applyLevelModifiers();
 		this.updateCombatGoals();
+		if (this.getEntityWorld() instanceof ServerWorld) {
+			GuardOwnershipIndex.track(this);
+		}
+	}
+
+	@Override
+	public void remove(Entity.RemovalReason reason) {
+		GuardOwnershipIndex.untrack(this);
+		super.remove(reason);
 	}
 
 	private UUID parseUuid(String value) {

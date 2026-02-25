@@ -1,6 +1,7 @@
 package com.guardvillagers;
 
 import com.guardvillagers.data.GuardUpgradeState;
+import com.guardvillagers.data.GuardTacticsState;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.FormationType;
@@ -12,6 +13,7 @@ import com.guardvillagers.tactics.GuardTacticsScreenHandler;
 import com.guardvillagers.village.VillageManagerHandler;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -32,14 +34,18 @@ import net.minecraft.entity.passive.IronGolemEntity;
 import net.minecraft.entity.passive.VillagerEntity;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.component.DataComponentTypes;
+import net.minecraft.particle.BlockStateParticleEffect;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.particle.ParticleTypes;
+import net.minecraft.block.Blocks;
 import net.minecraft.registry.Registries;
 import net.minecraft.registry.Registry;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.registry.RegistryKeys;
+import net.minecraft.resource.featuretoggle.FeatureFlags;
+import net.minecraft.screen.ScreenHandlerType;
 import net.minecraft.screen.SimpleNamedScreenHandlerFactory;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
@@ -48,16 +54,19 @@ import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
+import net.minecraft.util.Formatting;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.World;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -73,7 +82,13 @@ public class GuardVillagersMod implements ModInitializer {
 	private static final int DEBUG_TEXT_UPDATE_INTERVAL = 10;
 	private static final int DEBUG_PARTICLE_INTERVAL = 20;
 	private static final String DEBUG_PREFIX = "[DBG] ";
+	private static final int WORLD_SEARCH_LIMIT = 30_000_000;
 	private static final Set<UUID> DEBUG_PLAYERS = ConcurrentHashMap.newKeySet();
+	private static final Map<RegistryKey<World>, Set<UUID>> DEBUG_VISIBLE_GUARDS = new ConcurrentHashMap<>();
+	private static final BlockStateParticleEffect DEBUG_FOLLOW_RANGE_MARKER = new BlockStateParticleEffect(ParticleTypes.BLOCK_MARKER, Blocks.LIGHT_BLUE_STAINED_GLASS.getDefaultState());
+	private static final BlockStateParticleEffect DEBUG_HOME_ZONE_MARKER = new BlockStateParticleEffect(ParticleTypes.BLOCK_MARKER, Blocks.LIME_STAINED_GLASS.getDefaultState());
+	private static final BlockStateParticleEffect DEBUG_HOME_CENTER_MARKER = new BlockStateParticleEffect(ParticleTypes.BLOCK_MARKER, Blocks.GOLD_BLOCK.getDefaultState());
+	private static final BlockStateParticleEffect DEBUG_TARGET_LINE_MARKER = new BlockStateParticleEffect(ParticleTypes.BLOCK_MARKER, Blocks.RED_STAINED_GLASS.getDefaultState());
 
 	public enum GuardPurchaseResult {
 		SUCCESS,
@@ -120,6 +135,12 @@ public class GuardVillagersMod implements ModInitializer {
 				entries.add(Items.EMERALD);
 			})
 			.build()
+	);
+
+	public static final ScreenHandlerType<GuardTacticsScreenHandler> GUARD_TACTICS_SCREEN_HANDLER = Registry.register(
+		Registries.SCREEN_HANDLER,
+		id("guard_tactics"),
+		new ScreenHandlerType<>((syncId, playerInventory) -> new GuardTacticsScreenHandler(syncId, playerInventory), FeatureFlags.VANILLA_FEATURES)
 	);
 
 	@Override
@@ -255,6 +276,31 @@ public class GuardVillagersMod implements ModInitializer {
 						context.getSource().sendFeedback(() -> Text.literal("Assigned home zone to " + updated + " guards."), false);
 						return updated;
 					})))
+			.then(CommandManager.literal("hierarchy")
+				.then(CommandManager.literal("add_role")
+					.executes(context -> {
+						ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+						int row = addHierarchyRole(player);
+						refreshOpenTacticsScreen(player);
+						context.getSource().sendFeedback(() -> Text.literal("Added hierarchy role row " + (row + 1) + "."), false);
+						return row + 1;
+					}))
+				.then(CommandManager.literal("rename")
+					.then(CommandManager.argument("row", IntegerArgumentType.integer(1, 32))
+						.then(CommandManager.argument("name", StringArgumentType.greedyString())
+							.executes(context -> {
+								ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+								int row = IntegerArgumentType.getInteger(context, "row") - 1;
+								String name = StringArgumentType.getString(context, "name");
+								boolean renamed = renameHierarchyRole(player, row, name);
+								if (renamed) {
+									refreshOpenTacticsScreen(player);
+									context.getSource().sendFeedback(() -> Text.literal("Renamed hierarchy row " + (row + 1) + " to \"" + name + "\"."), false);
+									return Command.SINGLE_SUCCESS;
+								}
+								context.getSource().sendError(Text.literal("Could not rename that hierarchy row."));
+								return 0;
+							})))))
 			.then(CommandManager.literal("count")
 				.executes(context -> {
 					ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
@@ -434,16 +480,47 @@ public class GuardVillagersMod implements ModInitializer {
 		return changed;
 	}
 
-	private static int countOwnedGuards(MinecraftServer server, UUID ownerUuid) {
-		int count = 0;
-		for (ServerWorld world : server.getWorlds()) {
-			for (Entity entity : world.iterateEntities()) {
-				if (entity instanceof GuardEntity guard && guard.isOwnedBy(ownerUuid)) {
-					count++;
-				}
+	private static int addHierarchyRole(ServerPlayerEntity player) {
+		MinecraftServer server = player.getCommandSource().getServer();
+		if (server == null) {
+			return 0;
+		}
+		GuardTacticsState state = GuardTacticsManager.getState(server);
+		GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUuid());
+		int row = tactics.addRole();
+		state.markDirty();
+		return row;
+	}
+
+	private static boolean renameHierarchyRole(ServerPlayerEntity player, int row, String requestedName) {
+		if (row < 0 || requestedName == null || requestedName.isBlank()) {
+			return false;
+		}
+		MinecraftServer server = player.getCommandSource().getServer();
+		if (server == null) {
+			return false;
+		}
+		GuardTacticsState state = GuardTacticsManager.getState(server);
+		GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUuid());
+		tactics.setRoleName(row, requestedName);
+		String normalizedName = tactics.getRoleName(row);
+		for (GuardEntity guard : getOwnedGuards(server, player.getUuid())) {
+			if (guard.getHierarchyRow() == row) {
+				guard.setHierarchyRole(normalizedName);
 			}
 		}
-		return count;
+		state.markDirty();
+		return true;
+	}
+
+	private static void refreshOpenTacticsScreen(ServerPlayerEntity player) {
+		if (player.currentScreenHandler instanceof GuardTacticsScreenHandler tacticsScreenHandler) {
+			tacticsScreenHandler.refreshInventory();
+		}
+	}
+
+	private static int countOwnedGuards(MinecraftServer server, UUID ownerUuid) {
+		return GuardOwnershipIndex.countOwnedGuards(server, ownerUuid);
 	}
 
 	private static int getScaledGuardCost(GuardPlayerUpgrades upgrades, int ownedGuards) {
@@ -454,15 +531,7 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	private static List<GuardEntity> getOwnedGuards(MinecraftServer server, UUID ownerUuid) {
-		List<GuardEntity> guards = new java.util.ArrayList<>();
-		for (ServerWorld world : server.getWorlds()) {
-			guards.addAll(world.getEntitiesByClass(
-				GuardEntity.class,
-				new Box(-30_000_000, world.getBottomY(), -30_000_000, 30_000_000, world.getTopYInclusive(), 30_000_000),
-				guard -> guard.isOwnedBy(ownerUuid)
-			));
-		}
-		return guards;
+		return GuardOwnershipIndex.getOwnedGuards(server, ownerUuid);
 	}
 
 	private static GuardRole pickDynamicPurchasedRole(ServerWorld world, UUID ownerUuid, BlockPos center) {
@@ -503,7 +572,9 @@ public class GuardVillagersMod implements ModInitializer {
 			player.sendMessage(Text.literal("Guard debug enabled."), false);
 		} else {
 			DEBUG_PLAYERS.remove(playerId);
-			clearDebugOverlays(player.getCommandSource().getServer());
+			if (DEBUG_PLAYERS.isEmpty()) {
+				clearDebugOverlays(player.getCommandSource().getServer());
+			}
 			player.sendMessage(Text.literal("Guard debug disabled."), false);
 		}
 		return Command.SINGLE_SUCCESS;
@@ -511,11 +582,23 @@ public class GuardVillagersMod implements ModInitializer {
 
 	private static void clearDebugOverlays(MinecraftServer server) {
 		for (ServerWorld world : server.getWorlds()) {
-			for (GuardEntity guard : world.getEntitiesByClass(
-				GuardEntity.class,
-				new Box(-30_000_000, world.getBottomY(), -30_000_000, 30_000_000, world.getTopYInclusive(), 30_000_000),
-				GuardVillagersMod::isDebugName)
-			) {
+			Set<UUID> tracked = DEBUG_VISIBLE_GUARDS.remove(world.getRegistryKey());
+			if (tracked == null || tracked.isEmpty()) {
+				for (GuardEntity guard : world.getEntitiesByClass(
+					GuardEntity.class,
+					fullWorldBox(world),
+					GuardVillagersMod::isDebugName)
+				) {
+					guard.setCustomNameVisible(false);
+					guard.setCustomName(null);
+				}
+				continue;
+			}
+			for (UUID guardId : tracked) {
+				Entity entity = world.getEntity(guardId);
+				if (!(entity instanceof GuardEntity guard) || !isDebugName(guard)) {
+					continue;
+				}
 				guard.setCustomNameVisible(false);
 				guard.setCustomName(null);
 			}
@@ -594,50 +677,77 @@ public class GuardVillagersMod implements ModInitializer {
 			return;
 		}
 
-		Set<UUID> seen = new HashSet<>();
+		long gameTime = world.getTime();
+		boolean updateText = gameTime % DEBUG_TEXT_UPDATE_INTERVAL == 0;
+		boolean updateParticles = gameTime % DEBUG_PARTICLE_INTERVAL == 0;
+		if (!updateText && !updateParticles) {
+			return;
+		}
+
+		Map<UUID, GuardEntity> visibleGuards = collectVisibleDebugGuards(world);
+
+		if (updateText) {
+			for (GuardEntity guard : visibleGuards.values()) {
+				Text debugName = buildDebugName(guard);
+				Text current = guard.getCustomName();
+				if (current == null || !current.getString().equals(debugName.getString())) {
+					guard.setCustomName(debugName);
+				}
+				if (!guard.isCustomNameVisible()) {
+					guard.setCustomNameVisible(true);
+				}
+			}
+		}
+
+		if (updateParticles) {
+			for (GuardEntity guard : visibleGuards.values()) {
+				renderDebugRanges(world, guard);
+				renderDebugTargetLine(world, guard);
+			}
+		}
+
+		if (updateText) {
+			clearOutOfRangeDebug(world, visibleGuards.keySet());
+		}
+	}
+
+	private static Map<UUID, GuardEntity> collectVisibleDebugGuards(ServerWorld world) {
+		Map<UUID, GuardEntity> visibleGuards = new HashMap<>();
 		for (ServerPlayerEntity player : world.getPlayers()) {
 			if (!DEBUG_PLAYERS.contains(player.getUuid())) {
 				continue;
 			}
-
-			List<GuardEntity> visibleGuards = world.getEntitiesByClass(
+			for (GuardEntity guard : world.getEntitiesByClass(
 				GuardEntity.class,
 				player.getBoundingBox().expand(DEBUG_SCAN_RANGE),
-				guard -> true
-			);
-			for (GuardEntity guard : visibleGuards) {
-				seen.add(guard.getUuid());
-
-				if (world.getTime() % DEBUG_TEXT_UPDATE_INTERVAL == 0) {
-					guard.setCustomName(buildDebugName(world, guard));
-					guard.setCustomNameVisible(true);
-				}
-
-				if (world.getTime() % DEBUG_PARTICLE_INTERVAL == 0) {
-					renderDebugRanges(world, guard);
-					renderDebugTargetLine(world, guard);
-				}
+				entity -> true
+			)) {
+				visibleGuards.putIfAbsent(guard.getUuid(), guard);
 			}
-
 		}
-		if (world.getTime() % DEBUG_TEXT_UPDATE_INTERVAL == 0) {
-			clearOutOfRangeDebug(world, seen);
-		}
+		return visibleGuards;
 	}
 
 	private static void clearOutOfRangeDebug(ServerWorld world, Set<UUID> seen) {
-		List<GuardEntity> allDebug = world.getEntitiesByClass(
-			GuardEntity.class,
-			new Box(-30_000_000, world.getBottomY(), -30_000_000, 30_000_000, world.getTopYInclusive(), 30_000_000),
-			GuardVillagersMod::isDebugName
-		);
-		for (GuardEntity guard : allDebug) {
-			if (seen.contains(guard.getUuid())) {
+		RegistryKey<World> worldKey = world.getRegistryKey();
+		Set<UUID> previouslySeen = DEBUG_VISIBLE_GUARDS.getOrDefault(worldKey, Set.of());
+		if (previouslySeen.isEmpty()) {
+			DEBUG_VISIBLE_GUARDS.put(worldKey, new HashSet<>(seen));
+			return;
+		}
+
+		for (UUID guardId : previouslySeen) {
+			if (seen.contains(guardId)) {
+				continue;
+			}
+			Entity entity = world.getEntity(guardId);
+			if (!(entity instanceof GuardEntity guard) || !isDebugName(guard)) {
 				continue;
 			}
 			guard.setCustomNameVisible(false);
 			guard.setCustomName(null);
 		}
+		DEBUG_VISIBLE_GUARDS.put(worldKey, new HashSet<>(seen));
 	}
 
 	private static boolean isDebugName(GuardEntity guard) {
@@ -645,36 +755,31 @@ public class GuardVillagersMod implements ModInitializer {
 		return customName != null && customName.getString().startsWith(DEBUG_PREFIX);
 	}
 
-	private static Text buildDebugName(ServerWorld world, GuardEntity guard) {
-		String targetName = "none";
-		LivingEntity target = guard.getTarget();
-		if (target != null && target.isAlive()) {
-			targetName = target.getName().getString();
-		} else if (guard.getPriorityTargetUuid() != null) {
-			Entity tracked = world.getEntity(guard.getPriorityTargetUuid());
-			if (tracked != null) {
-				targetName = tracked.getName().getString();
-			}
-		}
+	private static Text buildDebugName(GuardEntity guard) {
+		return Text.literal(DEBUG_PREFIX).formatted(Formatting.AQUA, Formatting.BOLD)
+			.append(Text.literal("Guard ").formatted(Formatting.GRAY))
+			.append(Text.literal(guard.getUuid().toString().substring(0, 8)).formatted(Formatting.AQUA));
+	}
 
-		double followRange = guard.getAttributeValue(net.minecraft.entity.attribute.EntityAttributes.FOLLOW_RANGE);
-		String home = guard.getHome().map(pos -> pos.getX() + "," + pos.getY() + "," + pos.getZ()).orElse("none");
-		return Text.literal(
-			DEBUG_PREFIX + "Guard " + guard.getUuid().toString().substring(0, 8)
-				+ "\nLv " + guard.getLevel() + "  XP " + guard.getExperience()
-				+ "\nType: " + guard.getRole().name() + "  Behavior: " + guard.getBehavior().name()
-				+ "\nHP: " + Math.round(guard.getHealth()) + "/" + Math.round(guard.getMaxHealth())
-				+ "  Staying: " + guard.isStaying() + "  Cooldown: " + guard.getCombatCooldown()
-				+ "\nFollowRange: " + String.format("%.1f", followRange) + "  PatrolRadius: " + guard.getPatrolRadius()
-				+ "\nHome: " + home
-				+ "\nTarget: " + targetName
+	private static Box fullWorldBox(ServerWorld world) {
+		return new Box(
+			-WORLD_SEARCH_LIMIT,
+			world.getBottomY(),
+			-WORLD_SEARCH_LIMIT,
+			WORLD_SEARCH_LIMIT,
+			world.getTopYInclusive(),
+			WORLD_SEARCH_LIMIT
 		);
 	}
 
 	private static void renderDebugRanges(ServerWorld world, GuardEntity guard) {
 		double followRange = guard.getAttributeValue(net.minecraft.entity.attribute.EntityAttributes.FOLLOW_RANGE);
-		spawnCircleParticles(world, guard.getEntityPos(), Math.max(2.0D, followRange), ParticleTypes.WAX_OFF, 20);
-		guard.getHome().ifPresent(home -> spawnCircleParticles(world, Vec3d.ofCenter(home), Math.max(2.0D, guard.getPatrolRadius()), ParticleTypes.HAPPY_VILLAGER, 24));
+		spawnCircleParticles(world, guard.getEntityPos(), Math.max(2.0D, followRange), DEBUG_FOLLOW_RANGE_MARKER, 28);
+		guard.getHome().ifPresent(home -> {
+			Vec3d homeCenter = Vec3d.ofCenter(home);
+			spawnCircleParticles(world, homeCenter, Math.max(2.0D, guard.getPatrolRadius()), DEBUG_HOME_ZONE_MARKER, 32);
+			world.spawnParticles(DEBUG_HOME_CENTER_MARKER, homeCenter.x, homeCenter.y + 0.2D, homeCenter.z, 1, 0.0D, 0.0D, 0.0D, 0.0D);
+		});
 	}
 
 	private static void renderDebugTargetLine(ServerWorld world, GuardEntity guard) {
@@ -690,7 +795,7 @@ public class GuardVillagersMod implements ModInitializer {
 		Vec3d step = delta.multiply(1.0D / segments);
 		Vec3d cursor = start;
 		for (int i = 0; i <= segments; i++) {
-			world.spawnParticles(ParticleTypes.CRIT, cursor.x, cursor.y, cursor.z, 1, 0.0D, 0.0D, 0.0D, 0.0D);
+			world.spawnParticles(DEBUG_TARGET_LINE_MARKER, cursor.x, cursor.y, cursor.z, 1, 0.0D, 0.0D, 0.0D, 0.0D);
 			cursor = cursor.add(step);
 		}
 	}

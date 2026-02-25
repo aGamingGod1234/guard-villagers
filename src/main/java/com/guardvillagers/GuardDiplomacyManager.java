@@ -2,9 +2,6 @@ package com.guardvillagers;
 
 import com.guardvillagers.data.GuardDiplomacyState;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.PlayerConfigEntry;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.text.Text;
 
 import java.util.Set;
 import java.util.UUID;
@@ -51,38 +48,5 @@ public final class GuardDiplomacyManager {
 			return whitelist.contains(target);
 		}
 		return true;
-	}
-
-	public static void requestReview(ServerPlayerEntity requester) {
-		MinecraftServer server = requester.getCommandSource().getServer();
-		if (server == null) {
-			return;
-		}
-
-		Set<UUID> blacklist = getBlacklist(server, requester.getUuid());
-		if (blacklist.isEmpty()) {
-			requester.sendMessage(Text.literal("No blacklisted players to review."), true);
-			return;
-		}
-
-		StringBuilder listBuilder = new StringBuilder();
-		for (UUID uuid : blacklist) {
-			ServerPlayerEntity online = server.getPlayerManager().getPlayer(uuid);
-			String name = online == null ? uuid.toString() : online.getName().getString();
-			if (listBuilder.length() > 0) {
-				listBuilder.append(", ");
-			}
-			listBuilder.append(name);
-		}
-		String list = listBuilder.toString();
-
-		Text message = Text.literal("[Guard Review] " + requester.getName().getString() + " requested review: " + list);
-		for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-			PlayerConfigEntry entry = new PlayerConfigEntry(player.getUuid(), player.getName().getString());
-			if (server.getPlayerManager().isOperator(entry)) {
-				player.sendMessage(message, false);
-			}
-		}
-		requester.sendMessage(Text.literal("Review request sent to online operators."), true);
 	}
 }

@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class VillageManagerHandler {
 	private static final int PROCESS_INTERVAL_TICKS = 100;
@@ -34,6 +35,9 @@ public final class VillageManagerHandler {
 	private static final int MAX_GUARDS_PER_VILLAGE = 12;
 	private static final int RESPAWN_COOLDOWN_TICKS = 20 * 60 * 2;
 	private static final int NATURAL_GUARD_SCAN_EXPANSION = 16;
+	private static final int DOOR_COUNT_CACHE_TICKS = 20 * 60;
+	private static final int DOOR_COUNT_CACHE_MAX_ENTRIES = 4096;
+	private static final Map<String, DoorCountCache> DOOR_COUNT_CACHE = new ConcurrentHashMap<>();
 	private static final int[] SPAWN_RING_OFFSETS = {
 		0, 0, 4, 0, -4, 0, 0, 4, 0, -4, 6, 3, -6, -3, 8, 0, -8, 0
 	};
@@ -211,6 +215,20 @@ public final class VillageManagerHandler {
 	}
 
 	private static int countDoors(ServerWorld world, VillageDescriptor village) {
+		long now = world.getTime();
+		String cacheKey = world.getRegistryKey().getValue() + "|" + village.id();
+		DoorCountCache cached = DOOR_COUNT_CACHE.get(cacheKey);
+		if (cached != null && now - cached.sampleTick() <= DOOR_COUNT_CACHE_TICKS) {
+			return cached.count();
+		}
+
+		int recalculated = countDoorsUncached(world, village);
+		DOOR_COUNT_CACHE.put(cacheKey, new DoorCountCache(recalculated, now));
+		cleanupDoorCache(now);
+		return recalculated;
+	}
+
+	private static int countDoorsUncached(ServerWorld world, VillageDescriptor village) {
 		int radius = Math.min(64, village.horizontalRadius() + 8);
 		int minY = Math.max(world.getBottomY(), village.center().getY() - 4);
 		int maxY = Math.min(world.getTopYInclusive(), village.center().getY() + 5);
@@ -231,6 +249,14 @@ public final class VillageManagerHandler {
 			}
 		}
 		return count;
+	}
+
+	private static void cleanupDoorCache(long worldTime) {
+		if (DOOR_COUNT_CACHE.size() <= DOOR_COUNT_CACHE_MAX_ENTRIES) {
+			return;
+		}
+		long cutoff = worldTime - (DOOR_COUNT_CACHE_TICKS * 4L);
+		DOOR_COUNT_CACHE.entrySet().removeIf(entry -> entry.getValue().sampleTick() < cutoff);
 	}
 
 	private static boolean spawnVillageGuard(ServerWorld world, VillageDescriptor village, int guardIndex) {
@@ -268,5 +294,8 @@ public final class VillageManagerHandler {
 		private VillageAggregation(VillageDescriptor descriptor) {
 			this.descriptor = descriptor;
 		}
+	}
+
+	private record DoorCountCache(int count, long sampleTick) {
 	}
 }

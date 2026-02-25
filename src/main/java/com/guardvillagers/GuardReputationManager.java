@@ -4,6 +4,7 @@ import com.guardvillagers.data.GuardReputationState;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.passive.VillagerEntity;
+import net.minecraft.entity.raid.RaiderEntity;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -19,7 +20,11 @@ public final class GuardReputationManager {
 	private static final int TRUST_THRESHOLD = -10;
 	private static final int HOSTILE_THRESHOLD = -35;
 	private static final int MAX_GOSSIP_VILLAGERS = 24;
+	private static final int TRADE_COOLDOWN_TICKS = 200;
+	private static final int COOLDOWN_RETENTION_TICKS = 20 * 60 * 10;
+	private static final int COOLDOWN_CLEANUP_INTERVAL_TICKS = 20 * 60;
 	private static final Map<UUID, Long> TRADE_REPUTATION_COOLDOWN = new ConcurrentHashMap<>();
+	private static volatile long lastCooldownCleanupTick = Long.MIN_VALUE;
 
 	private GuardReputationManager() {
 	}
@@ -65,9 +70,10 @@ public final class GuardReputationManager {
 
 	public static void recordTradeInteraction(ServerPlayerEntity player, VillagerEntity villager) {
 		long now = player.getEntityWorld().getTime();
+		cleanupTradeCooldown(now);
 		UUID key = mix(player.getUuid(), villager.getUuid());
 		long previous = TRADE_REPUTATION_COOLDOWN.getOrDefault(key, Long.MIN_VALUE);
-		if (now - previous < 200) {
+		if (now - previous < TRADE_COOLDOWN_TICKS) {
 			return;
 		}
 
@@ -92,8 +98,17 @@ public final class GuardReputationManager {
 		if (target == null) {
 			return;
 		}
-		int delta = target.getType().toString().contains("raider") ? 4 : 2;
+		int delta = target instanceof RaiderEntity ? 4 : 2;
 		applyReputationDelta(world, playerUuid, delta);
+	}
+
+	private static void cleanupTradeCooldown(long worldTime) {
+		if (lastCooldownCleanupTick != Long.MIN_VALUE && worldTime - lastCooldownCleanupTick < COOLDOWN_CLEANUP_INTERVAL_TICKS) {
+			return;
+		}
+		lastCooldownCleanupTick = worldTime;
+		long cutoff = worldTime - COOLDOWN_RETENTION_TICKS;
+		TRADE_REPUTATION_COOLDOWN.entrySet().removeIf(entry -> entry.getValue() < cutoff);
 	}
 
 	private static int getGossipScore(ServerWorld world, UUID playerUuid, BlockPos reference, int radius) {

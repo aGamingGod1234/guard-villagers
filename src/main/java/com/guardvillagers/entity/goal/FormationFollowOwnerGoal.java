@@ -13,6 +13,7 @@ public final class FormationFollowOwnerGoal extends Goal {
 	private final double speed;
 	private ServerPlayerEntity owner;
 	private int repathCooldown;
+	private int teleportCooldown;
 
 	public FormationFollowOwnerGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
@@ -38,6 +39,7 @@ public final class FormationFollowOwnerGoal extends Goal {
 	public void stop() {
 		this.owner = null;
 		this.repathCooldown = 0;
+		this.teleportCooldown = 0;
 		this.guard.getNavigation().stop();
 	}
 
@@ -50,19 +52,31 @@ public final class FormationFollowOwnerGoal extends Goal {
 		Vec3d formationPoint = this.guard.getFormationAnchor(this.owner);
 		double distanceSq = this.guard.squaredDistanceTo(formationPoint);
 		double ownerDistanceSq = this.guard.squaredDistanceTo(this.owner);
-		if (ownerDistanceSq > 2304.0D && this.repathCooldown <= 0) {
-			this.guard.getNavigation().startMovingTo(this.owner, this.speed + 0.15D);
-			this.repathCooldown = 10;
+		if (ownerDistanceSq > 6400.0D && this.teleportCooldown <= 0) {
+			this.guard.teleportToFormationAnchor(formationPoint);
+			this.teleportCooldown = 60;
+			this.repathCooldown = 0;
+			return;
 		}
 
-		if (distanceSq > 4.0D && this.repathCooldown <= 0) {
-			this.guard.getNavigation().startMovingTo(formationPoint.x, formationPoint.y, formationPoint.z, this.speed);
-			this.repathCooldown = 10;
-		} else if (distanceSq <= 2.0D) {
+		if (ownerDistanceSq > 1936.0D && this.repathCooldown <= 0) {
+			this.guard.getNavigation().startMovingTo(this.owner, this.speed + 0.4D);
+			this.repathCooldown = 4;
+		}
+
+		if (distanceSq > 1.2D && this.repathCooldown <= 0) {
+			double speedBoost = Math.min(0.75D, Math.sqrt(distanceSq) * 0.045D);
+			double followSpeed = this.speed + speedBoost;
+			this.guard.getNavigation().startMovingTo(formationPoint.x, formationPoint.y, formationPoint.z, followSpeed);
+			this.repathCooldown = distanceSq > 64.0D ? 3 : 5;
+		} else if (distanceSq <= 0.8D) {
 			this.guard.getNavigation().stop();
 		}
 		if (this.repathCooldown > 0) {
 			this.repathCooldown--;
+		}
+		if (this.teleportCooldown > 0) {
+			this.teleportCooldown--;
 		}
 	}
 }
