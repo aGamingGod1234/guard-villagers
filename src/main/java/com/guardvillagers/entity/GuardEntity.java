@@ -928,10 +928,15 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 		List<HostileEntity> hostiles = world.getEntitiesByClass(HostileEntity.class, this.getBoundingBox().expand(20.0D), this::canTargetHostile);
 		HostileEntity best = null;
-		float highestHealth = -1.0F;
+		double bestScore = Double.NEGATIVE_INFINITY;
 		for (HostileEntity hostile : hostiles) {
-			if (hostile.getHealth() > highestHealth) {
-				highestHealth = hostile.getHealth();
+			double distance = Math.sqrt(this.squaredDistanceTo(hostile));
+			double distanceWeight = Math.max(0.0D, 24.0D - distance);
+			double score = hostile.getHealth() * 0.8D
+				+ distanceWeight * 0.6D
+				+ this.getRandom().nextDouble() * 3.0D;
+			if (score > bestScore) {
+				bestScore = score;
 				best = hostile;
 			}
 		}

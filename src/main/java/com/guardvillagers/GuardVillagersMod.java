@@ -110,38 +110,6 @@ public class GuardVillagersMod implements ModInitializer {
 				entries.add(GUARD_SPAWN_EGG);
 				entries.add(GUARD_WHISTLE);
 				entries.add(Items.EMERALD);
-				entries.add(Items.WOODEN_SWORD);
-				entries.add(Items.STONE_SWORD);
-				entries.add(Items.GOLDEN_SWORD);
-				entries.add(Items.IRON_SWORD);
-				entries.add(Items.DIAMOND_SWORD);
-				entries.add(Items.NETHERITE_SWORD);
-				entries.add(Items.BOW);
-				entries.add(Items.ARROW);
-				entries.add(Items.LEATHER_HELMET);
-				entries.add(Items.LEATHER_CHESTPLATE);
-				entries.add(Items.LEATHER_LEGGINGS);
-				entries.add(Items.LEATHER_BOOTS);
-				entries.add(Items.CHAINMAIL_HELMET);
-				entries.add(Items.CHAINMAIL_CHESTPLATE);
-				entries.add(Items.CHAINMAIL_LEGGINGS);
-				entries.add(Items.CHAINMAIL_BOOTS);
-				entries.add(Items.GOLDEN_HELMET);
-				entries.add(Items.GOLDEN_CHESTPLATE);
-				entries.add(Items.GOLDEN_LEGGINGS);
-				entries.add(Items.GOLDEN_BOOTS);
-				entries.add(Items.IRON_HELMET);
-				entries.add(Items.IRON_CHESTPLATE);
-				entries.add(Items.IRON_LEGGINGS);
-				entries.add(Items.IRON_BOOTS);
-				entries.add(Items.DIAMOND_HELMET);
-				entries.add(Items.DIAMOND_CHESTPLATE);
-				entries.add(Items.DIAMOND_LEGGINGS);
-				entries.add(Items.DIAMOND_BOOTS);
-				entries.add(Items.NETHERITE_HELMET);
-				entries.add(Items.NETHERITE_CHESTPLATE);
-				entries.add(Items.NETHERITE_LEGGINGS);
-				entries.add(Items.NETHERITE_BOOTS);
 			})
 			.build()
 	);

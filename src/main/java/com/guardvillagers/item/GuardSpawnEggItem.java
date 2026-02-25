@@ -3,17 +3,26 @@ package com.guardvillagers.item;
 import com.guardvillagers.GuardVillagersMod;
 import com.guardvillagers.entity.GuardEntity;
 import net.minecraft.entity.SpawnReason;
-import net.minecraft.item.Item;
+import net.minecraft.entity.EntityType;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.ItemUsageContext;
+import net.minecraft.item.SpawnEggItem;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.ActionResult;
+import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.World;
 import net.minecraft.world.Heightmap;
 
-public class GuardSpawnEggItem extends Item {
+public class GuardSpawnEggItem extends SpawnEggItem {
 	public GuardSpawnEggItem(Settings settings) {
 		super(settings);
+	}
+
+	@Override
+	public EntityType<?> getEntityType(ItemStack stack) {
+		return GuardVillagersMod.GUARD_ENTITY_TYPE;
 	}
 
 	@Override
@@ -40,5 +49,10 @@ public class GuardSpawnEggItem extends Item {
 			stack.decrement(1);
 		}
 		return ActionResult.SUCCESS;
+	}
+
+	@Override
+	public ActionResult use(World world, PlayerEntity user, Hand hand) {
+		return super.use(world, user, hand);
 	}
 }
