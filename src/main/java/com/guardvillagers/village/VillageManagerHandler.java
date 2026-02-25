@@ -31,6 +31,8 @@ public final class VillageManagerHandler {
 	private static final int PROCESS_INTERVAL_TICKS = 100;
 	private static final int MAX_VILLAGERS_SCANNED = 256;
 	private static final int MAX_SPAWNS_PER_VILLAGE = 2;
+	private static final int MAX_GUARDS_PER_VILLAGE = 12;
+	private static final int RESPAWN_COOLDOWN_TICKS = 20 * 60 * 2;
 	private static final int NATURAL_GUARD_SCAN_EXPANSION = 16;
 	private static final int[] SPAWN_RING_OFFSETS = {
 		0, 0, 4, 0, -4, 0, 0, 4, 0, -4, 6, 3, -6, -3, 8, 0, -8, 0
@@ -78,16 +80,26 @@ public final class VillageManagerHandler {
 			state.updateInitial(village.id(), Math.max(deterministicCap, data.initialSpawnCount()));
 			int initial = state.getOrCreate(village.id(), deterministicCap).initialSpawnCount();
 			int regrowthCap = Math.max(initial, (int) Math.floor(initial * 1.5D));
-			int dynamicCap = Math.max(1, Math.min(deterministicCap, regrowthCap));
+			int dynamicCap = Math.max(1, Math.min(MAX_GUARDS_PER_VILLAGE, Math.min(deterministicCap, regrowthCap)));
 
 			int naturalGuardCount = countNaturalGuards(world, village);
 			if (naturalGuardCount >= dynamicCap) {
 				continue;
 			}
 
+			long now = world.getTime();
+			long lastSpawnTick = state.getLastSpawnTick(village.id());
+			if (lastSpawnTick != Long.MIN_VALUE && now - lastSpawnTick < RESPAWN_COOLDOWN_TICKS) {
+				continue;
+			}
+
 			int spawnBudget = Math.min(MAX_SPAWNS_PER_VILLAGE, dynamicCap - naturalGuardCount);
+			boolean spawned = false;
 			for (int i = 0; i < spawnBudget; i++) {
-				spawnVillageGuard(world, village, naturalGuardCount + i);
+				spawned |= spawnVillageGuard(world, village, naturalGuardCount + i);
+			}
+			if (spawned) {
+				state.setLastSpawnTick(village.id(), now);
 			}
 		}
 	}
@@ -221,11 +233,11 @@ public final class VillageManagerHandler {
 		return count;
 	}
 
-	private static void spawnVillageGuard(ServerWorld world, VillageDescriptor village, int guardIndex) {
+	private static boolean spawnVillageGuard(ServerWorld world, VillageDescriptor village, int guardIndex) {
 		GuardEntity guard = GuardVillagersMod.GUARD_ENTITY_TYPE.create(world, SpawnReason.NATURAL);
 		if (guard == null) {
 			GuardVillagersMod.LOGGER.warn("Failed to create village guard for village {}", village.id());
-			return;
+			return false;
 		}
 
 		int ringIndex = (guardIndex * 2) % SPAWN_RING_OFFSETS.length;
@@ -244,7 +256,9 @@ public final class VillageManagerHandler {
 
 		if (!world.spawnEntity(guard)) {
 			GuardVillagersMod.LOGGER.warn("Village guard spawn rejected at {} in {}", top, world.getRegistryKey().getValue());
+			return false;
 		}
+		return true;
 	}
 
 	private static final class VillageAggregation {

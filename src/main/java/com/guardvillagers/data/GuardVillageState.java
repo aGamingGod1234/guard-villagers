@@ -40,7 +40,7 @@ public final class GuardVillageState extends PersistentState {
 			return existing;
 		}
 
-		VillageData created = new VillageData(clampedInitial);
+		VillageData created = new VillageData(clampedInitial, Long.MIN_VALUE);
 		this.villages.put(villageId, created);
 		this.markDirty();
 		return created;
@@ -52,18 +52,34 @@ public final class GuardVillageState extends PersistentState {
 		}
 		VillageData current = this.villages.get(villageId);
 		if (current == null || newInitial > current.initialSpawnCount()) {
-			this.villages.put(villageId, new VillageData(newInitial));
+			long lastSpawnTick = current == null ? Long.MIN_VALUE : current.lastSpawnTick();
+			this.villages.put(villageId, new VillageData(newInitial, lastSpawnTick));
 			this.markDirty();
 		}
+	}
+
+	public long getLastSpawnTick(String villageId) {
+		VillageData data = this.villages.get(villageId);
+		return data == null ? Long.MIN_VALUE : data.lastSpawnTick();
+	}
+
+	public void setLastSpawnTick(String villageId, long tick) {
+		VillageData data = this.villages.get(villageId);
+		if (data == null || data.lastSpawnTick() == tick) {
+			return;
+		}
+		this.villages.put(villageId, new VillageData(data.initialSpawnCount(), tick));
+		this.markDirty();
 	}
 
 	private Map<String, VillageData> villagesForCodec() {
 		return Collections.unmodifiableMap(this.villages);
 	}
 
-	public record VillageData(int initialSpawnCount) {
+	public record VillageData(int initialSpawnCount, long lastSpawnTick) {
 		public static final Codec<VillageData> CODEC = RecordCodecBuilder.create(instance -> instance.group(
-			Codec.intRange(1, 10_000).fieldOf("initial_spawn_count").forGetter(VillageData::initialSpawnCount)
+			Codec.intRange(1, 10_000).fieldOf("initial_spawn_count").forGetter(VillageData::initialSpawnCount),
+			Codec.LONG.optionalFieldOf("last_spawn_tick", Long.MIN_VALUE).forGetter(VillageData::lastSpawnTick)
 		).apply(instance, VillageData::new));
 	}
 }

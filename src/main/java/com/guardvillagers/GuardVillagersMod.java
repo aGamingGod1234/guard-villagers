@@ -4,6 +4,7 @@ import com.guardvillagers.data.GuardUpgradeState;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.FormationType;
+import com.guardvillagers.entity.GuardRole;
 import com.guardvillagers.item.GuardSpawnEggItem;
 import com.guardvillagers.item.GuardWhistleItem;
 import com.guardvillagers.shop.GuardShopScreenHandler;
@@ -50,7 +51,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.HashSet;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -180,7 +183,12 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	private void registerGuardCommands(com.mojang.brigadier.CommandDispatcher<ServerCommandSource> dispatcher, CommandRegistryAccess registryAccess, CommandManager.RegistrationEnvironment environment) {
-		dispatcher.register(CommandManager.literal("guards")
+		dispatcher.register(buildGuardsCommand("guards"));
+		dispatcher.register(buildGuardsCommand("gaurds"));
+	}
+
+	private com.mojang.brigadier.builder.LiteralArgumentBuilder<ServerCommandSource> buildGuardsCommand(String rootLiteral) {
+		return CommandManager.literal(rootLiteral)
 			.then(CommandManager.literal("shop")
 				.executes(context -> {
 					ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
@@ -212,7 +220,15 @@ public class GuardVillagersMod implements ModInitializer {
 				.then(CommandManager.literal("bodyguard").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.BODYGUARD)))
 				.then(CommandManager.literal("crowd_control").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.CROWD_CONTROL)))
 				.then(CommandManager.literal("offensive").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.OFFENSIVE)))
-				.then(CommandManager.literal("defensive").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.DEFENSIVE))))
+				.then(CommandManager.literal("defensive").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.DEFENSIVE)))
+				.then(CommandManager.literal("random").executes(context -> setBehaviorRandom(context.getSource().getPlayerOrThrow()))))
+			.then(CommandManager.literal("behaviour")
+				.then(CommandManager.literal("perimeter").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.PERIMETER)))
+				.then(CommandManager.literal("bodyguard").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.BODYGUARD)))
+				.then(CommandManager.literal("crowd_control").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.CROWD_CONTROL)))
+				.then(CommandManager.literal("offensive").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.OFFENSIVE)))
+				.then(CommandManager.literal("defensive").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.DEFENSIVE)))
+				.then(CommandManager.literal("random").executes(context -> setBehaviorRandom(context.getSource().getPlayerOrThrow()))))
 			.then(CommandManager.literal("formation")
 				.then(CommandManager.literal("line").executes(context -> setFormation(context.getSource().getPlayerOrThrow(), FormationType.LINE)))
 				.then(CommandManager.literal("wedge").executes(context -> setFormation(context.getSource().getPlayerOrThrow(), FormationType.WEDGE)))
@@ -239,7 +255,7 @@ public class GuardVillagersMod implements ModInitializer {
 					.executes(context -> setDebug(context.getSource().getPlayerOrThrow(), true)))
 				.then(CommandManager.literal("off")
 					.executes(context -> setDebug(context.getSource().getPlayerOrThrow(), false))))
-		);
+		;
 	}
 
 	private static void openShop(ServerPlayerEntity player) {
@@ -323,6 +339,7 @@ public class GuardVillagersMod implements ModInitializer {
 			guard.refreshPositionAndAngles(top.getX() + 0.5D, top.getY(), top.getZ() + 0.5D, player.getYaw(), 0.0F);
 			guard.setOwnerUuid(player.getUuid());
 			guard.setStaying(false);
+			guard.setRole(pickDynamicPurchasedRole(world, player.getUuid(), player.getBlockPos()));
 			guard.applyPurchasedLoadout(world, upgrades);
 			guard.setSquadLeader(false);
 			if (world.spawnEntity(guard)) {
@@ -334,45 +351,53 @@ public class GuardVillagersMod implements ModInitializer {
 
 	private static int setStance(ServerPlayerEntity player, boolean staying) {
 		int changed = 0;
-		for (ServerWorld world : player.getCommandSource().getServer().getWorlds()) {
-			for (Entity entity : world.iterateEntities()) {
-				if (entity instanceof GuardEntity guard && guard.isOwnedBy(player.getUuid())) {
-					guard.setStaying(staying);
-					if (!staying) {
-						guard.clearCombatTarget();
-					}
-					changed++;
-				}
+		for (GuardEntity guard : getOwnedGuards(player.getCommandSource().getServer(), player.getUuid())) {
+			guard.setStaying(staying);
+			if (!staying) {
+				guard.clearHome();
+				guard.setBehavior(GuardBehavior.BODYGUARD);
+				guard.clearCombatTarget();
 			}
+			changed++;
 		}
 		return changed;
 	}
 
 	private static int setBehavior(ServerPlayerEntity player, GuardBehavior behavior) {
 		int changed = 0;
-		for (ServerWorld world : player.getCommandSource().getServer().getWorlds()) {
-			for (Entity entity : world.iterateEntities()) {
-				if (entity instanceof GuardEntity guard && guard.isOwnedBy(player.getUuid())) {
-					guard.setBehavior(behavior);
-					guard.clearCombatTarget();
-					changed++;
-				}
-			}
+		for (GuardEntity guard : getOwnedGuards(player.getCommandSource().getServer(), player.getUuid())) {
+			guard.setBehavior(behavior);
+			guard.clearCombatTarget();
+			changed++;
 		}
 		player.sendMessage(Text.literal("Set " + changed + " guards to " + behavior.name().toLowerCase() + "."), true);
 		return changed;
 	}
 
+	private static int setBehaviorRandom(ServerPlayerEntity player) {
+		List<GuardEntity> ownedGuards = getOwnedGuards(player.getCommandSource().getServer(), player.getUuid());
+		if (ownedGuards.isEmpty()) {
+			player.sendMessage(Text.literal("No owned guards found."), true);
+			return 0;
+		}
+		Collections.shuffle(ownedGuards, new java.util.Random(player.getEntityWorld().getRandom().nextLong()));
+		GuardBehavior[] behaviors = GuardBehavior.values();
+		for (int i = 0; i < ownedGuards.size(); i++) {
+			GuardEntity guard = ownedGuards.get(i);
+			GuardBehavior behavior = behaviors[i % behaviors.length];
+			guard.setBehavior(behavior);
+			guard.clearCombatTarget();
+		}
+		player.sendMessage(Text.literal("Distributed " + ownedGuards.size() + " guards evenly across behaviors."), true);
+		return ownedGuards.size();
+	}
+
 	private static int setFormation(ServerPlayerEntity player, FormationType formationType) {
 		int changed = 0;
-		for (ServerWorld world : player.getCommandSource().getServer().getWorlds()) {
-			for (Entity entity : world.iterateEntities()) {
-				if (entity instanceof GuardEntity guard && guard.isOwnedBy(player.getUuid())) {
-					guard.setFormationType(formationType);
-					guard.clearCombatTarget();
-					changed++;
-				}
-			}
+		for (GuardEntity guard : getOwnedGuards(player.getCommandSource().getServer(), player.getUuid())) {
+			guard.setFormationType(formationType);
+			guard.clearCombatTarget();
+			changed++;
 		}
 		player.sendMessage(Text.literal("Set formation to " + formationType.name().toLowerCase() + " for " + changed + " guards."), true);
 		return changed;
@@ -405,6 +430,44 @@ public class GuardVillagersMod implements ModInitializer {
 		return count;
 	}
 
+	private static List<GuardEntity> getOwnedGuards(MinecraftServer server, UUID ownerUuid) {
+		List<GuardEntity> guards = new java.util.ArrayList<>();
+		for (ServerWorld world : server.getWorlds()) {
+			guards.addAll(world.getEntitiesByClass(
+				GuardEntity.class,
+				new Box(-30_000_000, world.getBottomY(), -30_000_000, 30_000_000, world.getTopYInclusive(), 30_000_000),
+				guard -> guard.isOwnedBy(ownerUuid)
+			));
+		}
+		return guards;
+	}
+
+	private static GuardRole pickDynamicPurchasedRole(ServerWorld world, UUID ownerUuid, BlockPos center) {
+		List<GuardEntity> owned = world.getEntitiesByClass(
+			GuardEntity.class,
+			new Box(center).expand(128.0D),
+			guard -> guard.isOwnedBy(ownerUuid)
+		);
+		Map<GuardRole, Integer> counts = new java.util.EnumMap<>(GuardRole.class);
+		for (GuardRole role : GuardRole.values()) {
+			counts.put(role, 0);
+		}
+		for (GuardEntity guard : owned) {
+			counts.computeIfPresent(guard.getRole(), (role, count) -> count + 1);
+		}
+
+		GuardRole choice = GuardRole.SWORDSMAN;
+		int best = Integer.MAX_VALUE;
+		for (GuardRole role : GuardRole.values()) {
+			int count = counts.getOrDefault(role, 0);
+			if (count < best) {
+				best = count;
+				choice = role;
+			}
+		}
+		return choice;
+	}
+
 	private static int toggleDebug(ServerPlayerEntity player) {
 		boolean enable = !DEBUG_PLAYERS.contains(player.getUuid());
 		return setDebug(player, enable);
@@ -417,18 +480,18 @@ public class GuardVillagersMod implements ModInitializer {
 			player.sendMessage(Text.literal("Guard debug enabled."), false);
 		} else {
 			DEBUG_PLAYERS.remove(playerId);
-			clearDebugOverlays(player.getCommandSource().getServer(), playerId);
+			clearDebugOverlays(player.getCommandSource().getServer());
 			player.sendMessage(Text.literal("Guard debug disabled."), false);
 		}
 		return Command.SINGLE_SUCCESS;
 	}
 
-	private static void clearDebugOverlays(MinecraftServer server, UUID ownerUuid) {
+	private static void clearDebugOverlays(MinecraftServer server) {
 		for (ServerWorld world : server.getWorlds()) {
 			for (GuardEntity guard : world.getEntitiesByClass(
 				GuardEntity.class,
 				new Box(-30_000_000, world.getBottomY(), -30_000_000, 30_000_000, world.getTopYInclusive(), 30_000_000),
-				entity -> entity.isOwnedBy(ownerUuid) && isDebugName(entity))
+				GuardVillagersMod::isDebugName)
 			) {
 				guard.setCustomNameVisible(false);
 				guard.setCustomName(null);
@@ -508,18 +571,18 @@ public class GuardVillagersMod implements ModInitializer {
 			return;
 		}
 
+		Set<UUID> seen = new HashSet<>();
 		for (ServerPlayerEntity player : world.getPlayers()) {
 			if (!DEBUG_PLAYERS.contains(player.getUuid())) {
 				continue;
 			}
 
-			List<GuardEntity> ownedGuards = world.getEntitiesByClass(
+			List<GuardEntity> visibleGuards = world.getEntitiesByClass(
 				GuardEntity.class,
 				player.getBoundingBox().expand(DEBUG_SCAN_RANGE),
-				guard -> guard.isOwnedBy(player.getUuid())
+				guard -> true
 			);
-			Set<UUID> seen = new HashSet<>();
-			for (GuardEntity guard : ownedGuards) {
+			for (GuardEntity guard : visibleGuards) {
 				seen.add(guard.getUuid());
 
 				if (world.getTime() % DEBUG_TEXT_UPDATE_INTERVAL == 0) {
@@ -533,19 +596,19 @@ public class GuardVillagersMod implements ModInitializer {
 				}
 			}
 
-			if (world.getTime() % DEBUG_TEXT_UPDATE_INTERVAL == 0) {
-				clearOutOfRangeDebug(world, player, seen);
-			}
+		}
+		if (world.getTime() % DEBUG_TEXT_UPDATE_INTERVAL == 0) {
+			clearOutOfRangeDebug(world, seen);
 		}
 	}
 
-	private static void clearOutOfRangeDebug(ServerWorld world, ServerPlayerEntity player, Set<UUID> seen) {
-		List<GuardEntity> allOwned = world.getEntitiesByClass(
+	private static void clearOutOfRangeDebug(ServerWorld world, Set<UUID> seen) {
+		List<GuardEntity> allDebug = world.getEntitiesByClass(
 			GuardEntity.class,
 			new Box(-30_000_000, world.getBottomY(), -30_000_000, 30_000_000, world.getTopYInclusive(), 30_000_000),
-			guard -> guard.isOwnedBy(player.getUuid()) && isDebugName(guard)
+			GuardVillagersMod::isDebugName
 		);
-		for (GuardEntity guard : allOwned) {
+		for (GuardEntity guard : allDebug) {
 			if (seen.contains(guard.getUuid())) {
 				continue;
 			}

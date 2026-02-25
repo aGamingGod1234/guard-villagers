@@ -557,7 +557,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	public void applyPurchasedLoadout(ServerWorld world, GuardPlayerUpgrades upgrades) {
-		this.assignRandomRole(world);
+		if (!this.hasOwner()) {
+			this.assignRandomRole(world);
+		}
 		this.setBehavior(GuardBehavior.BODYGUARD);
 		this.setFormationType(FormationType.WEDGE);
 		this.equipGuardGear(world, upgrades.getWeaponLevel(), upgrades);

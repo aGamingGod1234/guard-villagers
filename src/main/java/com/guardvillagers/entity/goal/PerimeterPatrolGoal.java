@@ -10,6 +10,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.Heightmap;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
@@ -21,6 +22,7 @@ public final class PerimeterPatrolGoal extends Goal {
 	private final List<BlockPos> perimeterPoints = new ArrayList<>();
 	private int pointIndex;
 	private int recalculateTicks;
+	private int shuffleTicks;
 
 	public PerimeterPatrolGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
@@ -46,6 +48,7 @@ public final class PerimeterPatrolGoal extends Goal {
 	public void start() {
 		this.pointIndex = 0;
 		this.recalculateTicks = 0;
+		this.shuffleTicks = 0;
 	}
 
 	@Override
@@ -58,6 +61,10 @@ public final class PerimeterPatrolGoal extends Goal {
 			this.refreshVillageData();
 			this.recalculateTicks = 120;
 		}
+		if (this.shuffleTicks-- <= 0 && this.perimeterPoints.size() > 3) {
+			Collections.rotate(this.perimeterPoints, 1 + (this.guard.getId() % 3));
+			this.shuffleTicks = 200 + this.guard.getRandom().nextInt(120);
+		}
 
 		if (this.perimeterPoints.isEmpty()) {
 			return;
@@ -65,8 +72,9 @@ public final class PerimeterPatrolGoal extends Goal {
 
 		BlockPos target = this.perimeterPoints.get(this.pointIndex % this.perimeterPoints.size());
 		double distanceSq = this.guard.squaredDistanceTo(target.getX() + 0.5D, target.getY(), target.getZ() + 0.5D);
-		if (distanceSq < 4.0D) {
-			this.pointIndex = (this.pointIndex + 1) % this.perimeterPoints.size();
+		if (distanceSq < 9.0D) {
+			int advance = 1 + this.guard.getRandom().nextInt(Math.min(3, this.perimeterPoints.size()));
+			this.pointIndex = (this.pointIndex + advance) % this.perimeterPoints.size();
 			target = this.perimeterPoints.get(this.pointIndex);
 		}
 
@@ -99,14 +107,24 @@ public final class PerimeterPatrolGoal extends Goal {
 		int minZ = this.village.bounds().getMinZ();
 		int maxZ = this.village.bounds().getMaxZ();
 		int y = this.village.center().getY();
+		int step = 6;
+		int jitter = 2;
+		for (int x = minX; x <= maxX; x += step) {
+			this.perimeterPoints.add(jittered(x, y, minZ, jitter));
+			this.perimeterPoints.add(jittered(x, y, maxZ, jitter));
+		}
+		for (int z = minZ + step; z < maxZ; z += step) {
+			this.perimeterPoints.add(jittered(minX, y, z, jitter));
+			this.perimeterPoints.add(jittered(maxX, y, z, jitter));
+		}
+		if (!this.perimeterPoints.isEmpty()) {
+			Collections.rotate(this.perimeterPoints, this.guard.getId() % this.perimeterPoints.size());
+		}
+	}
 
-		this.perimeterPoints.add(new BlockPos(minX, y, minZ));
-		this.perimeterPoints.add(new BlockPos((minX + maxX) / 2, y, minZ));
-		this.perimeterPoints.add(new BlockPos(maxX, y, minZ));
-		this.perimeterPoints.add(new BlockPos(maxX, y, (minZ + maxZ) / 2));
-		this.perimeterPoints.add(new BlockPos(maxX, y, maxZ));
-		this.perimeterPoints.add(new BlockPos((minX + maxX) / 2, y, maxZ));
-		this.perimeterPoints.add(new BlockPos(minX, y, maxZ));
-		this.perimeterPoints.add(new BlockPos(minX, y, (minZ + maxZ) / 2));
+	private BlockPos jittered(int x, int y, int z, int jitter) {
+		int offsetX = this.guard.getRandom().nextBetween(-jitter, jitter);
+		int offsetZ = this.guard.getRandom().nextBetween(-jitter, jitter);
+		return new BlockPos(x + offsetX, y, z + offsetZ);
 	}
 }
