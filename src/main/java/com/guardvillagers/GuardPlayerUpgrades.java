@@ -8,32 +8,39 @@ import net.minecraft.util.math.random.Random;
 public final class GuardPlayerUpgrades {
 	public static final int MAX_ARMOR_LEVEL = 8;
 	public static final int MAX_WEAPON_LEVEL = 5;
+	public static final int MAX_SUPPORT_LEVEL = 3;
 	private static final Codec<Integer> ARMOR_LEVEL_CODEC = Codec.intRange(0, MAX_ARMOR_LEVEL);
 	private static final Codec<Integer> WEAPON_LEVEL_CODEC = Codec.intRange(0, MAX_WEAPON_LEVEL);
+	private static final Codec<Integer> SUPPORT_LEVEL_CODEC = Codec.intRange(0, MAX_SUPPORT_LEVEL);
 
 	public static final Codec<GuardPlayerUpgrades> CODEC = RecordCodecBuilder.create(instance -> instance.group(
 		ARMOR_LEVEL_CODEC.optionalFieldOf("armor_level", 0).forGetter(GuardPlayerUpgrades::getArmorLevel),
 		WEAPON_LEVEL_CODEC.optionalFieldOf("weapon_level", 0).forGetter(GuardPlayerUpgrades::getWeaponLevel),
-		Codec.BOOL.optionalFieldOf("healing_upgrade", false).forGetter(GuardPlayerUpgrades::hasHealingUpgrade)
+		SUPPORT_LEVEL_CODEC.optionalFieldOf("support_level", 0).forGetter(GuardPlayerUpgrades::getSupportLevel),
+		Codec.BOOL.optionalFieldOf("healing_upgrade", false).forGetter(GuardPlayerUpgrades::hasHealingUpgradeLegacy)
 	).apply(instance, GuardPlayerUpgrades::new));
 
 	private int armorLevel;
 	private int weaponLevel;
-	private boolean healingUpgrade;
+	private int supportLevel;
 	private transient Runnable dirtyCallback = () -> {};
 
 	public GuardPlayerUpgrades() {
-		this(0, 0, false);
+		this(0, 0, 0, false);
 	}
 
-	private GuardPlayerUpgrades(int armorLevel, int weaponLevel, boolean healingUpgrade) {
+	private GuardPlayerUpgrades(int armorLevel, int weaponLevel, int supportLevel, boolean healingUpgradeLegacy) {
 		this.armorLevel = Math.max(0, Math.min(MAX_ARMOR_LEVEL, armorLevel));
 		this.weaponLevel = Math.max(0, Math.min(MAX_WEAPON_LEVEL, weaponLevel));
-		this.healingUpgrade = healingUpgrade;
+		int normalizedSupport = Math.max(0, Math.min(MAX_SUPPORT_LEVEL, supportLevel));
+		if (normalizedSupport == 0 && healingUpgradeLegacy) {
+			normalizedSupport = 1;
+		}
+		this.supportLevel = normalizedSupport;
 	}
 
 	public GuardPlayerUpgrades copy() {
-		return new GuardPlayerUpgrades(this.armorLevel, this.weaponLevel, this.healingUpgrade);
+		return new GuardPlayerUpgrades(this.armorLevel, this.weaponLevel, this.supportLevel, false);
 	}
 
 	public void setDirtyCallback(Runnable dirtyCallback) {
@@ -49,7 +56,23 @@ public final class GuardPlayerUpgrades {
 	}
 
 	public boolean hasHealingUpgrade() {
-		return this.healingUpgrade;
+		return this.supportLevel >= 1;
+	}
+
+	private boolean hasHealingUpgradeLegacy() {
+		return this.supportLevel >= 1;
+	}
+
+	public int getSupportLevel() {
+		return this.supportLevel;
+	}
+
+	public boolean hasShieldUpgrade() {
+		return this.supportLevel >= 2;
+	}
+
+	public boolean hasAdvancedHealingUpgrade() {
+		return this.supportLevel >= 3;
 	}
 
 	public boolean upgradeArmor() {
@@ -71,16 +94,16 @@ public final class GuardPlayerUpgrades {
 	}
 
 	public boolean unlockHealingUpgrade() {
-		if (this.healingUpgrade) {
+		if (this.supportLevel >= MAX_SUPPORT_LEVEL) {
 			return false;
 		}
-		this.healingUpgrade = true;
+		this.supportLevel++;
 		this.dirtyCallback.run();
 		return true;
 	}
 
 	public int getGuardCost() {
-		return 1 + this.armorLevel + this.weaponLevel + (this.healingUpgrade ? 1 : 0);
+		return 1 + this.armorLevel + this.weaponLevel + this.supportLevel;
 	}
 
 	public int getArmorUpgradeCost() {
@@ -92,11 +115,24 @@ public final class GuardPlayerUpgrades {
 	}
 
 	public int getHealingUpgradeCost() {
-		return 16;
+		return switch (this.supportLevel) {
+			case 0 -> 64;
+			case 1 -> 128;
+			case 2 -> 192;
+			default -> 0;
+		};
 	}
 
 	public float getHealingPerCycle() {
-		return this.healingUpgrade ? 2.0F : 1.0F;
+		return this.supportLevel >= 1 ? 2.0F : 1.0F;
+	}
+
+	public int getHealingIntervalTicks() {
+		return switch (this.supportLevel) {
+			case 1, 2 -> 50;
+			case 3 -> 20;
+			default -> 100;
+		};
 	}
 
 	public ArmorDistribution getArmorDistribution() {

@@ -180,6 +180,17 @@ public class GuardVillagersMod implements ModInitializer {
 		return getUpgrades(world, ownerUuid).getHealingPerCycle();
 	}
 
+	public static int getHealingIntervalTicks(ServerWorld world, UUID ownerUuid) {
+		if (ownerUuid == null) {
+			return 100;
+		}
+		return getUpgrades(world, ownerUuid).getHealingIntervalTicks();
+	}
+
+	public static boolean hasShieldUpgrade(ServerWorld world, UUID ownerUuid) {
+		return ownerUuid != null && getUpgrades(world, ownerUuid).hasShieldUpgrade();
+	}
+
 	private void registerCommands() {
 		CommandRegistrationCallback.EVENT.register(this::registerGuardCommands);
 	}
@@ -286,7 +297,9 @@ public class GuardVillagersMod implements ModInitializer {
 
 	public static int getAdjustedGuardCost(ServerPlayerEntity player) {
 		GuardPlayerUpgrades upgrades = getUpgrades(player);
-		return GuardReputationManager.getAdjustedGuardCost(player, upgrades.getGuardCost());
+		int ownedGuards = countOwnedGuards(player.getCommandSource().getServer(), player.getUuid());
+		int scaled = getScaledGuardCost(upgrades, ownedGuards);
+		return Math.min(64, GuardReputationManager.getAdjustedGuardCost(player, scaled));
 	}
 
 	public static GuardPurchaseResult purchaseGuard(ServerPlayerEntity player) {
@@ -295,7 +308,8 @@ public class GuardVillagersMod implements ModInitializer {
 		}
 
 		GuardPlayerUpgrades upgrades = getUpgrades(player);
-		int cost = GuardReputationManager.getAdjustedGuardCost(player, upgrades.getGuardCost());
+		int ownedGuards = countOwnedGuards(player.getCommandSource().getServer(), player.getUuid());
+		int cost = Math.min(64, GuardReputationManager.getAdjustedGuardCost(player, getScaledGuardCost(upgrades, ownedGuards)));
 		if (!GuardEconomy.spendEmeraldBlocks(player, cost)) {
 			return GuardPurchaseResult.INSUFFICIENT_FUNDS;
 		}
@@ -430,6 +444,13 @@ public class GuardVillagersMod implements ModInitializer {
 			}
 		}
 		return count;
+	}
+
+	private static int getScaledGuardCost(GuardPlayerUpgrades upgrades, int ownedGuards) {
+		int base = upgrades.getGuardCost();
+		double growth = 1.0D + Math.min(2.0D, ownedGuards * 0.08D);
+		int scaled = (int) Math.round(base * growth);
+		return Math.max(1, Math.min(64, scaled));
 	}
 
 	private static List<GuardEntity> getOwnedGuards(MinecraftServer server, UUID ownerUuid) {

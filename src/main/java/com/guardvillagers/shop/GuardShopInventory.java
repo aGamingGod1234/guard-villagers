@@ -102,19 +102,25 @@ public class GuardShopInventory extends SimpleInventory {
 
 	private void upgradeHealing() {
 		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgrades(this.player);
-		if (upgrades.hasHealingUpgrade()) {
-			this.player.sendMessage(Text.literal("Healing upgrade is already unlocked."), true);
+		if (upgrades.getSupportLevel() >= GuardPlayerUpgrades.MAX_SUPPORT_LEVEL) {
+			this.player.sendMessage(Text.literal("Support upgrades are already maxed."), true);
 			return;
 		}
 
 		int cost = upgrades.getHealingUpgradeCost();
 		if (!GuardVillagersMod.spendEmeraldBlocks(this.player, cost)) {
-			this.player.sendMessage(Text.literal("Need " + cost + " emerald blocks for healing upgrade."), true);
+			this.player.sendMessage(Text.literal("Need " + cost + " emerald blocks for support upgrade."), true);
 			return;
 		}
 
 		upgrades.unlockHealingUpgrade();
-		this.player.sendMessage(Text.literal("Healing upgraded to 1 heart per 5 seconds."), true);
+		String message = switch (upgrades.getSupportLevel()) {
+			case 1 -> "Healing upgraded to 1 heart every 2.5 seconds.";
+			case 2 -> "Shield upgrade unlocked.";
+			case 3 -> "Healing upgraded to 1 heart every second.";
+			default -> "Support upgraded.";
+		};
+		this.player.sendMessage(Text.literal(message), true);
 	}
 
 	public void refresh() {
@@ -143,14 +149,14 @@ public class GuardShopInventory extends SimpleInventory {
 			"Diamond " + dist.diamond() + "%"
 		));
 
-		int guardCost = upgrades.getGuardCost();
+		int guardCost = GuardVillagersMod.getAdjustedGuardCost(this.player);
 		this.setStack(SLOT_BUY_GUARD, this.card(
 			Items.EMERALD_BLOCK,
 			"Hire Guard",
 			Formatting.GREEN,
 			"Cost: " + guardCost + " emerald block(s)",
 			"Spawns with your current",
-			"armor and weapon upgrade levels."
+			"armor, weapon and support levels."
 		));
 
 		int armorCost = upgrades.getArmorUpgradeCost();
@@ -174,23 +180,29 @@ public class GuardShopInventory extends SimpleInventory {
 			"Next: " + describeWeaponLevel(Math.min(GuardPlayerUpgrades.MAX_WEAPON_LEVEL, upgrades.getWeaponLevel() + 1))
 		));
 
-		if (upgrades.hasHealingUpgrade()) {
+		if (upgrades.getSupportLevel() >= GuardPlayerUpgrades.MAX_SUPPORT_LEVEL) {
 			this.setStack(SLOT_UPGRADE_HEAL, this.card(
 				Items.GOLDEN_APPLE,
-				"Healing Upgrade",
+				"Support Upgrade",
 				Formatting.LIGHT_PURPLE,
-				"Unlocked",
-				"Guards heal 1 heart",
-				"every 5 seconds out of combat."
+				"Maxed",
+				"Heal: 1 heart / 1s",
+				"Shield: Enabled"
 			));
 		} else {
+			int supportCost = upgrades.getHealingUpgradeCost();
+			String nextLabel = switch (upgrades.getSupportLevel()) {
+				case 0 -> "Next: Heal 1 heart / 2.5s";
+				case 1 -> "Next: Shield";
+				default -> "Next: Heal 1 heart / 1s";
+			};
 			this.setStack(SLOT_UPGRADE_HEAL, this.card(
 				Items.GOLDEN_APPLE,
-				"Healing Upgrade",
+				"Support Upgrade",
 				Formatting.LIGHT_PURPLE,
-				"Cost: 16 emerald block(s)",
-				"Boosts passive regen to",
-				"1 heart every 5 seconds."
+				"Cost: " + supportCost + " emerald block(s)",
+				nextLabel,
+				"Upgrades in 3 stages."
 			));
 		}
 
@@ -200,7 +212,7 @@ public class GuardShopInventory extends SimpleInventory {
 			Formatting.YELLOW,
 			"Armor Lv: " + upgrades.getArmorLevel() + "/" + GuardPlayerUpgrades.MAX_ARMOR_LEVEL,
 			"Weapon Lv: " + upgrades.getWeaponLevel() + "/" + GuardPlayerUpgrades.MAX_WEAPON_LEVEL,
-			"Healing: " + (upgrades.hasHealingUpgrade() ? "Unlocked" : "Locked")
+			"Support Lv: " + upgrades.getSupportLevel() + "/" + GuardPlayerUpgrades.MAX_SUPPORT_LEVEL
 		));
 	}
 
@@ -210,8 +222,8 @@ public class GuardShopInventory extends SimpleInventory {
 			case 1 -> "Iron + enchant I";
 			case 2 -> "Diamond + enchant II";
 			case 3 -> "Diamond + enchant III";
-			case 4 -> "Netherite + enchant IV";
-			default -> "Netherite + enchant V";
+			case 4 -> "Diamond + cap tier";
+			default -> "Diamond + cap tier";
 		};
 	}
 

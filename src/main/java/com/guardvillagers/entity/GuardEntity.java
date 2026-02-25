@@ -204,7 +204,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.goalSelector.add(4, new BodyguardGoal(this, 1.15D));
 		this.goalSelector.add(5, new PerimeterPatrolGoal(this, 1.0D));
 		this.goalSelector.add(6, new CrowdControlGoal(this, 1.0D));
-		this.goalSelector.add(7, new FormationFollowOwnerGoal(this, 1.15D));
+		this.goalSelector.add(7, new FormationFollowOwnerGoal(this, 1.0D));
 		this.goalSelector.add(8, new WanderAroundFarGoal(this, 0.8D));
 		this.goalSelector.add(9, new LookAtEntityGoal(this, PlayerEntity.class, 8.0F));
 		this.goalSelector.add(10, new LookAroundGoal(this));
@@ -583,12 +583,16 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		if (this.getRole() == GuardRole.SWORDSMAN) {
 			Item sword = switch (weaponLevel) {
 				case 1 -> Items.IRON_SWORD;
-				case 2, 3 -> Items.DIAMOND_SWORD;
-				case 4, 5 -> Items.NETHERITE_SWORD;
+				case 2, 3, 4, 5 -> Items.DIAMOND_SWORD;
 				default -> Items.STONE_SWORD;
 			};
 			ItemStack swordStack = new ItemStack(sword);
-			this.applyEnchantment(world, swordStack, Enchantments.SHARPNESS, Math.min(5, Math.max(1, weaponLevel + 1)));
+			int sharpnessLevel = switch (weaponLevel) {
+				case 1 -> 1;
+				case 2 -> 2;
+				default -> 3;
+			};
+			this.applyEnchantment(world, swordStack, Enchantments.SHARPNESS, sharpnessLevel);
 			this.equipStack(EquipmentSlot.MAINHAND, swordStack);
 		} else {
 			ItemStack bowStack = new ItemStack(Items.BOW);
@@ -605,9 +609,11 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private void equipArmorPieces(ServerWorld world, GuardPlayerUpgrades upgrades) {
 		int armorLevel = upgrades.getArmorLevel();
 		int protectionLevel = Math.min(4, Math.max(0, armorLevel / 2));
+		GuardPlayerUpgrades.ArmorTier helmetTier = upgrades.rollArmorTier(this.getRandom());
+		this.equipArmorPiece(world, EquipmentSlot.HEAD, getArmorItemForSlot(helmetTier, EquipmentSlot.HEAD), protectionLevel);
 
-		for (EquipmentSlot slot : List.of(EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET)) {
-			GuardPlayerUpgrades.ArmorTier tier = upgrades.rollArmorTier(this.getRandom());
+		for (EquipmentSlot slot : List.of(EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET)) {
+			GuardPlayerUpgrades.ArmorTier tier = this.rollConstrainedArmorTier(upgrades, helmetTier);
 			this.equipArmorPiece(world, slot, getArmorItemForSlot(tier, slot), protectionLevel);
 		}
 
@@ -615,6 +621,14 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			this.setEquipmentDropChance(slot, 0.0F);
 			this.playerArmor.put(slot, false);
 		}
+	}
+
+	private GuardPlayerUpgrades.ArmorTier rollConstrainedArmorTier(GuardPlayerUpgrades upgrades, GuardPlayerUpgrades.ArmorTier helmetTier) {
+		GuardPlayerUpgrades.ArmorTier roll = upgrades.rollArmorTier(this.getRandom());
+		int helmetIndex = helmetTier.ordinal();
+		int minAllowed = Math.max(0, helmetIndex - 1);
+		int clamped = Math.max(minAllowed, Math.min(helmetIndex, roll.ordinal()));
+		return GuardPlayerUpgrades.ArmorTier.values()[clamped];
 	}
 
 	private Item getArmorItemForSlot(GuardPlayerUpgrades.ArmorTier tier, EquipmentSlot slot) {
@@ -892,7 +906,8 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			this.keepBowRange();
 		}
 
-		if (this.age % 100 == 0 && this.combatCooldown <= 0 && this.getHealth() < this.getMaxHealth() * 0.6F) {
+		int healInterval = GuardVillagersMod.getHealingIntervalTicks(world, this.ownerUuid);
+		if (healInterval > 0 && this.age % healInterval == 0 && this.combatCooldown <= 0 && this.getHealth() < this.getMaxHealth() * 0.6F) {
 			this.heal(GuardVillagersMod.getHealingAmount(world, this.ownerUuid));
 		}
 	}
@@ -1149,6 +1164,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	@Override
 	public boolean damage(ServerWorld world, DamageSource source, float amount) {
+		if (this.ownerUuid != null && GuardVillagersMod.hasShieldUpgrade(world, this.ownerUuid)) {
+			amount *= 0.75F;
+		}
 		boolean damaged = super.damage(world, source, amount);
 		if (!damaged) {
 			return false;

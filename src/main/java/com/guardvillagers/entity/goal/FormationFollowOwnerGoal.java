@@ -53,13 +53,12 @@ public final class FormationFollowOwnerGoal extends Goal {
 		if (ownerDistanceSq > 2304.0D && this.repathCooldown <= 0) {
 			this.guard.getNavigation().startMovingTo(this.owner, this.speed + 0.15D);
 			this.repathCooldown = 10;
-			return;
 		}
 
-		if (distanceSq > 9.0D && this.repathCooldown <= 0) {
+		if (distanceSq > 4.0D && this.repathCooldown <= 0) {
 			this.guard.getNavigation().startMovingTo(formationPoint.x, formationPoint.y, formationPoint.z, this.speed);
 			this.repathCooldown = 10;
-		} else {
+		} else if (distanceSq <= 2.0D) {
 			this.guard.getNavigation().stop();
 		}
 		if (this.repathCooldown > 0) {
