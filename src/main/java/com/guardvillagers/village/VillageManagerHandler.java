@@ -38,6 +38,12 @@ public final class VillageManagerHandler {
 	private static final int DOOR_COUNT_CACHE_TICKS = 20 * 60;
 	private static final int DOOR_COUNT_CACHE_MAX_ENTRIES = 4096;
 	private static final Map<String, DoorCountCache> DOOR_COUNT_CACHE = new ConcurrentHashMap<>();
+	private static final GuardBehavior[] VILLAGE_BEHAVIOR_PATTERN = {
+		GuardBehavior.DEFENSIVE,
+		GuardBehavior.PERIMETER,
+		GuardBehavior.CROWD_CONTROL,
+		GuardBehavior.OFFENSIVE
+	};
 	private static final int[] SPAWN_RING_OFFSETS = {
 		0, 0, 4, 0, -4, 0, 0, 4, 0, -4, 6, 3, -6, -3, 8, 0, -8, 0
 	};
@@ -274,7 +280,7 @@ public final class VillageManagerHandler {
 
 		guard.refreshPositionAndAngles(top.getX() + 0.5D, top.getY(), top.getZ() + 0.5D, world.getRandom().nextFloat() * 360.0F, 0.0F);
 		guard.applyNaturalLoadout(world);
-		guard.setBehavior(GuardBehavior.DEFENSIVE);
+		guard.setBehavior(pickVillageBehavior(village, guardIndex));
 		guard.setFormationType(FormationType.LINE);
 		guard.setSquadId(UUID.nameUUIDFromBytes(village.id().getBytes(StandardCharsets.UTF_8)));
 		guard.setSquadLeader(false);
@@ -285,6 +291,16 @@ public final class VillageManagerHandler {
 			return false;
 		}
 		return true;
+	}
+
+	private static GuardBehavior pickVillageBehavior(VillageDescriptor village, int guardIndex) {
+		int patternLength = VILLAGE_BEHAVIOR_PATTERN.length;
+		if (patternLength == 0) {
+			return GuardBehavior.DEFENSIVE;
+		}
+		int villageOffset = Math.floorMod(village.id().hashCode(), patternLength);
+		int index = Math.floorMod(guardIndex + villageOffset, patternLength);
+		return VILLAGE_BEHAVIOR_PATTERN[index];
 	}
 
 	private static final class VillageAggregation {

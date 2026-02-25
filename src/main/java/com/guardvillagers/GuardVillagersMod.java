@@ -1,6 +1,9 @@
 package com.guardvillagers;
 
 import com.guardvillagers.data.GuardUpgradeState;
+import com.guardvillagers.data.GuardVillageState;
+import com.guardvillagers.data.GuardReputationState;
+import com.guardvillagers.data.GuardDiplomacyState;
 import com.guardvillagers.data.GuardTacticsState;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
@@ -145,11 +148,30 @@ public class GuardVillagersMod implements ModInitializer {
 
 	@Override
 	public void onInitialize() {
+		warmupPersistentStateClasses();
 		FabricDefaultAttributeRegistry.register(GUARD_ENTITY_TYPE, GuardEntity.createAttributes());
 		registerDispenserBehavior();
 		registerCommands();
 		registerEvents();
 		LOGGER.info("Guard Villagers initialized");
+	}
+
+	private static void warmupPersistentStateClasses() {
+		Class<?>[] stateClasses = {
+			GuardReputationState.class,
+			GuardUpgradeState.class,
+			GuardDiplomacyState.class,
+			GuardVillageState.class,
+			GuardTacticsState.class
+		};
+		for (Class<?> stateClass : stateClasses) {
+			try {
+				Class.forName(stateClass.getName(), true, GuardVillagersMod.class.getClassLoader());
+			} catch (Throwable throwable) {
+				LOGGER.error("Failed to preload persistent state class {}", stateClass.getName(), throwable);
+				throw new IllegalStateException("Guard Villagers startup failed while preloading " + stateClass.getSimpleName(), throwable);
+			}
+		}
 	}
 
 	private static void registerDispenserBehavior() {

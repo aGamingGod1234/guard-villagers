@@ -27,9 +27,7 @@ import java.util.List;
 public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardEntityRenderer.GuardRenderState, ZombieVillagerEntityModel<GuardEntityRenderer.GuardRenderState>> {
 	private static final Identifier TEXTURE = Identifier.of("minecraft", "textures/entity/villager/villager.png");
 	private static final String DEBUG_PREFIX = "[DBG] ";
-	private static final double DEBUG_CENTER_X_OFFSET = 0.0D;
-	private static final double DEBUG_LEFT_X_OFFSET = -0.85D;
-	private static final double DEBUG_RIGHT_X_OFFSET = 0.85D;
+	private static final double DEBUG_X_OFFSET = 0.0D;
 	private static final double DEBUG_START_Y_OFFSET = 0.30D;
 	private static final double DEBUG_LINE_STEP = 0.24D;
 
@@ -72,9 +70,7 @@ public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardE
 	@Override
 	public void updateRenderState(GuardEntity entity, GuardRenderState state, float tickDelta) {
 		super.updateRenderState(entity, state, tickDelta);
-		state.debugCenterLines = List.of();
-		state.debugLeftLines = List.of();
-		state.debugRightLines = List.of();
+		state.debugLines = List.of();
 		state.renderDebugOverlay = false;
 
 		MinecraftClient client = MinecraftClient.getInstance();
@@ -82,9 +78,7 @@ public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardE
 		boolean hasDebugName = customName != null && customName.getString().startsWith(DEBUG_PREFIX);
 		if (hasDebugName) {
 			state.renderDebugOverlay = true;
-			state.debugCenterLines = buildCenterDebugLines(entity);
-			state.debugLeftLines = buildLeftDebugLines(entity);
-			state.debugRightLines = buildRightDebugLines(entity);
+			state.debugLines = buildDebugLines(entity);
 			state.displayName = null;
 			return;
 		}
@@ -109,23 +103,21 @@ public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardE
 		Text originalDisplayName = state.displayName;
 		Vec3d originalLabelPos = state.nameLabelPos;
 
-		renderDebugColumn(state, matrices, queue, cameraState, originalLabelPos, DEBUG_CENTER_X_OFFSET, state.debugCenterLines);
-		renderDebugColumn(state, matrices, queue, cameraState, originalLabelPos, DEBUG_LEFT_X_OFFSET, state.debugLeftLines);
-		renderDebugColumn(state, matrices, queue, cameraState, originalLabelPos, DEBUG_RIGHT_X_OFFSET, state.debugRightLines);
+		renderDebugStack(state, matrices, queue, cameraState, originalLabelPos, state.debugLines);
 
 		state.displayName = originalDisplayName;
 		state.nameLabelPos = originalLabelPos;
 	}
 
-	private void renderDebugColumn(GuardRenderState state, MatrixStack matrices, OrderedRenderCommandQueue queue, CameraRenderState cameraState, Vec3d labelPos, double xOffset, List<Text> lines) {
+	private void renderDebugStack(GuardRenderState state, MatrixStack matrices, OrderedRenderCommandQueue queue, CameraRenderState cameraState, Vec3d labelPos, List<Text> lines) {
 		for (int i = 0; i < lines.size(); i++) {
 			state.displayName = lines.get(i);
-			state.nameLabelPos = labelPos.add(xOffset, DEBUG_START_Y_OFFSET - (i * DEBUG_LINE_STEP), 0.0D);
+			state.nameLabelPos = labelPos.add(DEBUG_X_OFFSET, DEBUG_START_Y_OFFSET + (i * DEBUG_LINE_STEP), 0.0D);
 			super.renderLabelIfPresent(state, matrices, queue, cameraState);
 		}
 	}
 
-	private List<Text> buildCenterDebugLines(GuardEntity entity) {
+	private List<Text> buildDebugLines(GuardEntity entity) {
 		List<Text> lines = new ArrayList<>();
 		lines.add(Text.literal("[DBG] " + entity.getUuid().toString().substring(0, 8)).formatted(Formatting.AQUA, Formatting.BOLD));
 		lines.add(Text.literal("Lv " + entity.getLevel() + " XP " + entity.getExperience()).formatted(Formatting.GREEN));
@@ -135,21 +127,13 @@ public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardE
 		Formatting hpColor = healthRatio >= 0.6F ? Formatting.GREEN : (healthRatio >= 0.3F ? Formatting.YELLOW : Formatting.RED);
 		lines.add(Text.literal("HP " + Math.round(entity.getHealth()) + "/" + Math.round(maxHealth)).formatted(hpColor));
 		lines.add(Text.literal("Cooldown " + entity.getCombatCooldown() + " | Staying " + (entity.isStaying() ? "Yes" : "No")).formatted(Formatting.WHITE));
-		return lines;
-	}
 
-	private List<Text> buildLeftDebugLines(GuardEntity entity) {
-		List<Text> lines = new ArrayList<>();
 		lines.add(Text.literal("Role: " + entity.getRole().name()).formatted(Formatting.GOLD));
 		lines.add(Text.literal("Behavior: " + entity.getBehavior().name()).formatted(Formatting.LIGHT_PURPLE));
 		lines.add(Text.literal("Formation: " + entity.getFormationType().name()).formatted(Formatting.AQUA));
 		lines.add(Text.literal("Row " + (entity.getHierarchyRow() + 1) + " Col " + (entity.getHierarchyColumn() + 1)).formatted(Formatting.BLUE));
 		lines.add(Text.literal(entity.getHierarchyRole()).formatted(Formatting.YELLOW));
-		return lines;
-	}
 
-	private List<Text> buildRightDebugLines(GuardEntity entity) {
-		List<Text> lines = new ArrayList<>();
 		double followRange = entity.getAttributeValue(EntityAttributes.FOLLOW_RANGE);
 		lines.add(Text.literal("Follow " + String.format("%.1f", followRange)).formatted(Formatting.AQUA));
 		lines.add(Text.literal("Patrol " + entity.getPatrolRadius()).formatted(Formatting.YELLOW));
@@ -178,8 +162,6 @@ public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardE
 
 	public static class GuardRenderState extends ZombieVillagerRenderState {
 		private boolean renderDebugOverlay;
-		private List<Text> debugCenterLines = List.of();
-		private List<Text> debugLeftLines = List.of();
-		private List<Text> debugRightLines = List.of();
+		private List<Text> debugLines = List.of();
 	}
 }
