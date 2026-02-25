@@ -602,6 +602,12 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 		this.setEquipmentDropChance(EquipmentSlot.MAINHAND, 0.0F);
 		this.playerMainHand = false;
+		if (upgrades.hasShieldUpgrade()) {
+			this.equipStack(EquipmentSlot.OFFHAND, new ItemStack(Items.SHIELD));
+			this.setEquipmentDropChance(EquipmentSlot.OFFHAND, 0.0F);
+		} else if (this.getEquippedStack(EquipmentSlot.OFFHAND).isOf(Items.SHIELD)) {
+			this.equipStack(EquipmentSlot.OFFHAND, ItemStack.EMPTY);
+		}
 
 		this.equipArmorPieces(world, upgrades);
 	}
@@ -901,6 +907,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.enforceZoneTethering();
 		this.handleOwnerTrust(world);
 		this.handleSquadTargetSharing(world);
+		this.syncSupportEquipment(world);
 
 		if (this.getRole() == GuardRole.BOWMAN) {
 			this.keepBowRange();
@@ -909,6 +916,20 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		int healInterval = GuardVillagersMod.getHealingIntervalTicks(world, this.ownerUuid);
 		if (healInterval > 0 && this.age % healInterval == 0 && this.combatCooldown <= 0 && this.getHealth() < this.getMaxHealth() * 0.6F) {
 			this.heal(GuardVillagersMod.getHealingAmount(world, this.ownerUuid));
+		}
+	}
+
+	private void syncSupportEquipment(ServerWorld world) {
+		if (this.ownerUuid == null) {
+			return;
+		}
+		boolean shouldHaveShield = GuardVillagersMod.hasShieldUpgrade(world, this.ownerUuid);
+		boolean hasShield = this.getEquippedStack(EquipmentSlot.OFFHAND).isOf(Items.SHIELD);
+		if (shouldHaveShield && !hasShield) {
+			this.equipStack(EquipmentSlot.OFFHAND, new ItemStack(Items.SHIELD));
+			this.setEquipmentDropChance(EquipmentSlot.OFFHAND, 0.0F);
+		} else if (!shouldHaveShield && hasShield) {
+			this.equipStack(EquipmentSlot.OFFHAND, ItemStack.EMPTY);
 		}
 	}
 
