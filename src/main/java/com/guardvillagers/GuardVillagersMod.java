@@ -81,12 +81,12 @@ public class GuardVillagersMod implements ModInitializer {
 	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
 	private static final int FOLLOW_DISTANCE = 64;
-	private static final int DEBUG_SCAN_RANGE = 96;
+	private static final int DEBUG_ALL_RANGE = -1;
 	private static final int DEBUG_TEXT_UPDATE_INTERVAL = 10;
 	private static final int DEBUG_PARTICLE_INTERVAL = 20;
 	private static final String DEBUG_PREFIX = "[DBG] ";
 	private static final int WORLD_SEARCH_LIMIT = 30_000_000;
-	private static final Set<UUID> DEBUG_PLAYERS = ConcurrentHashMap.newKeySet();
+	private static final Map<UUID, Integer> DEBUG_PLAYERS = new ConcurrentHashMap<>();
 	private static final Map<RegistryKey<World>, Set<UUID>> DEBUG_VISIBLE_GUARDS = new ConcurrentHashMap<>();
 	private static final BlockStateParticleEffect DEBUG_FOLLOW_RANGE_MARKER = new BlockStateParticleEffect(ParticleTypes.BLOCK_MARKER, Blocks.LIGHT_BLUE_STAINED_GLASS.getDefaultState());
 	private static final BlockStateParticleEffect DEBUG_HOME_ZONE_MARKER = new BlockStateParticleEffect(ParticleTypes.BLOCK_MARKER, Blocks.LIME_STAINED_GLASS.getDefaultState());
@@ -332,8 +332,20 @@ public class GuardVillagersMod implements ModInitializer {
 				}))
 			.then(CommandManager.literal("debug")
 				.executes(context -> toggleDebug(context.getSource().getPlayerOrThrow()))
+				.then(CommandManager.argument("radius", IntegerArgumentType.integer(1, 256))
+					.executes(context -> setDebug(
+						context.getSource().getPlayerOrThrow(),
+						true,
+						IntegerArgumentType.getInteger(context, "radius")
+					)))
 				.then(CommandManager.literal("on")
-					.executes(context -> setDebug(context.getSource().getPlayerOrThrow(), true)))
+					.executes(context -> setDebug(context.getSource().getPlayerOrThrow(), true))
+					.then(CommandManager.argument("radius", IntegerArgumentType.integer(1, 256))
+						.executes(context -> setDebug(
+							context.getSource().getPlayerOrThrow(),
+							true,
+							IntegerArgumentType.getInteger(context, "radius")
+						))))
 				.then(CommandManager.literal("off")
 					.executes(context -> setDebug(context.getSource().getPlayerOrThrow(), false))))
 		;
@@ -439,7 +451,9 @@ public class GuardVillagersMod implements ModInitializer {
 			guard.setStaying(staying);
 			if (!staying) {
 				guard.clearHome();
-				guard.setBehavior(GuardBehavior.BODYGUARD);
+				if (guard.getBehavior() == GuardBehavior.BODYGUARD) {
+					guard.setBehavior(GuardBehavior.DEFENSIVE);
+				}
 				guard.clearCombatTarget();
 			}
 			changed++;
@@ -583,15 +597,24 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	private static int toggleDebug(ServerPlayerEntity player) {
-		boolean enable = !DEBUG_PLAYERS.contains(player.getUuid());
-		return setDebug(player, enable);
+		boolean enable = !DEBUG_PLAYERS.containsKey(player.getUuid());
+		return setDebug(player, enable, null);
 	}
 
 	private static int setDebug(ServerPlayerEntity player, boolean enable) {
+		return setDebug(player, enable, null);
+	}
+
+	private static int setDebug(ServerPlayerEntity player, boolean enable, Integer radius) {
 		UUID playerId = player.getUuid();
 		if (enable) {
-			DEBUG_PLAYERS.add(playerId);
-			player.sendMessage(Text.literal("Guard debug enabled."), false);
+			int effectiveRadius = radius == null ? DEBUG_ALL_RANGE : radius;
+			DEBUG_PLAYERS.put(playerId, effectiveRadius);
+			if (effectiveRadius == DEBUG_ALL_RANGE) {
+				player.sendMessage(Text.literal("Guard debug enabled for all guards."), false);
+			} else {
+				player.sendMessage(Text.literal("Guard debug enabled within " + effectiveRadius + " blocks."), false);
+			}
 		} else {
 			DEBUG_PLAYERS.remove(playerId);
 			if (DEBUG_PLAYERS.isEmpty()) {
@@ -736,12 +759,23 @@ public class GuardVillagersMod implements ModInitializer {
 	private static Map<UUID, GuardEntity> collectVisibleDebugGuards(ServerWorld world) {
 		Map<UUID, GuardEntity> visibleGuards = new HashMap<>();
 		for (ServerPlayerEntity player : world.getPlayers()) {
-			if (!DEBUG_PLAYERS.contains(player.getUuid())) {
+			Integer debugRange = DEBUG_PLAYERS.get(player.getUuid());
+			if (debugRange == null) {
 				continue;
+			}
+			if (debugRange <= 0) {
+				for (GuardEntity guard : world.getEntitiesByClass(
+					GuardEntity.class,
+					fullWorldBox(world),
+					entity -> true
+				)) {
+					visibleGuards.putIfAbsent(guard.getUuid(), guard);
+				}
+				return visibleGuards;
 			}
 			for (GuardEntity guard : world.getEntitiesByClass(
 				GuardEntity.class,
-				player.getBoundingBox().expand(DEBUG_SCAN_RANGE),
+				player.getBoundingBox().expand(debugRange),
 				entity -> true
 			)) {
 				visibleGuards.putIfAbsent(guard.getUuid(), guard);
