@@ -10,40 +10,62 @@ import net.minecraft.item.Items;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.text.Text;
 
-public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHandler> {
-	private static final int PANEL_WIDTH = 340;
-	private static final int PANEL_HEIGHT = 222;
-	private static final int PANEL_PADDING = 11;
-	private static final int HEADER_TOP = 7;
-	private static final int MODE_HINT_TOP = 44;
-	private static final int TOP_ROW_Y = 24;
-	private static final int TOP_ROW_HEIGHT = 26;
-	private static final int TOP_ROW_GAP = 4;
-	private static final int MAIN_GRID_Y = 62;
-	private static final int MAIN_CELL_WIDTH = 32;
-	private static final int MAIN_CELL_HEIGHT = 30;
-	private static final int MAIN_CELL_GAP = 3;
-	private static final int CONTROL_ROW_Y = 166;
-	private static final int CONTROL_ROW_HEIGHT = 24;
-	private static final int FOOTER_Y = 197;
-	private static final int[] TOP_SLOTS = {4, 5, 6, 7, 8};
+import java.util.HashMap;
+import java.util.Map;
 
-	private int panelX;
-	private int panelY;
+public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHandler> {
+	private static final int SLOT_MODE = 50;
+	private static final int SLOT_INFO = 52;
+	private static final int SLOT_TITLE = 4;
+
+	private static final int TOP_INSET = 16;
+	private static final int BOTTOM_INSET = 14;
+	private static final int LEFT_INSET = 14;
+	private static final int RIGHT_INSET = 14;
+	private static final int HEADER_HEIGHT = 56;
+	private static final int FOOTER_HEIGHT = 34;
+	private static final int SIDEBAR_WIDTH = 172;
+
+	private static final int PANEL_BG = 0xEC101B2A;
+	private static final int PANEL_ELEVATION = 0xEE1A2A3E;
+	private static final int PANEL_ACCENT = 0xFF355C7A;
+	private static final int PANEL_ACCENT_2 = 0xFF2A4258;
+	private static final int PANEL_TEXT = 0xFFE9F2FF;
+	private static final int PANEL_SUBTEXT = 0xFFB9CCE0;
+
+	private final Map<Integer, HitArea> slotHitAreas = new HashMap<>();
+
+	private int rootX;
+	private int rootY;
+	private int rootW;
+	private int rootH;
+
+	private int headerX;
+	private int headerY;
+	private int headerW;
+
+	private int sidebarX;
+	private int sidebarY;
+	private int sidebarW;
+	private int sidebarH;
+
+	private int canvasX;
+	private int canvasY;
+	private int canvasW;
+	private int canvasH;
 
 	public GuardTacticsScreen(GuardTacticsScreenHandler handler, PlayerInventory inventory, Text title) {
 		super(handler, inventory, title);
-		this.backgroundWidth = PANEL_WIDTH;
-		this.backgroundHeight = PANEL_HEIGHT;
 	}
 
 	@Override
 	protected void init() {
 		super.init();
-		this.panelX = (this.width - PANEL_WIDTH) / 2;
-		this.panelY = (this.height - PANEL_HEIGHT) / 2;
-		this.x = this.panelX;
-		this.y = this.panelY;
+		this.backgroundWidth = this.width;
+		this.backgroundHeight = this.height;
+		this.x = 0;
+		this.y = 0;
+		this.recomputeLayout();
 	}
 
 	@Override
@@ -56,62 +78,60 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 	@Override
 	protected void drawBackground(DrawContext context, float delta, int mouseX, int mouseY) {
-		int panelRight = this.panelX + PANEL_WIDTH;
-		int panelBottom = this.panelY + PANEL_HEIGHT;
-		context.fill(this.panelX - 2, this.panelY - 2, panelRight + 2, panelBottom + 2, 0xEE0B141F);
-		context.fill(this.panelX, this.panelY, panelRight, panelBottom, 0xF7172635);
-		context.fill(this.panelX, this.panelY, panelRight, this.panelY + 18, 0xFF203649);
-		context.fill(this.panelX, panelBottom - 30, panelRight, panelBottom, 0xFF1A2A3B);
+		this.recomputeLayout();
+		this.slotHitAreas.clear();
 
-		this.renderTopRow(context, mouseX, mouseY);
-		this.renderMainGrid(context, mouseX, mouseY);
-		this.renderControlRow(context, mouseX, mouseY);
+		this.drawBackdrop(context);
+		this.drawHeader(context);
+		this.drawSidebar(context, mouseX, mouseY);
+		this.drawFooter(context, mouseX, mouseY);
+
+		if (this.isHierarchyMode()) {
+			this.drawHierarchyCanvas(context, mouseX, mouseY);
+		} else {
+			this.drawZonesCanvas(context, mouseX, mouseY);
+		}
 	}
 
 	@Override
 	protected void drawForeground(DrawContext context, int mouseX, int mouseY) {
 		boolean hierarchyMode = this.isHierarchyMode();
-		context.drawText(this.textRenderer, this.title.getString(), this.panelX + PANEL_PADDING, this.panelY + HEADER_TOP, 0xFFF0F6FF, false);
+		context.drawText(this.textRenderer, this.title.getString(), this.headerX + 12, this.headerY + 10, PANEL_TEXT, false);
 		context.drawText(
 			this.textRenderer,
-			hierarchyMode ? "Hierarchy Director" : "Zone Planner",
-			this.panelX + PANEL_PADDING,
-			this.panelY + MODE_HINT_TOP,
-			hierarchyMode ? 0xFFDDA366 : 0xFF73CBF3,
+			hierarchyMode ? "Hierarchy Command Surface" : "Tactical Zone Map",
+			this.headerX + 12,
+			this.headerY + 27,
+			hierarchyMode ? 0xFFFFB57D : 0xFF8EDAF8,
 			false
 		);
 		context.drawText(
 			this.textRenderer,
-			hierarchyMode ? "Click guard card, then click destination row/slot." : "Left click: anchor/fill. Right click: clear chunk.",
-			this.panelX + PANEL_PADDING + 120,
-			this.panelY + MODE_HINT_TOP,
-			0xFFD0DAE6,
-			false
-		);
-		context.drawText(
-			this.textRenderer,
-			hierarchyMode ? "Row headers control role names and row assignment." : "Color cards define patrol zones for hierarchy columns.",
-			this.panelX + PANEL_PADDING,
-			this.panelY + FOOTER_Y,
-			0xFF9DB1C6,
+			hierarchyMode
+				? "Move guards through role lanes and zone assignments."
+				: "Paint operational zones with custom color controls.",
+			this.headerX + 12,
+			this.headerY + 42,
+			PANEL_SUBTEXT,
 			false
 		);
 	}
 
 	@Override
 	public boolean mouseClicked(Click click, boolean doubleClick) {
-		double mouseX = click.x();
-		double mouseY = click.y();
 		int button = click.button();
-		if (button == 0 || button == 1) {
-			int slotId = this.findSlotAt(mouseX, mouseY);
-			if (slotId >= 0) {
-				this.onMouseClick(this.handler.getSlot(slotId), slotId, button, SlotActionType.PICKUP);
-				return true;
-			}
-			if (this.isMouseWithinPanel(mouseX, mouseY)) {
-				return true;
-			}
+		if (button != 0 && button != 1) {
+			return super.mouseClicked(click, doubleClick);
+		}
+
+		int slotId = this.findSlotAt(click.x(), click.y());
+		if (slotId >= 0) {
+			this.onMouseClick(this.handler.getSlot(slotId), slotId, button, SlotActionType.PICKUP);
+			return true;
+		}
+
+		if (this.contains(this.rootX, this.rootY, this.rootW, this.rootH, click.x(), click.y())) {
+			return true;
 		}
 		return super.mouseClicked(click, doubleClick);
 	}
@@ -119,6 +139,193 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	@Override
 	protected boolean isPointWithinBounds(int x, int y, int width, int height, double pointX, double pointY) {
 		return false;
+	}
+
+	private void drawBackdrop(DrawContext context) {
+		context.fill(0, 0, this.width, this.height, 0xF107111A);
+		context.fill(this.rootX - 2, this.rootY - 2, this.rootX + this.rootW + 2, this.rootY + this.rootH + 2, 0xEE050B12);
+		context.fill(this.rootX, this.rootY, this.rootX + this.rootW, this.rootY + this.rootH, PANEL_BG);
+	}
+
+	private void drawHeader(DrawContext context) {
+		context.fill(this.headerX, this.headerY, this.headerX + this.headerW, this.headerY + HEADER_HEIGHT, PANEL_ELEVATION);
+		context.fill(this.headerX, this.headerY + HEADER_HEIGHT - 2, this.headerX + this.headerW, this.headerY + HEADER_HEIGHT, PANEL_ACCENT);
+	}
+
+	private void drawSidebar(DrawContext context, int mouseX, int mouseY) {
+		context.fill(this.sidebarX, this.sidebarY, this.sidebarX + this.sidebarW, this.sidebarY + this.sidebarH, PANEL_ELEVATION);
+		context.fill(this.sidebarX + this.sidebarW - 2, this.sidebarY, this.sidebarX + this.sidebarW, this.sidebarY + this.sidebarH, PANEL_ACCENT_2);
+
+		int titleY = this.sidebarY + 12;
+		context.drawText(this.textRenderer, "Controls", this.sidebarX + 10, titleY, PANEL_TEXT, false);
+
+		int modeButtonY = titleY + 16;
+		this.drawControlButton(context, SLOT_MODE, this.sidebarX + 10, modeButtonY, this.sidebarW - 20, 24, mouseX, mouseY, true);
+
+		if (!this.isHierarchyMode()) {
+			int swatchY = modeButtonY + 35;
+			context.drawText(this.textRenderer, "Paint Colors", this.sidebarX + 10, swatchY, PANEL_SUBTEXT, false);
+			int swatchX = this.sidebarX + 10;
+			int swatchW = this.sidebarW - 20;
+			int swatchH = 22;
+			this.drawControlButton(context, 5, swatchX, swatchY + 12, swatchW, swatchH, mouseX, mouseY, true);
+			this.drawControlButton(context, 6, swatchX, swatchY + 38, swatchW, swatchH, mouseX, mouseY, true);
+			this.drawControlButton(context, 7, swatchX, swatchY + 64, swatchW, swatchH, mouseX, mouseY, true);
+			this.drawControlButton(context, 8, swatchX, swatchY + 90, swatchW, swatchH, mouseX, mouseY, true);
+			this.drawControlButton(context, SLOT_TITLE, swatchX, swatchY + 120, swatchW, 36, mouseX, mouseY, false);
+		} else {
+			int legendY = modeButtonY + 36;
+			context.drawText(this.textRenderer, "Role Lanes", this.sidebarX + 10, legendY, PANEL_SUBTEXT, false);
+			this.drawControlButton(context, SLOT_TITLE, this.sidebarX + 10, legendY + 12, this.sidebarW - 20, 36, mouseX, mouseY, false);
+			this.drawControlButton(context, 5, this.sidebarX + 10, legendY + 54, this.sidebarW - 20, 22, mouseX, mouseY, false);
+			this.drawControlButton(context, 6, this.sidebarX + 10, legendY + 80, this.sidebarW - 20, 22, mouseX, mouseY, false);
+			this.drawControlButton(context, 7, this.sidebarX + 10, legendY + 106, this.sidebarW - 20, 22, mouseX, mouseY, false);
+			this.drawControlButton(context, 8, this.sidebarX + 10, legendY + 132, this.sidebarW - 20, 22, mouseX, mouseY, false);
+		}
+	}
+
+	private void drawFooter(DrawContext context, int mouseX, int mouseY) {
+		int footerY = this.rootY + this.rootH - FOOTER_HEIGHT;
+		context.fill(this.rootX, footerY, this.rootX + this.rootW, this.rootY + this.rootH, PANEL_ELEVATION);
+		context.fill(this.rootX, footerY, this.rootX + this.rootW, footerY + 1, PANEL_ACCENT_2);
+
+		int buttonY = footerY + 6;
+		int buttonW = 86;
+		int buttonH = 22;
+		int gap = 8;
+		int startX = this.canvasX + 6;
+
+		this.drawControlButton(context, 45, startX, buttonY, buttonW, buttonH, mouseX, mouseY, true);
+		this.drawControlButton(context, 53, startX + (buttonW + gap), buttonY, buttonW, buttonH, mouseX, mouseY, true);
+		this.drawControlButton(context, 47, startX + (buttonW + gap) * 2, buttonY, buttonW, buttonH, mouseX, mouseY, true);
+		this.drawControlButton(context, 46, startX + (buttonW + gap) * 3, buttonY, buttonW, buttonH, mouseX, mouseY, true);
+		this.drawControlButton(context, 49, startX + (buttonW + gap) * 4, buttonY, buttonW, buttonH, mouseX, mouseY, true);
+		this.drawControlButton(context, 48, startX + (buttonW + gap) * 5, buttonY, buttonW, buttonH, mouseX, mouseY, true);
+
+		int rightX = this.rootX + this.rootW - (buttonW * 2 + gap + 12);
+		this.drawControlButton(context, 51, rightX, buttonY, buttonW, buttonH, mouseX, mouseY, true);
+		this.drawControlButton(context, SLOT_INFO, rightX + buttonW + gap, buttonY, buttonW, buttonH, mouseX, mouseY, true);
+	}
+
+	private void drawZonesCanvas(DrawContext context, int mouseX, int mouseY) {
+		context.fill(this.canvasX, this.canvasY, this.canvasX + this.canvasW, this.canvasY + this.canvasH, 0xA51A2E44);
+		context.fill(this.canvasX + 1, this.canvasY + 1, this.canvasX + this.canvasW - 1, this.canvasY + this.canvasH - 1, 0x8021364D);
+		this.drawSoftMapRidges(context);
+
+		int bubbleW = 86;
+		int bubbleH = 44;
+		for (int slot = 18; slot <= 44; slot++) {
+			int idx = slot - 18;
+			int row = idx / 9;
+			int col = idx % 9;
+
+			double nx = (col + 0.5D) / 9.0D;
+			double ny = (row + 0.5D) / 3.0D;
+			int offsetX = (int) Math.round(Math.sin((col * 0.85D) + (row * 0.45D)) * 12.0D);
+			int offsetY = (int) Math.round(Math.cos((col * 0.67D) + (row * 0.78D)) * 9.0D);
+			int x = this.canvasX + 18 + (int) Math.round((this.canvasW - bubbleW - 36) * nx) + offsetX;
+			int y = this.canvasY + 18 + (int) Math.round((this.canvasH - bubbleH - 36) * ny) + offsetY;
+
+			this.drawMapBubble(context, slot, x, y, bubbleW, bubbleH, mouseX, mouseY);
+		}
+	}
+
+	private void drawHierarchyCanvas(DrawContext context, int mouseX, int mouseY) {
+		context.fill(this.canvasX, this.canvasY, this.canvasX + this.canvasW, this.canvasY + this.canvasH, 0x9E241F35);
+		context.fill(this.canvasX + 1, this.canvasY + 1, this.canvasX + this.canvasW - 1, this.canvasY + this.canvasH - 1, 0x7E2F2B45);
+
+		int laneHeight = (this.canvasH - 46) / 3;
+		for (int lane = 0; lane < 3; lane++) {
+			int y = this.canvasY + 14 + lane * laneHeight;
+			int laneColor = lane % 2 == 0 ? 0x663E3556 : 0x66493562;
+			context.fill(this.canvasX + 10, y, this.canvasX + this.canvasW - 10, y + laneHeight - 8, laneColor);
+
+			int baseSlot = 18 + lane * 9;
+			this.drawHierarchyRow(context, baseSlot, y + 8, laneHeight - 24, mouseX, mouseY);
+		}
+	}
+
+	private void drawHierarchyRow(DrawContext context, int baseSlot, int rowY, int rowHeight, int mouseX, int mouseY) {
+		int headerX = this.canvasX + 18;
+		int headerW = Math.min(300, this.canvasW / 3);
+		int headerH = Math.min(34, rowHeight);
+		this.drawControlButton(context, baseSlot, headerX, rowY, headerW, headerH, mouseX, mouseY, true);
+
+		int zoneY = rowY + headerH + 6;
+		int zoneW = 88;
+		int zoneH = 24;
+		this.drawControlButton(context, baseSlot + 1, headerX, zoneY, zoneW, zoneH, mouseX, mouseY, true);
+		this.drawControlButton(context, baseSlot + 2, headerX + zoneW + 6, zoneY, zoneW, zoneH, mouseX, mouseY, true);
+		this.drawControlButton(context, baseSlot + 3, headerX + (zoneW + 6) * 2, zoneY, zoneW, zoneH, mouseX, mouseY, true);
+
+		int guardStartX = headerX + headerW + 18;
+		int guardAreaW = this.canvasX + this.canvasW - 20 - guardStartX;
+		int guardW = Math.max(88, Math.min(132, (guardAreaW - 24) / 5));
+		int guardH = Math.min(44, rowHeight + 4);
+		int spacing = Math.max(6, (guardAreaW - (guardW * 5)) / 4);
+		for (int i = 0; i < 5; i++) {
+			int x = guardStartX + i * (guardW + spacing);
+			int y = rowY + ((i % 2 == 0) ? 0 : 6);
+			this.drawControlButton(context, baseSlot + 4 + i, x, y, guardW, guardH, mouseX, mouseY, true);
+		}
+	}
+
+	private void drawMapBubble(DrawContext context, int slotId, int x, int y, int w, int h, int mouseX, int mouseY) {
+		ItemStack stack = this.handler.getSlot(slotId).getStack();
+		boolean hovered = this.contains(x, y, w, h, mouseX, mouseY);
+		int color = this.slotBaseColor(stack, slotId);
+		int border = hovered ? 0xFFD8F0FF : 0xFF365573;
+
+		context.fill(x, y, x + w, y + h, color);
+		this.drawOutline(context, x, y, w, h, border);
+
+		if (!stack.isEmpty()) {
+			context.drawItem(stack, x + 5, y + 6);
+			String label = this.fitText(stack.getName().getString(), w - 28);
+			context.drawText(this.textRenderer, label, x + 24, y + 7, PANEL_TEXT, false);
+		}
+
+		this.slotHitAreas.put(slotId, new HitArea(x, y, w, h));
+	}
+
+	private void drawControlButton(
+		DrawContext context,
+		int slotId,
+		int x,
+		int y,
+		int w,
+		int h,
+		int mouseX,
+		int mouseY,
+		boolean clickable
+	) {
+		ItemStack stack = this.handler.getSlot(slotId).getStack();
+		boolean hovered = this.contains(x, y, w, h, mouseX, mouseY);
+		int color = this.slotBaseColor(stack, slotId);
+		if (hovered && clickable) {
+			color = this.brighten(color, 22);
+		}
+		context.fill(x, y, x + w, y + h, color);
+		this.drawOutline(context, x, y, w, h, hovered ? 0xFF7CCBEE : 0xFF31516A);
+
+		if (!stack.isEmpty()) {
+			context.drawItem(stack, x + 4, y + Math.max(2, (h - 16) / 2));
+			String label = this.fitText(stack.getName().getString(), w - 24);
+			context.drawText(this.textRenderer, label, x + 22, y + Math.max(3, (h - 8) / 2), PANEL_TEXT, false);
+		}
+
+		if (clickable) {
+			this.slotHitAreas.put(slotId, new HitArea(x, y, w, h));
+		}
+	}
+
+	private void drawSoftMapRidges(DrawContext context) {
+		int ridgeCount = 8;
+		for (int i = 0; i < ridgeCount; i++) {
+			int y = this.canvasY + 18 + i * ((this.canvasH - 36) / ridgeCount);
+			int wave = (i % 2 == 0) ? 14 : 22;
+			context.fill(this.canvasX + 18 + wave, y, this.canvasX + this.canvasW - 18 - wave, y + 1, 0x335D85AA);
+		}
 	}
 
 	private void drawHoveredTooltip(DrawContext context, int mouseX, int mouseY) {
@@ -133,173 +340,107 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		context.drawItemTooltip(this.textRenderer, stack, mouseX, mouseY);
 	}
 
-	private void renderTopRow(DrawContext context, int mouseX, int mouseY) {
-		int totalWidth = this.mainGridWidth();
-		int cellWidth = (totalWidth - (TOP_ROW_GAP * 4)) / 5;
-		int left = this.panelX + PANEL_PADDING;
-		int top = this.panelY + TOP_ROW_Y;
-		for (int i = 0; i < TOP_SLOTS.length; i++) {
-			int x = left + i * (cellWidth + TOP_ROW_GAP);
-			this.drawSlotCard(context, TOP_SLOTS[i], x, top, cellWidth, TOP_ROW_HEIGHT, mouseX, mouseY);
-		}
-	}
-
-	private void renderMainGrid(DrawContext context, int mouseX, int mouseY) {
-		int left = this.panelX + PANEL_PADDING;
-		int top = this.panelY + MAIN_GRID_Y;
-		for (int row = 0; row < 3; row++) {
-			for (int col = 0; col < 9; col++) {
-				int slotId = 18 + row * 9 + col;
-				int x = left + col * (MAIN_CELL_WIDTH + MAIN_CELL_GAP);
-				int y = top + row * (MAIN_CELL_HEIGHT + MAIN_CELL_GAP);
-				this.drawSlotCard(context, slotId, x, y, MAIN_CELL_WIDTH, MAIN_CELL_HEIGHT, mouseX, mouseY);
-			}
-		}
-	}
-
-	private void renderControlRow(DrawContext context, int mouseX, int mouseY) {
-		int left = this.panelX + PANEL_PADDING;
-		int top = this.panelY + CONTROL_ROW_Y;
-		for (int col = 0; col < 9; col++) {
-			int slotId = 45 + col;
-			int x = left + col * (MAIN_CELL_WIDTH + MAIN_CELL_GAP);
-			this.drawSlotCard(context, slotId, x, top, MAIN_CELL_WIDTH, CONTROL_ROW_HEIGHT, mouseX, mouseY);
-		}
-	}
-
-	private void drawSlotCard(DrawContext context, int slotId, int x, int y, int width, int height, int mouseX, int mouseY) {
-		ItemStack stack = this.handler.getSlot(slotId).getStack();
-		boolean hovered = mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
-		int fillColor = this.backgroundColorForSlot(slotId, stack);
-		if (hovered) {
-			fillColor = brighten(fillColor, 28);
-		}
-		context.fill(x, y, x + width, y + height, fillColor);
-		this.drawBorder(context, x, y, width, height, hovered ? 0xFF73CBF3 : 0xFF2A4054);
-
-		if (!stack.isEmpty()) {
-			int itemX = x + 4;
-			int itemY = y + Math.max(2, (height - 16) / 2);
-			context.drawItem(stack, itemX, itemY);
-			if (this.shouldRenderLabel(slotId, stack)) {
-				String label = this.trimLabel(stack.getName().getString(), width - 24);
-				context.drawText(this.textRenderer, label, x + 22, y + Math.max(3, (height - 8) / 2), 0xFFE9F2FC, false);
-			}
-		}
-	}
-
 	private int findSlotAt(double mouseX, double mouseY) {
-		int totalWidth = this.mainGridWidth();
-		int topCellWidth = (totalWidth - (TOP_ROW_GAP * 4)) / 5;
-		int left = this.panelX + PANEL_PADDING;
-		int topRowY = this.panelY + TOP_ROW_Y;
-		for (int i = 0; i < TOP_SLOTS.length; i++) {
-			int x = left + i * (topCellWidth + TOP_ROW_GAP);
-			if (contains(mouseX, mouseY, x, topRowY, topCellWidth, TOP_ROW_HEIGHT)) {
-				return TOP_SLOTS[i];
-			}
-		}
-
-		int mainY = this.panelY + MAIN_GRID_Y;
-		for (int row = 0; row < 3; row++) {
-			for (int col = 0; col < 9; col++) {
-				int x = left + col * (MAIN_CELL_WIDTH + MAIN_CELL_GAP);
-				int y = mainY + row * (MAIN_CELL_HEIGHT + MAIN_CELL_GAP);
-				if (contains(mouseX, mouseY, x, y, MAIN_CELL_WIDTH, MAIN_CELL_HEIGHT)) {
-					return 18 + row * 9 + col;
-				}
-			}
-		}
-
-		int controlY = this.panelY + CONTROL_ROW_Y;
-		for (int col = 0; col < 9; col++) {
-			int x = left + col * (MAIN_CELL_WIDTH + MAIN_CELL_GAP);
-			if (contains(mouseX, mouseY, x, controlY, MAIN_CELL_WIDTH, CONTROL_ROW_HEIGHT)) {
-				return 45 + col;
+		for (Map.Entry<Integer, HitArea> entry : this.slotHitAreas.entrySet()) {
+			HitArea area = entry.getValue();
+			if (this.contains(area.x, area.y, area.w, area.h, mouseX, mouseY)) {
+				return entry.getKey();
 			}
 		}
 		return -1;
 	}
 
-	private boolean isMouseWithinPanel(double mouseX, double mouseY) {
-		return contains(mouseX, mouseY, this.panelX, this.panelY, PANEL_WIDTH, PANEL_HEIGHT);
-	}
-
-	private int mainGridWidth() {
-		return (MAIN_CELL_WIDTH * 9) + (MAIN_CELL_GAP * 8);
-	}
-
 	private boolean isHierarchyMode() {
-		ItemStack stack = this.handler.getSlot(50).getStack();
-		return !stack.isEmpty() && stack.isOf(Items.COMPASS);
+		ItemStack modeStack = this.handler.getSlot(SLOT_MODE).getStack();
+		return !modeStack.isEmpty() && modeStack.isOf(Items.COMPASS);
 	}
 
-	private boolean shouldRenderLabel(int slotId, ItemStack stack) {
-		if (slotId >= 45 || slotId <= 8) {
-			return true;
-		}
-		return stack.isOf(Items.BOOK) || stack.isOf(Items.PLAYER_HEAD);
+	private void recomputeLayout() {
+		this.rootX = LEFT_INSET;
+		this.rootY = TOP_INSET;
+		this.rootW = Math.max(420, this.width - LEFT_INSET - RIGHT_INSET);
+		this.rootH = Math.max(280, this.height - TOP_INSET - BOTTOM_INSET);
+
+		this.headerX = this.rootX + 2;
+		this.headerY = this.rootY + 2;
+		this.headerW = this.rootW - 4;
+
+		this.sidebarX = this.rootX + 8;
+		this.sidebarY = this.headerY + HEADER_HEIGHT + 8;
+		this.sidebarW = SIDEBAR_WIDTH;
+		this.sidebarH = this.rootH - HEADER_HEIGHT - FOOTER_HEIGHT - 20;
+
+		this.canvasX = this.sidebarX + this.sidebarW + 10;
+		this.canvasY = this.sidebarY;
+		this.canvasW = this.rootX + this.rootW - this.canvasX - 8;
+		this.canvasH = this.sidebarH;
 	}
 
-	private String trimLabel(String raw, int maxWidth) {
-		if (raw == null || raw.isBlank()) {
-			return "";
-		}
-		if (this.textRenderer.getWidth(raw) <= maxWidth) {
-			return raw;
-		}
-		String ellipsis = "...";
-		int end = raw.length();
-		while (end > 1 && this.textRenderer.getWidth(raw.substring(0, end) + ellipsis) > maxWidth) {
-			end--;
-		}
-		return end <= 1 ? ellipsis : raw.substring(0, end) + ellipsis;
-	}
-
-	private int backgroundColorForSlot(int slotId, ItemStack stack) {
+	private int slotBaseColor(ItemStack stack, int slotId) {
 		if (stack.isOf(Items.GREEN_STAINED_GLASS_PANE)) {
-			return 0xCC1F4F2A;
+			return 0xCE215A34;
 		}
 		if (stack.isOf(Items.YELLOW_STAINED_GLASS_PANE)) {
-			return 0xCC5A4A15;
+			return 0xCE726022;
 		}
 		if (stack.isOf(Items.RED_STAINED_GLASS_PANE)) {
-			return 0xCC5D1D20;
+			return 0xCE742833;
 		}
 		if (stack.isOf(Items.BLUE_STAINED_GLASS_PANE) || stack.isOf(Items.LIGHT_BLUE_STAINED_GLASS_PANE)) {
-			return 0xCC1C3F5B;
+			return 0xCE2D4D73;
 		}
 		if (stack.isOf(Items.PLAYER_HEAD)) {
-			return 0xCC4B3A6C;
+			return 0xCE5A4474;
 		}
 		if (stack.isOf(Items.BOOK) || stack.isOf(Items.WRITABLE_BOOK) || stack.isOf(Items.NAME_TAG)) {
-			return 0xCC4A4331;
+			return 0xCE564A32;
 		}
 		if (stack.isOf(Items.COMPASS) || stack.isOf(Items.RECOVERY_COMPASS)) {
-			return 0xCC214953;
+			return 0xCE2B586E;
+		}
+		if (stack.isOf(Items.GRAY_STAINED_GLASS_PANE) || stack.isOf(Items.BLACK_STAINED_GLASS_PANE)) {
+			return 0xB22A3340;
 		}
 		if (slotId >= 18 && slotId <= 44) {
-			return 0xCC1F2D3C;
+			return 0xCA23354A;
 		}
-		return 0xCC263342;
+		return 0xC6324050;
 	}
 
-	private static int brighten(int argb, int amount) {
-		int alpha = (argb >> 24) & 0xFF;
-		int red = Math.min(255, ((argb >> 16) & 0xFF) + amount);
-		int green = Math.min(255, ((argb >> 8) & 0xFF) + amount);
-		int blue = Math.min(255, (argb & 0xFF) + amount);
-		return (alpha << 24) | (red << 16) | (green << 8) | blue;
+	private void drawOutline(DrawContext context, int x, int y, int w, int h, int color) {
+		context.fill(x, y, x + w, y + 1, color);
+		context.fill(x, y + h - 1, x + w, y + h, color);
+		context.fill(x, y, x + 1, y + h, color);
+		context.fill(x + w - 1, y, x + w, y + h, color);
 	}
 
-	private void drawBorder(DrawContext context, int x, int y, int width, int height, int color) {
-		context.fill(x, y, x + width, y + 1, color);
-		context.fill(x, y + height - 1, x + width, y + height, color);
-		context.fill(x, y, x + 1, y + height, color);
-		context.fill(x + width - 1, y, x + width, y + height, color);
+	private String fitText(String text, int maxWidth) {
+		if (text == null || text.isBlank()) {
+			return "";
+		}
+		if (this.textRenderer.getWidth(text) <= maxWidth) {
+			return text;
+		}
+		String suffix = "...";
+		int end = text.length();
+		while (end > 1 && this.textRenderer.getWidth(text.substring(0, end) + suffix) > maxWidth) {
+			end--;
+		}
+		return end <= 1 ? suffix : text.substring(0, end) + suffix;
 	}
 
-	private static boolean contains(double mouseX, double mouseY, int x, int y, int width, int height) {
-		return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
+	private boolean contains(int x, int y, int w, int h, double px, double py) {
+		return px >= x && px < x + w && py >= y && py < y + h;
+	}
+
+	private int brighten(int argb, int amount) {
+		int a = (argb >> 24) & 0xFF;
+		int r = Math.min(255, ((argb >> 16) & 0xFF) + amount);
+		int g = Math.min(255, ((argb >> 8) & 0xFF) + amount);
+		int b = Math.min(255, (argb & 0xFF) + amount);
+		return (a << 24) | (r << 16) | (g << 8) | b;
+	}
+
+	private record HitArea(int x, int y, int w, int h) {
 	}
 }
