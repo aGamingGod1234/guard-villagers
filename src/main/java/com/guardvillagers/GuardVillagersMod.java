@@ -287,7 +287,7 @@ public class GuardVillagersMod implements ModInitializer {
 				.then(CommandManager.literal("random").executes(context -> setBehaviorRandom(context.getSource().getPlayerOrThrow()))))
 			.then(CommandManager.literal("formation")
 				.then(CommandManager.literal("line").executes(context -> setFormation(context.getSource().getPlayerOrThrow(), FormationType.LINE)))
-				.then(CommandManager.literal("wedge").executes(context -> setFormation(context.getSource().getPlayerOrThrow(), FormationType.WEDGE)))
+				.then(CommandManager.literal("square").executes(context -> setFormation(context.getSource().getPlayerOrThrow(), FormationType.SQUARE)))
 				.then(CommandManager.literal("circle").executes(context -> setFormation(context.getSource().getPlayerOrThrow(), FormationType.CIRCLE))))
 			.then(CommandManager.literal("zone")
 				.then(CommandManager.argument("radius", IntegerArgumentType.integer(8, 128))
@@ -437,6 +437,7 @@ public class GuardVillagersMod implements ModInitializer {
 			guard.setStaying(false);
 			guard.setRole(pickDynamicPurchasedRole(world, player.getUuid(), player.getBlockPos()));
 			guard.applyPurchasedLoadout(world, upgrades);
+			guard.setFormationType(getOwnerFormationPreference(world.getServer(), player.getUuid()));
 			guard.setSquadLeader(false);
 			if (world.spawnEntity(guard)) {
 				return true;
@@ -446,11 +447,15 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	private static int setStance(ServerPlayerEntity player, boolean staying) {
+		if (!staying) {
+			setOwnerFormationPreference(player.getCommandSource().getServer(), player.getUuid(), FormationType.FOLLOW);
+		}
 		int changed = 0;
 		for (GuardEntity guard : getOwnedGuards(player.getCommandSource().getServer(), player.getUuid())) {
 			guard.setStaying(staying);
 			if (!staying) {
 				guard.clearHome();
+				guard.setFormationType(FormationType.FOLLOW);
 				if (guard.getBehavior() == GuardBehavior.BODYGUARD) {
 					guard.setBehavior(GuardBehavior.DEFENSIVE);
 				}
@@ -491,14 +496,35 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	private static int setFormation(ServerPlayerEntity player, FormationType formationType) {
+		setOwnerFormationPreference(player.getCommandSource().getServer(), player.getUuid(), formationType);
 		int changed = 0;
 		for (GuardEntity guard : getOwnedGuards(player.getCommandSource().getServer(), player.getUuid())) {
 			guard.setFormationType(formationType);
+			guard.setStaying(false);
 			guard.clearCombatTarget();
 			changed++;
 		}
 		player.sendMessage(Text.literal("Set formation to " + formationType.name().toLowerCase() + " for " + changed + " guards."), true);
 		return changed;
+	}
+
+	public static FormationType getOwnerFormationPreference(MinecraftServer server, UUID ownerUuid) {
+		if (server == null || ownerUuid == null) {
+			return FormationType.FOLLOW;
+		}
+		GuardTacticsState.PlayerTactics tactics = GuardTacticsManager.getState(server).getOrCreate(ownerUuid);
+		return tactics.getPreferredFormation();
+	}
+
+	public static void setOwnerFormationPreference(MinecraftServer server, UUID ownerUuid, FormationType formationType) {
+		if (server == null || ownerUuid == null || formationType == null) {
+			return;
+		}
+		GuardTacticsState state = GuardTacticsManager.getState(server);
+		GuardTacticsState.PlayerTactics tactics = state.getOrCreate(ownerUuid);
+		if (tactics.setPreferredFormation(formationType)) {
+			state.markDirty();
+		}
 	}
 
 	private static int assignZone(ServerPlayerEntity player, int radius) {

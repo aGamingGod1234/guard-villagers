@@ -1,5 +1,6 @@
 package com.guardvillagers.data;
 
+import com.guardvillagers.entity.FormationType;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.datafixer.DataFixTypes;
@@ -59,6 +60,7 @@ public final class GuardTacticsState extends PersistentState {
 
 	public static final class PlayerTactics {
 		private static final int MAX_COLOR_ID = 4;
+		private static final int DEFAULT_FORMATION_ID = FormationType.FOLLOW.getId();
 		private static final int MIN_ROW_INDEX = 0;
 		private static final int MAX_ROW_INDEX = 31;
 		private static final int MIN_COLUMN_INDEX = 0;
@@ -82,18 +84,20 @@ public final class GuardTacticsState extends PersistentState {
 		public static final Codec<PlayerTactics> CODEC = RecordCodecBuilder.create(instance -> instance.group(
 			STRING_INT_MAP_CODEC.optionalFieldOf("zone_colors", Map.of()).forGetter(PlayerTactics::zoneColorsForCodec),
 			STRING_INT_MAP_CODEC.optionalFieldOf("row_column_zones", Map.of()).forGetter(PlayerTactics::rowColumnZonesForCodec),
-			ROLE_LIST_CODEC.optionalFieldOf("roles", DEFAULT_ROLES).forGetter(PlayerTactics::roleNamesForCodec)
+			ROLE_LIST_CODEC.optionalFieldOf("roles", DEFAULT_ROLES).forGetter(PlayerTactics::roleNamesForCodec),
+			Codec.INT.optionalFieldOf("preferred_formation", DEFAULT_FORMATION_ID).forGetter(PlayerTactics::preferredFormationIdForCodec)
 		).apply(instance, PlayerTactics::new));
 
 		private final Map<String, Integer> zoneColors;
 		private final Map<String, Integer> rowColumnZones;
 		private final List<String> roleNames;
+		private int preferredFormationId;
 
 		public PlayerTactics() {
-			this(Map.of(), Map.of(), DEFAULT_ROLES);
+			this(Map.of(), Map.of(), DEFAULT_ROLES, DEFAULT_FORMATION_ID);
 		}
 
-		private PlayerTactics(Map<String, Integer> zoneColors, Map<String, Integer> rowColumnZones, List<String> roleNames) {
+		private PlayerTactics(Map<String, Integer> zoneColors, Map<String, Integer> rowColumnZones, List<String> roleNames, int preferredFormationId) {
 			this.zoneColors = new HashMap<>();
 			for (Map.Entry<String, Integer> entry : zoneColors.entrySet()) {
 				Integer colorId = entry.getValue();
@@ -134,10 +138,25 @@ public final class GuardTacticsState extends PersistentState {
 			if (this.roleNames.isEmpty()) {
 				this.roleNames.addAll(DEFAULT_ROLES);
 			}
+			this.preferredFormationId = normalizeFormationId(preferredFormationId);
 		}
 
 		public PlayerTactics copy() {
-			return new PlayerTactics(this.zoneColors, this.rowColumnZones, this.roleNames);
+			return new PlayerTactics(this.zoneColors, this.rowColumnZones, this.roleNames, this.preferredFormationId);
+		}
+
+		public FormationType getPreferredFormation() {
+			return FormationType.fromId(this.preferredFormationId);
+		}
+
+		public boolean setPreferredFormation(FormationType formationType) {
+			FormationType resolved = formationType == null ? FormationType.FOLLOW : formationType;
+			int nextId = normalizeFormationId(resolved.getId());
+			if (nextId == this.preferredFormationId) {
+				return false;
+			}
+			this.preferredFormationId = nextId;
+			return true;
 		}
 
 		public int getZoneColor(int chunkX, int chunkZ) {
@@ -264,6 +283,10 @@ public final class GuardTacticsState extends PersistentState {
 			return Collections.unmodifiableList(this.roleNames);
 		}
 
+		private int preferredFormationIdForCodec() {
+			return this.preferredFormationId;
+		}
+
 		private static String toChunkKey(int chunkX, int chunkZ) {
 			return chunkX + "," + chunkZ;
 		}
@@ -339,6 +362,10 @@ public final class GuardTacticsState extends PersistentState {
 			}
 			String trimmed = roleName.trim();
 			return trimmed.length() <= MAX_ROLE_NAME_LENGTH ? trimmed : trimmed.substring(0, MAX_ROLE_NAME_LENGTH);
+		}
+
+		private static int normalizeFormationId(int formationId) {
+			return FormationType.fromId(formationId).getId();
 		}
 	}
 }

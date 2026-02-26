@@ -2,8 +2,9 @@ package com.guardvillagers.entity;
 
 public enum FormationType {
 	LINE(0),
-	WEDGE(1),
-	CIRCLE(2);
+	SQUARE(1),
+	CIRCLE(2),
+	FOLLOW(3);
 
 	private final int id;
 
@@ -21,6 +22,6 @@ public enum FormationType {
 				return type;
 			}
 		}
-		return LINE;
+		return FOLLOW;
 	}
 }

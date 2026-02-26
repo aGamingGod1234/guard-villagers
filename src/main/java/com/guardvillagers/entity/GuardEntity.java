@@ -156,12 +156,6 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		Map.entry(Items.NETHERITE_BOOTS, new ArmorDefinition(EquipmentSlot.FEET, 5))
 	);
 
-	private static final Comparator<GuardEntity> FORMATION_PRIORITY = Comparator
-		.comparingInt(GuardEntity::getHierarchyRow)
-		.thenComparingInt(GuardEntity::getHierarchyColumn)
-		.thenComparing(Comparator.comparingInt(GuardEntity::getLevel).reversed())
-		.thenComparing(guard -> guard.getUuid().toString());
-
 	private MeleeAttackGoal meleeGoal;
 	private ProjectileAttackGoal rangedGoal;
 
@@ -524,76 +518,103 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			owner.getBoundingBox().expand(96.0D),
 			guard -> guard.isOwnedBy(owner.getUuid()) && !guard.isStaying()
 		));
-		squad.sort(FORMATION_PRIORITY);
-
-		int hierarchyRow = this.getHierarchyRow();
-		int column = this.getHierarchyColumn();
-		int row = Math.min(8, hierarchyRow);
-		int rowIndex = 0;
-		int rowColumnIndex = 0;
-		int rowCount = 0;
-		int rowColumnCount = 0;
-		for (GuardEntity guard : squad) {
-			if (guard.getHierarchyRow() != hierarchyRow) {
-				continue;
-			}
-			if (guard == this) {
-				rowIndex = rowCount;
-			}
-			rowCount++;
-			if (guard.getHierarchyColumn() == column) {
-				if (guard == this) {
-					rowColumnIndex = rowColumnCount;
-				}
-				rowColumnCount++;
-			}
-		}
-		rowCount = Math.max(1, rowCount);
-		rowColumnCount = Math.max(1, rowColumnCount);
-
-		double rankBackOffset = 1.8D + row * 1.85D;
-		double columnOffset = (column - 1) * 2.25D;
-		double backDistance;
-		double sideOffset;
-		switch (this.getFormationType()) {
-			case WEDGE -> {
-				double wingSpread = 1.25D + rowColumnIndex * 0.9D;
-				double wingDirection;
-				if (column == 1) {
-					wingDirection = (rowColumnIndex % 2 == 0) ? -1.0D : 1.0D;
-				} else {
-					wingDirection = column == 0 ? -1.0D : 1.0D;
-				}
-				backDistance = rankBackOffset + 0.8D + rowColumnIndex * 1.25D + (rowIndex / 4) * 0.8D;
-				sideOffset = wingDirection * wingSpread + (column == 1 ? 0.0D : wingDirection * 0.75D);
-			}
-			case CIRCLE -> {
-				double angle = (Math.PI * 2.0D * rowIndex) / rowCount;
-				double radius = 2.5D + row * 1.2D + (column * 0.35D);
-				backDistance = Math.cos(angle) * radius;
-				sideOffset = Math.sin(angle) * radius;
-			}
-			default -> {
-				double rowSpread = rowIndex - ((rowCount - 1) / 2.0D);
-				double columnSpread = rowColumnIndex - ((rowColumnCount - 1) / 2.0D);
-				backDistance = rankBackOffset + (Math.abs(columnSpread) * 0.35D);
-				sideOffset = columnOffset + rowSpread * 0.9D + columnSpread * 0.6D;
+		squad.sort(Comparator
+			.comparingDouble((GuardEntity guard) -> guard.squaredDistanceTo(owner))
+			.thenComparing(guard -> guard.getUuid().toString()));
+		int squadSize = Math.max(1, squad.size());
+		int index = 0;
+		for (int i = 0; i < squad.size(); i++) {
+			if (squad.get(i) == this) {
+				index = i;
+				break;
 			}
 		}
 
 		double yawRad = Math.toRadians(owner.getYaw());
 		Vec3d forward = new Vec3d(-Math.sin(yawRad), 0.0D, Math.cos(yawRad));
 		Vec3d right = new Vec3d(Math.cos(yawRad), 0.0D, Math.sin(yawRad));
+		Vec3d formationOffset = switch (this.getFormationType()) {
+			case FOLLOW -> looseFollowOffset(index, forward, right);
+			case SQUARE -> squareOffset(index, forward, right);
+			case CIRCLE -> circleOffset(index, squadSize, forward, right);
+			default -> lineOffset(index, squadSize, forward, right);
+		};
+
 		long seed = this.getUuid().getMostSignificantBits() ^ this.getUuid().getLeastSignificantBits();
-		double staticBackOffset = ((((seed >>> 8) & 1023) / 1023.0D) - 0.5D) * 1.0D;
-		double staticSideOffset = ((((seed >>> 18) & 1023) / 1023.0D) - 0.5D) * 1.35D;
 		double phase = (this.age * 0.12D) + (((seed >>> 28) & 255) * 0.05D);
-		double wobbleBack = Math.sin(phase) * 0.35D;
-		double wobbleSide = Math.cos(phase * 1.19D) * 0.5D;
+		double wobbleScale = this.getFormationType() == FormationType.FOLLOW ? 0.32D : 0.18D;
+		Vec3d wobble = right.multiply(Math.cos(phase * 1.19D) * wobbleScale)
+			.add(forward.multiply(Math.sin(phase) * wobbleScale * 0.7D));
 		Vec3d ownerPos = owner.getEntityPos();
-		return ownerPos
-			.subtract(forward.multiply(backDistance + staticBackOffset + wobbleBack))
-			.add(right.multiply(sideOffset + staticSideOffset + wobbleSide));
+		return ownerPos.add(formationOffset).add(wobble);
+	}
+
+	private static Vec3d lineOffset(int index, int squadSize, Vec3d forward, Vec3d right) {
+		int maxPerLine = 15;
+		int lineIndex = index / maxPerLine;
+		int indexInLine = index % maxPerLine;
+		int lineCount = Math.min(maxPerLine, Math.max(1, squadSize - lineIndex * maxPerLine));
+
+		double centered = indexInLine - ((lineCount - 1) / 2.0D);
+		double sideOffset = centered * 1.35D;
+		double forwardOffset = 3.0D + lineIndex * 2.3D;
+		return forward.multiply(forwardOffset).add(right.multiply(sideOffset));
+	}
+
+	private static Vec3d squareOffset(int index, Vec3d forward, Vec3d right) {
+		int ring = 1;
+		int localIndex = Math.max(0, index);
+		while (localIndex >= ring * 8) {
+			localIndex -= ring * 8;
+			ring++;
+		}
+
+		int sideLength = ring * 2;
+		double localX;
+		double localZ;
+		if (localIndex < sideLength) {
+			localX = -ring + 1 + localIndex;
+			localZ = -ring;
+		} else if (localIndex < sideLength * 2) {
+			int step = localIndex - sideLength;
+			localX = ring;
+			localZ = -ring + 1 + step;
+		} else if (localIndex < sideLength * 3) {
+			int step = localIndex - sideLength * 2;
+			localX = ring - 1 - step;
+			localZ = ring;
+		} else {
+			int step = localIndex - sideLength * 3;
+			localX = -ring;
+			localZ = ring - 1 - step;
+		}
+
+		double spacing = 1.85D;
+		return right.multiply(localX * spacing).add(forward.multiply(localZ * spacing));
+	}
+
+	private static Vec3d circleOffset(int index, int squadSize, Vec3d forward, Vec3d right) {
+		int ring = 0;
+		int localIndex = Math.max(0, index);
+		int ringCapacity = 12;
+		while (localIndex >= ringCapacity) {
+			localIndex -= ringCapacity;
+			ring++;
+			ringCapacity = 12 + (ring * 8);
+		}
+		int effectiveCapacity = Math.max(1, Math.min(ringCapacity, squadSize));
+		double radius = 3.0D + ring * 2.2D;
+		double angle = (Math.PI * 2.0D * localIndex) / effectiveCapacity;
+		return right.multiply(Math.cos(angle) * radius).add(forward.multiply(Math.sin(angle) * radius));
+	}
+
+	private Vec3d looseFollowOffset(int index, Vec3d forward, Vec3d right) {
+		long seed = this.getUuid().getMostSignificantBits() ^ this.getUuid().getLeastSignificantBits();
+		double sideNoise = ((((seed >>> 17) & 1023) / 1023.0D) - 0.5D) * 4.0D;
+		double backNoise = ((((seed >>> 4) & 1023) / 1023.0D) - 0.5D) * 1.1D;
+		double sideOffset = sideNoise + ((index % 5) - 2) * 0.55D;
+		double backOffset = 2.0D + (index / 6) * 0.45D + backNoise;
+		return right.multiply(sideOffset).subtract(forward.multiply(backOffset));
 	}
 
 	public void teleportToFormationAnchor(Vec3d anchor) {
@@ -664,7 +685,10 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			this.assignRandomRole(world);
 		}
 		this.setBehavior(GuardBehavior.BODYGUARD);
-		this.setFormationType(FormationType.WEDGE);
+		FormationType preferred = this.hasOwner()
+			? GuardVillagersMod.getOwnerFormationPreference(world.getServer(), this.ownerUuid)
+			: FormationType.FOLLOW;
+		this.setFormationType(preferred);
 		this.setHierarchyRow(Math.max(0, 2 - Math.min(2, this.getLevel() / 4)));
 		this.setHierarchyColumn(world.getRandom().nextBetween(0, 2));
 		this.setHierarchyRole("Vanguard");
@@ -814,7 +838,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 				this.setOwnerUuid(player.getUuid());
 				this.setStaying(false);
 				this.setBehavior(GuardBehavior.BODYGUARD);
-				this.setFormationType(FormationType.WEDGE);
+				this.setFormationType(GuardVillagersMod.getOwnerFormationPreference(world.getServer(), player.getUuid()));
 				if (!player.getAbilities().creativeMode) {
 					stack.decrement(1);
 				}
