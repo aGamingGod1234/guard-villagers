@@ -4,7 +4,6 @@ import com.guardvillagers.GuardVillagersMod;
 import com.guardvillagers.data.GuardVillageState;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
-import com.guardvillagers.entity.FormationType;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.SpawnReason;
 import net.minecraft.entity.passive.VillagerEntity;
@@ -15,7 +14,6 @@ import net.minecraft.structure.StructureStart;
 import net.minecraft.util.math.BlockBox;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkSectionPos;
-import net.minecraft.world.Heightmap;
 import net.minecraft.world.poi.PointOfInterestStorage;
 import net.minecraft.world.poi.PointOfInterestTypes;
 
@@ -276,18 +274,17 @@ public final class VillageManagerHandler {
 		int xOffset = SPAWN_RING_OFFSETS[ringIndex];
 		int zOffset = SPAWN_RING_OFFSETS[(ringIndex + 1) % SPAWN_RING_OFFSETS.length];
 		BlockPos origin = village.center().add(xOffset, 0, zOffset);
-		BlockPos top = world.getTopPosition(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, origin);
+		BlockPos spawn = GuardVillagersMod.findGuardSpawnPos(world, origin, 10);
 
-		guard.refreshPositionAndAngles(top.getX() + 0.5D, top.getY(), top.getZ() + 0.5D, world.getRandom().nextFloat() * 360.0F, 0.0F);
+		guard.refreshPositionAndAngles(spawn.getX() + 0.5D, spawn.getY(), spawn.getZ() + 0.5D, world.getRandom().nextFloat() * 360.0F, 0.0F);
 		guard.applyNaturalLoadout(world);
 		guard.setBehavior(pickVillageBehavior(village, guardIndex));
-		guard.setFormationType(FormationType.LINE);
 		guard.setSquadId(UUID.nameUUIDFromBytes(village.id().getBytes(StandardCharsets.UTF_8)));
 		guard.setSquadLeader(false);
 		guard.setHome(village.center(), Math.max(24, village.horizontalRadius()));
 
 		if (!world.spawnEntity(guard)) {
-			GuardVillagersMod.LOGGER.warn("Village guard spawn rejected at {} in {}", top, world.getRegistryKey().getValue());
+			GuardVillagersMod.LOGGER.warn("Village guard spawn rejected at {} in {}", spawn, world.getRegistryKey().getValue());
 			return false;
 		}
 		return true;

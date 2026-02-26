@@ -42,9 +42,6 @@ All command roots are registered as:
 - `/guards behavior crowd_control`
 - `/guards behavior offensive`
 - `/guards behavior defensive`
-- `/guards formation line`
-- `/guards formation wedge`
-- `/guards formation circle`
 - `/guards zone <radius>` - Assign current location as home zone for nearby owned guards (`8` to `128`).
 - `/guards hierarchy add_role` - Add a hierarchy row.
 - `/guards hierarchy rename <row> <name>` - Rename a hierarchy row with a custom label.
@@ -67,7 +64,7 @@ All command roots are registered as:
 ### 3) Guard control and tactics
 
 - Behavior modes: perimeter, bodyguard, crowd control, offensive, defensive.
-- Formations: line, wedge, circle.
+- Follow/stay stances for owner command control.
 - Home zones: guards can be anchored to patrol within a configurable radius.
 - Tactics UI now centers on zones + hierarchy: top-down chunk painting, role rows, row columns mapped to zone colors, and drag-style guard reassignment.
 - In hierarchy mode, use `Shift + Right-click` on a row header to type a custom role name directly in the tactics UI.

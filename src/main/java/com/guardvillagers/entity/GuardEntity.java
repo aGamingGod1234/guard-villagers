@@ -9,6 +9,7 @@ import com.guardvillagers.entity.goal.BodyguardGoal;
 import com.guardvillagers.entity.goal.CrowdControlGoal;
 import com.guardvillagers.entity.goal.ElectLeaderGoal;
 import com.guardvillagers.entity.goal.FormationFollowOwnerGoal;
+import com.guardvillagers.entity.goal.GuardBowAttackGoal;
 import com.guardvillagers.entity.goal.PerimeterPatrolGoal;
 import com.guardvillagers.entity.goal.RaidTacticsGoal;
 import com.guardvillagers.entity.goal.TacticalRetreatGoal;
@@ -25,8 +26,8 @@ import net.minecraft.entity.ai.RangedAttackMob;
 import net.minecraft.entity.ai.goal.ActiveTargetGoal;
 import net.minecraft.entity.ai.goal.LookAroundGoal;
 import net.minecraft.entity.ai.goal.LookAtEntityGoal;
+import net.minecraft.entity.ai.goal.LongDoorInteractGoal;
 import net.minecraft.entity.ai.goal.MeleeAttackGoal;
-import net.minecraft.entity.ai.goal.ProjectileAttackGoal;
 import net.minecraft.entity.ai.goal.RevengeGoal;
 import net.minecraft.entity.ai.goal.SwimGoal;
 import net.minecraft.entity.ai.goal.WanderAroundFarGoal;
@@ -75,8 +76,6 @@ import net.minecraft.world.ServerWorldAccess;
 import net.minecraft.world.poi.PointOfInterestStorage;
 import net.minecraft.world.poi.PointOfInterestTypes;
 
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -157,7 +156,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	);
 
 	private MeleeAttackGoal meleeGoal;
-	private ProjectileAttackGoal rangedGoal;
+	private GuardBowAttackGoal rangedGoal;
 
 	private UUID ownerUuid;
 	private UUID squadId;
@@ -180,6 +179,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	public GuardEntity(EntityType<? extends PathAwareEntity> entityType, net.minecraft.world.World world) {
 		super(entityType, world);
+		this.getNavigation().setCanOpenDoors(true);
 		for (EquipmentSlot slot : List.of(EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET)) {
 			this.playerArmor.put(slot, false);
 		}
@@ -206,10 +206,11 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	@Override
 	protected void initGoals() {
 		this.meleeGoal = new MeleeAttackGoal(this, 1.2D, true);
-		this.rangedGoal = new ProjectileAttackGoal(this, 1.0D, 30, 15.0F);
+		this.rangedGoal = new GuardBowAttackGoal(this, 1.0D, 20, 15.0F);
 
 		this.goalSelector.add(0, new SwimGoal(this));
 		this.goalSelector.add(1, new TacticalRetreatGoal(this, 1.35D));
+		this.goalSelector.add(2, new LongDoorInteractGoal(this, true));
 		this.goalSelector.add(3, new RaidTacticsGoal(this, 1.2D));
 		this.goalSelector.add(4, new BodyguardGoal(this, 1.15D));
 		this.goalSelector.add(5, new PerimeterPatrolGoal(this, 1.0D));
@@ -230,7 +231,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		super.initDataTracker(builder);
 		builder.add(ROLE, GuardRole.SWORDSMAN.getId());
 		builder.add(BEHAVIOR, GuardBehavior.DEFENSIVE.getId());
-		builder.add(FORMATION, FormationType.LINE.getId());
+		builder.add(FORMATION, FormationType.FOLLOW.getId());
 		builder.add(SQUAD_LEADER, false);
 		builder.add(EXPERIENCE, 0);
 	}
@@ -259,7 +260,8 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	public void setFormationType(FormationType formationType) {
-		this.dataTracker.set(FORMATION, formationType.getId());
+		FormationType resolved = formationType == null ? FormationType.FOLLOW : formationType;
+		this.dataTracker.set(FORMATION, resolved.getId());
 	}
 
 	public int getExperience() {
@@ -512,123 +514,6 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		return owner;
 	}
 
-	public Vec3d getFormationAnchor(ServerPlayerEntity owner) {
-		List<GuardEntity> squad = new ArrayList<>(owner.getEntityWorld().getEntitiesByClass(
-			GuardEntity.class,
-			owner.getBoundingBox().expand(96.0D),
-			guard -> guard.isOwnedBy(owner.getUuid()) && !guard.isStaying()
-		));
-		squad.sort(Comparator
-			.comparingDouble((GuardEntity guard) -> guard.squaredDistanceTo(owner))
-			.thenComparing(guard -> guard.getUuid().toString()));
-		int squadSize = Math.max(1, squad.size());
-		int index = 0;
-		for (int i = 0; i < squad.size(); i++) {
-			if (squad.get(i) == this) {
-				index = i;
-				break;
-			}
-		}
-
-		double yawRad = Math.toRadians(owner.getYaw());
-		Vec3d forward = new Vec3d(-Math.sin(yawRad), 0.0D, Math.cos(yawRad));
-		Vec3d right = new Vec3d(Math.cos(yawRad), 0.0D, Math.sin(yawRad));
-		Vec3d formationOffset = switch (this.getFormationType()) {
-			case FOLLOW -> looseFollowOffset(index, forward, right);
-			case SQUARE -> squareOffset(index, forward, right);
-			case CIRCLE -> circleOffset(index, squadSize, forward, right);
-			default -> lineOffset(index, squadSize, forward, right);
-		};
-
-		long seed = this.getUuid().getMostSignificantBits() ^ this.getUuid().getLeastSignificantBits();
-		double phase = (this.age * 0.12D) + (((seed >>> 28) & 255) * 0.05D);
-		double wobbleScale = this.getFormationType() == FormationType.FOLLOW ? 0.32D : 0.18D;
-		Vec3d wobble = right.multiply(Math.cos(phase * 1.19D) * wobbleScale)
-			.add(forward.multiply(Math.sin(phase) * wobbleScale * 0.7D));
-		Vec3d ownerPos = owner.getEntityPos();
-		return ownerPos.add(formationOffset).add(wobble);
-	}
-
-	private static Vec3d lineOffset(int index, int squadSize, Vec3d forward, Vec3d right) {
-		int maxPerLine = 15;
-		int lineIndex = index / maxPerLine;
-		int indexInLine = index % maxPerLine;
-		int lineCount = Math.min(maxPerLine, Math.max(1, squadSize - lineIndex * maxPerLine));
-
-		double centered = indexInLine - ((lineCount - 1) / 2.0D);
-		double sideOffset = centered * 1.35D;
-		double forwardOffset = 3.0D + lineIndex * 2.3D;
-		return forward.multiply(forwardOffset).add(right.multiply(sideOffset));
-	}
-
-	private static Vec3d squareOffset(int index, Vec3d forward, Vec3d right) {
-		int ring = 1;
-		int localIndex = Math.max(0, index);
-		while (localIndex >= ring * 8) {
-			localIndex -= ring * 8;
-			ring++;
-		}
-
-		int sideLength = ring * 2;
-		double localX;
-		double localZ;
-		if (localIndex < sideLength) {
-			localX = -ring + 1 + localIndex;
-			localZ = -ring;
-		} else if (localIndex < sideLength * 2) {
-			int step = localIndex - sideLength;
-			localX = ring;
-			localZ = -ring + 1 + step;
-		} else if (localIndex < sideLength * 3) {
-			int step = localIndex - sideLength * 2;
-			localX = ring - 1 - step;
-			localZ = ring;
-		} else {
-			int step = localIndex - sideLength * 3;
-			localX = -ring;
-			localZ = ring - 1 - step;
-		}
-
-		double spacing = 1.85D;
-		return right.multiply(localX * spacing).add(forward.multiply(localZ * spacing));
-	}
-
-	private static Vec3d circleOffset(int index, int squadSize, Vec3d forward, Vec3d right) {
-		int ring = 0;
-		int localIndex = Math.max(0, index);
-		int ringCapacity = 12;
-		while (localIndex >= ringCapacity) {
-			localIndex -= ringCapacity;
-			ring++;
-			ringCapacity = 12 + (ring * 8);
-		}
-		int effectiveCapacity = Math.max(1, Math.min(ringCapacity, squadSize));
-		double radius = 3.0D + ring * 2.2D;
-		double angle = (Math.PI * 2.0D * localIndex) / effectiveCapacity;
-		return right.multiply(Math.cos(angle) * radius).add(forward.multiply(Math.sin(angle) * radius));
-	}
-
-	private Vec3d looseFollowOffset(int index, Vec3d forward, Vec3d right) {
-		long seed = this.getUuid().getMostSignificantBits() ^ this.getUuid().getLeastSignificantBits();
-		double sideNoise = ((((seed >>> 17) & 1023) / 1023.0D) - 0.5D) * 4.0D;
-		double backNoise = ((((seed >>> 4) & 1023) / 1023.0D) - 0.5D) * 1.1D;
-		double sideOffset = sideNoise + ((index % 5) - 2) * 0.55D;
-		double backOffset = 2.0D + (index / 6) * 0.45D + backNoise;
-		return right.multiply(sideOffset).subtract(forward.multiply(backOffset));
-	}
-
-	public void teleportToFormationAnchor(Vec3d anchor) {
-		if (!(this.getEntityWorld() instanceof ServerWorld world)) {
-			return;
-		}
-		BlockPos top = world.getTopPosition(
-			Heightmap.Type.MOTION_BLOCKING_NO_LEAVES,
-			new BlockPos((int) Math.floor(anchor.x), (int) Math.floor(anchor.y), (int) Math.floor(anchor.z))
-		);
-		this.refreshPositionAndAngles(top.getX() + 0.5D, top.getY(), top.getZ() + 0.5D, this.getYaw(), this.getPitch());
-		this.getNavigation().stop();
-	}
-
 	public LivingEntity findBodyguardTarget(ServerWorld world) {
 		LivingEntity best = null;
 		double bestScore = Double.NEGATIVE_INFINITY;
@@ -673,7 +558,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	public void applyNaturalLoadout(ServerWorld world) {
 		this.assignRandomRole(world);
 		this.setBehavior(GuardBehavior.random(world.getRandom()));
-		this.setFormationType(FormationType.LINE);
+		this.setFormationType(FormationType.FOLLOW);
 		this.setHierarchyRow(2);
 		this.setHierarchyColumn(world.getRandom().nextBetween(0, 2));
 		this.setHierarchyRole("Reserve");
@@ -685,10 +570,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			this.assignRandomRole(world);
 		}
 		this.setBehavior(GuardBehavior.BODYGUARD);
-		FormationType preferred = this.hasOwner()
-			? GuardVillagersMod.getOwnerFormationPreference(world.getServer(), this.ownerUuid)
-			: FormationType.FOLLOW;
-		this.setFormationType(preferred);
+		this.setFormationType(FormationType.FOLLOW);
 		this.setHierarchyRow(Math.max(0, 2 - Math.min(2, this.getLevel() / 4)));
 		this.setHierarchyColumn(world.getRandom().nextBetween(0, 2));
 		this.setHierarchyRole("Vanguard");
@@ -838,7 +720,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 				this.setOwnerUuid(player.getUuid());
 				this.setStaying(false);
 				this.setBehavior(GuardBehavior.BODYGUARD);
-				this.setFormationType(GuardVillagersMod.getOwnerFormationPreference(world.getServer(), player.getUuid()));
+				this.setFormationType(FormationType.FOLLOW);
 				if (!player.getAbilities().creativeMode) {
 					stack.decrement(1);
 				}
@@ -1029,10 +911,6 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.syncSupportEquipment(world);
 		this.updateShieldUsage();
 		this.updateHierarchyNameplate();
-
-		if (this.getRole() == GuardRole.BOWMAN) {
-			this.keepBowRange();
-		}
 
 		int healInterval = GuardVillagersMod.getHealingIntervalTicks(world, this.ownerUuid);
 		if (healInterval > 0 && this.age % healInterval == 0 && this.combatCooldown <= 0 && this.getHealth() < this.getMaxHealth() * 0.6F) {
@@ -1337,6 +1215,15 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	@Override
+	public boolean tryAttack(ServerWorld world, Entity target) {
+		boolean attacked = super.tryAttack(world, target);
+		if (attacked && !this.getMainHandStack().isOf(Items.BOW)) {
+			this.swingHand(Hand.MAIN_HAND);
+		}
+		return attacked;
+	}
+
+	@Override
 	public void shootAt(LivingEntity target, float pullProgress) {
 		ItemStack bow = this.getMainHandStack();
 		if (!bow.isOf(Items.BOW) || !(this.getEntityWorld() instanceof ServerWorld world)) {
@@ -1510,7 +1397,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		super.readCustomData(view);
 		this.dataTracker.set(ROLE, view.getInt(ROLE_KEY, GuardRole.SWORDSMAN.getId()));
 		this.dataTracker.set(BEHAVIOR, view.getInt(BEHAVIOR_KEY, GuardBehavior.DEFENSIVE.getId()));
-		this.dataTracker.set(FORMATION, view.getInt(FORMATION_KEY, FormationType.LINE.getId()));
+		this.dataTracker.set(FORMATION, FormationType.FOLLOW.getId());
 		this.staying = view.getBoolean(STAYING_KEY, false);
 		this.ownerUuid = parseUuid(view.getString(OWNER_KEY, ""));
 		this.squadId = parseUuid(view.getString(SQUAD_ID_KEY, ""));
@@ -1544,7 +1431,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	@Override
 	public void remove(Entity.RemovalReason reason) {
-		GuardOwnershipIndex.untrack(this);
+		if (reason == null || reason.shouldDestroy()) {
+			GuardOwnershipIndex.untrack(this);
+		}
 		super.remove(reason);
 	}
 

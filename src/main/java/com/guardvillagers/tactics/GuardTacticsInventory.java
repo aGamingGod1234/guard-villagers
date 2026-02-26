@@ -502,7 +502,7 @@ public final class GuardTacticsInventory extends SimpleInventory {
 				Formatting.YELLOW,
 				"Move: click guard -> click target row/slot",
 				"Row columns map directly to zone colors",
-				"Higher rows are closer in formation",
+				"Higher rows are near the frontline",
 				"Use command for custom role names"
 			));
 		}

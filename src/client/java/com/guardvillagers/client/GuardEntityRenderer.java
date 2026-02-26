@@ -8,6 +8,7 @@ import net.minecraft.client.render.entity.EntityRendererFactory;
 import net.minecraft.client.render.entity.VillagerEntityRenderer;
 import net.minecraft.client.render.entity.feature.ArmorFeatureRenderer;
 import net.minecraft.client.render.entity.feature.HeldItemFeatureRenderer;
+import net.minecraft.client.render.entity.model.BipedEntityModel;
 import net.minecraft.client.render.entity.model.EntityModelLayers;
 import net.minecraft.client.render.entity.model.EquipmentModelData;
 import net.minecraft.client.render.entity.model.ZombieVillagerEntityModel;
@@ -16,8 +17,12 @@ import net.minecraft.client.render.entity.state.ZombieVillagerRenderState;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.attribute.EntityAttributes;
+import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.text.Text;
+import net.minecraft.util.Arm;
 import net.minecraft.util.Formatting;
+import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.Vec3d;
 
@@ -70,6 +75,8 @@ public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardE
 	@Override
 	public void updateRenderState(GuardEntity entity, GuardRenderState state, float tickDelta) {
 		super.updateRenderState(entity, state, tickDelta);
+		// Guard villagers should use standard biped item/walk arm motion, not zombie attack arms.
+		state.attacking = false;
 		state.debugLines = List.of();
 		state.renderDebugOverlay = false;
 
@@ -91,6 +98,24 @@ public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardE
 					+ " | HP " + Math.round(entity.getHealth()) + "/" + Math.round(entity.getMaxHealth())
 			);
 		}
+	}
+
+	@Override
+	protected BipedEntityModel.ArmPose getArmPose(GuardEntity entity, Arm arm) {
+		ItemStack stack = entity.getStackInArm(arm);
+		if (stack.isEmpty()) {
+			return BipedEntityModel.ArmPose.EMPTY;
+		}
+
+		if (entity.isUsingItem() && entity.getActiveHand() == Hand.MAIN_HAND && arm == entity.getMainArm() && stack.isOf(Items.BOW)) {
+			return BipedEntityModel.ArmPose.BOW_AND_ARROW;
+		}
+
+		if (arm == entity.getMainArm() && entity.isAttacking() && stack.isOf(Items.BOW)) {
+			return BipedEntityModel.ArmPose.BOW_AND_ARROW;
+		}
+
+		return BipedEntityModel.ArmPose.ITEM;
 	}
 
 	@Override
@@ -130,7 +155,6 @@ public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardE
 
 		lines.add(Text.literal("Role: " + entity.getRole().name()).formatted(Formatting.GOLD));
 		lines.add(Text.literal("Behavior: " + entity.getBehavior().name()).formatted(Formatting.LIGHT_PURPLE));
-		lines.add(Text.literal("Formation: " + entity.getFormationType().name()).formatted(Formatting.AQUA));
 		lines.add(Text.literal("Row " + (entity.getHierarchyRow() + 1) + " Col " + (entity.getHierarchyColumn() + 1)).formatted(Formatting.BLUE));
 		lines.add(Text.literal(entity.getHierarchyRole()).formatted(Formatting.YELLOW));
 

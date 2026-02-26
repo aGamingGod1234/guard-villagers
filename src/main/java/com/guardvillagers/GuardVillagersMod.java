@@ -7,7 +7,6 @@ import com.guardvillagers.data.GuardDiplomacyState;
 import com.guardvillagers.data.GuardTacticsState;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
-import com.guardvillagers.entity.FormationType;
 import com.guardvillagers.entity.GuardRole;
 import com.guardvillagers.item.GuardSpawnEggItem;
 import com.guardvillagers.item.GuardWhistleItem;
@@ -187,8 +186,8 @@ public class GuardVillagersMod implements ModInitializer {
 					return stack;
 				}
 
-				BlockPos top = world.getTopPosition(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, spawnPos);
-				guard.refreshPositionAndAngles(top.getX() + 0.5D, top.getY(), top.getZ() + 0.5D, direction.getPositiveHorizontalDegrees(), 0.0F);
+				BlockPos spawn = findGuardSpawnPos(world, spawnPos, 8);
+				guard.refreshPositionAndAngles(spawn.getX() + 0.5D, spawn.getY(), spawn.getZ() + 0.5D, direction.getPositiveHorizontalDegrees(), 0.0F);
 				guard.applyNaturalLoadout(world);
 				guard.setBehavior(GuardBehavior.random(world.getRandom()));
 				if (world.spawnEntity(guard)) {
@@ -285,10 +284,6 @@ public class GuardVillagersMod implements ModInitializer {
 				.then(CommandManager.literal("offensive").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.OFFENSIVE)))
 				.then(CommandManager.literal("defensive").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.DEFENSIVE)))
 				.then(CommandManager.literal("random").executes(context -> setBehaviorRandom(context.getSource().getPlayerOrThrow()))))
-			.then(CommandManager.literal("formation")
-				.then(CommandManager.literal("line").executes(context -> setFormation(context.getSource().getPlayerOrThrow(), FormationType.LINE)))
-				.then(CommandManager.literal("square").executes(context -> setFormation(context.getSource().getPlayerOrThrow(), FormationType.SQUARE)))
-				.then(CommandManager.literal("circle").executes(context -> setFormation(context.getSource().getPlayerOrThrow(), FormationType.CIRCLE))))
 			.then(CommandManager.literal("zone")
 				.then(CommandManager.argument("radius", IntegerArgumentType.integer(8, 128))
 					.executes(context -> {
@@ -431,13 +426,12 @@ public class GuardVillagersMod implements ModInitializer {
 				continue;
 			}
 			BlockPos candidate = new BlockPos((int) Math.floor(player.getX() + offset[0]), player.getBlockY(), (int) Math.floor(player.getZ() + offset[1]));
-			BlockPos top = world.getTopPosition(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, candidate);
-			guard.refreshPositionAndAngles(top.getX() + 0.5D, top.getY(), top.getZ() + 0.5D, player.getYaw(), 0.0F);
+			BlockPos spawn = findGuardSpawnPos(world, candidate, 10);
+			guard.refreshPositionAndAngles(spawn.getX() + 0.5D, spawn.getY(), spawn.getZ() + 0.5D, player.getYaw(), 0.0F);
 			guard.setOwnerUuid(player.getUuid());
 			guard.setStaying(false);
 			guard.setRole(pickDynamicPurchasedRole(world, player.getUuid(), player.getBlockPos()));
 			guard.applyPurchasedLoadout(world, upgrades);
-			guard.setFormationType(getOwnerFormationPreference(world.getServer(), player.getUuid()));
 			guard.setSquadLeader(false);
 			if (world.spawnEntity(guard)) {
 				return true;
@@ -447,15 +441,11 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	private static int setStance(ServerPlayerEntity player, boolean staying) {
-		if (!staying) {
-			setOwnerFormationPreference(player.getCommandSource().getServer(), player.getUuid(), FormationType.FOLLOW);
-		}
 		int changed = 0;
 		for (GuardEntity guard : getOwnedGuards(player.getCommandSource().getServer(), player.getUuid())) {
 			guard.setStaying(staying);
 			if (!staying) {
 				guard.clearHome();
-				guard.setFormationType(FormationType.FOLLOW);
 				if (guard.getBehavior() == GuardBehavior.BODYGUARD) {
 					guard.setBehavior(GuardBehavior.DEFENSIVE);
 				}
@@ -493,38 +483,6 @@ public class GuardVillagersMod implements ModInitializer {
 		}
 		player.sendMessage(Text.literal("Distributed " + ownedGuards.size() + " guards evenly across behaviors."), true);
 		return ownedGuards.size();
-	}
-
-	private static int setFormation(ServerPlayerEntity player, FormationType formationType) {
-		setOwnerFormationPreference(player.getCommandSource().getServer(), player.getUuid(), formationType);
-		int changed = 0;
-		for (GuardEntity guard : getOwnedGuards(player.getCommandSource().getServer(), player.getUuid())) {
-			guard.setFormationType(formationType);
-			guard.setStaying(false);
-			guard.clearCombatTarget();
-			changed++;
-		}
-		player.sendMessage(Text.literal("Set formation to " + formationType.name().toLowerCase() + " for " + changed + " guards."), true);
-		return changed;
-	}
-
-	public static FormationType getOwnerFormationPreference(MinecraftServer server, UUID ownerUuid) {
-		if (server == null || ownerUuid == null) {
-			return FormationType.FOLLOW;
-		}
-		GuardTacticsState.PlayerTactics tactics = GuardTacticsManager.getState(server).getOrCreate(ownerUuid);
-		return tactics.getPreferredFormation();
-	}
-
-	public static void setOwnerFormationPreference(MinecraftServer server, UUID ownerUuid, FormationType formationType) {
-		if (server == null || ownerUuid == null || formationType == null) {
-			return;
-		}
-		GuardTacticsState state = GuardTacticsManager.getState(server);
-		GuardTacticsState.PlayerTactics tactics = state.getOrCreate(ownerUuid);
-		if (tactics.setPreferredFormation(formationType)) {
-			state.markDirty();
-		}
 	}
 
 	private static int assignZone(ServerPlayerEntity player, int radius) {
@@ -620,6 +578,71 @@ public class GuardVillagersMod implements ModInitializer {
 			}
 		}
 		return choice;
+	}
+
+	public static BlockPos findGuardSpawnPos(ServerWorld world, BlockPos origin, int verticalRange) {
+		int bottomY = world.getBottomY() + 1;
+		int topY = world.getTopYInclusive() - 1;
+		int clampedY = Math.max(bottomY, Math.min(topY, origin.getY()));
+		int range = Math.max(0, verticalRange);
+		BlockPos base = new BlockPos(origin.getX(), clampedY, origin.getZ());
+
+		if (canGuardSpawnAt(world, base)) {
+			return base;
+		}
+
+		for (int step = 1; step <= range; step++) {
+			int upY = clampedY + step;
+			if (upY <= topY) {
+				BlockPos up = new BlockPos(origin.getX(), upY, origin.getZ());
+				if (canGuardSpawnAt(world, up)) {
+					return up;
+				}
+			}
+
+			int downY = clampedY - step;
+			if (downY >= bottomY) {
+				BlockPos down = new BlockPos(origin.getX(), downY, origin.getZ());
+				if (canGuardSpawnAt(world, down)) {
+					return down;
+				}
+			}
+		}
+
+		BlockPos top = world.getTopPosition(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, origin);
+		if (canGuardSpawnAt(world, top)) {
+			return top;
+		}
+		return base;
+	}
+
+	public static boolean canGuardSpawnAt(ServerWorld world, BlockPos feetPos) {
+		int y = feetPos.getY();
+		if (y <= world.getBottomY() || y >= world.getTopYInclusive()) {
+			return false;
+		}
+
+		BlockPos below = feetPos.down();
+		BlockPos head = feetPos.up();
+		if (!world.getBlockState(below).isSideSolidFullSquare(world, below, Direction.UP)) {
+			return false;
+		}
+		if (!world.getBlockState(feetPos).getCollisionShape(world, feetPos).isEmpty()) {
+			return false;
+		}
+		if (!world.getBlockState(head).getCollisionShape(world, head).isEmpty()) {
+			return false;
+		}
+		if (!world.getFluidState(feetPos).isEmpty() || !world.getFluidState(head).isEmpty()) {
+			return false;
+		}
+
+		Box spawnBox = GUARD_ENTITY_TYPE.getDimensions().getBoxAt(
+			feetPos.getX() + 0.5D,
+			feetPos.getY(),
+			feetPos.getZ() + 0.5D
+		);
+		return world.isSpaceEmpty(null, spawnBox);
 	}
 
 	private static int toggleDebug(ServerPlayerEntity player) {

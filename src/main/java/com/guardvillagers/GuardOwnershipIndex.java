@@ -77,7 +77,20 @@ public final class GuardOwnershipIndex {
 	}
 
 	public static int countOwnedGuards(MinecraftServer server, UUID ownerUuid) {
-		return getOwnedGuards(server, ownerUuid).size();
+		if (server == null || ownerUuid == null) {
+			return 0;
+		}
+
+		Set<UUID> indexedIds = OWNER_TO_GUARDS.get(ownerUuid);
+		if (indexedIds != null && !indexedIds.isEmpty()) {
+			return indexedIds.size();
+		}
+
+		List<GuardEntity> scanned = scanOwnedGuards(server, ownerUuid);
+		for (GuardEntity guard : scanned) {
+			track(guard);
+		}
+		return scanned.size();
 	}
 
 	private static List<GuardEntity> resolveIndexedGuards(MinecraftServer server, UUID ownerUuid) {
@@ -90,7 +103,10 @@ public final class GuardOwnershipIndex {
 		List<UUID> staleIds = new ArrayList<>();
 		for (UUID guardId : List.copyOf(indexedIds)) {
 			GuardEntity guard = resolveGuard(server, guardId);
-			if (guard == null || guard.isRemoved() || !ownerUuid.equals(guard.getOwnerUuid())) {
+			if (guard == null) {
+				continue;
+			}
+			if (guard.isRemoved() || !ownerUuid.equals(guard.getOwnerUuid())) {
 				staleIds.add(guardId);
 				continue;
 			}
@@ -141,7 +157,11 @@ public final class GuardOwnershipIndex {
 		for (UUID guardId : List.copyOf(GUARD_TO_OWNER.keySet())) {
 			WeakReference<GuardEntity> reference = GUARD_REFERENCES.get(guardId);
 			GuardEntity guard = reference == null ? null : reference.get();
-			if (guard == null || guard.isRemoved() || guard.getOwnerUuid() == null) {
+			if (guard == null || guard.isRemoved()) {
+				continue;
+			}
+			UUID indexedOwner = GUARD_TO_OWNER.get(guardId);
+			if (guard.getOwnerUuid() == null || !guard.getOwnerUuid().equals(indexedOwner)) {
 				removeGuard(guardId);
 			}
 		}
