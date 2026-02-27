@@ -196,7 +196,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	@Override
 	public EntityData initialize(ServerWorldAccess world, LocalDifficulty difficulty, SpawnReason spawnReason, EntityData entityData) {
 		EntityData data = super.initialize(world, difficulty, spawnReason, entityData);
-		if ((spawnReason == SpawnReason.SPAWN_ITEM_USE || spawnReason == SpawnReason.DISPENSER) && this.getMainHandStack().isEmpty()) {
+		if ((spawnReason == SpawnReason.SPAWN_ITEM_USE || spawnReason == SpawnReason.DISPENSER || spawnReason == SpawnReason.COMMAND) && this.getMainHandStack().isEmpty()) {
 			this.applyNaturalLoadout(world.toServerWorld());
 			this.setBehavior(GuardBehavior.random(world.toServerWorld().getRandom()));
 		}

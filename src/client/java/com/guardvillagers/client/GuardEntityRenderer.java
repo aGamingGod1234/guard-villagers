@@ -11,9 +11,8 @@ import net.minecraft.client.render.entity.feature.HeldItemFeatureRenderer;
 import net.minecraft.client.render.entity.model.BipedEntityModel;
 import net.minecraft.client.render.entity.model.EntityModelLayers;
 import net.minecraft.client.render.entity.model.EquipmentModelData;
-import net.minecraft.client.render.entity.model.ZombieVillagerEntityModel;
 import net.minecraft.client.render.state.CameraRenderState;
-import net.minecraft.client.render.entity.state.ZombieVillagerRenderState;
+import net.minecraft.client.render.entity.state.BipedEntityRenderState;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.attribute.EntityAttributes;
@@ -29,7 +28,7 @@ import net.minecraft.util.math.Vec3d;
 import java.util.ArrayList;
 import java.util.List;
 
-public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardEntityRenderer.GuardRenderState, ZombieVillagerEntityModel<GuardEntityRenderer.GuardRenderState>> {
+public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardEntityRenderer.GuardRenderState, BipedEntityModel<GuardEntityRenderer.GuardRenderState>> {
 	private static final Identifier TEXTURE = Identifier.of("minecraft", "textures/entity/villager/villager.png");
 	private static final String DEBUG_PREFIX = "[DBG] ";
 	private static final double DEBUG_X_OFFSET = 0.0D;
@@ -39,8 +38,8 @@ public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardE
 	public GuardEntityRenderer(EntityRendererFactory.Context context) {
 		super(
 			context,
-			new ZombieVillagerEntityModel<>(context.getPart(EntityModelLayers.ZOMBIE_VILLAGER)),
-			new ZombieVillagerEntityModel<>(context.getPart(EntityModelLayers.ZOMBIE_VILLAGER_BABY)),
+			new BipedEntityModel<>(context.getPart(EntityModelLayers.ZOMBIE_VILLAGER)),
+			new BipedEntityModel<>(context.getPart(EntityModelLayers.ZOMBIE_VILLAGER_BABY)),
 			0.5F,
 			VillagerEntityRenderer.HEAD_TRANSFORMATION
 		);
@@ -50,12 +49,12 @@ public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardE
 			EquipmentModelData.mapToEntityModel(
 				EntityModelLayers.ZOMBIE_VILLAGER_EQUIPMENT,
 				context.getEntityModels(),
-				ZombieVillagerEntityModel::new
+				BipedEntityModel::new
 			),
 			EquipmentModelData.mapToEntityModel(
 				EntityModelLayers.ZOMBIE_VILLAGER_BABY_EQUIPMENT,
 				context.getEntityModels(),
-				ZombieVillagerEntityModel::new
+				BipedEntityModel::new
 			),
 			context.getEquipmentRenderer()
 		));
@@ -75,8 +74,6 @@ public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardE
 	@Override
 	public void updateRenderState(GuardEntity entity, GuardRenderState state, float tickDelta) {
 		super.updateRenderState(entity, state, tickDelta);
-		// Guard villagers should use standard biped item/walk arm motion, not zombie attack arms.
-		state.attacking = false;
 		state.debugLines = List.of();
 		state.renderDebugOverlay = false;
 
@@ -184,7 +181,7 @@ public class GuardEntityRenderer extends BipedEntityRenderer<GuardEntity, GuardE
 		return hasDebugName || super.hasLabel(entity, distance) || (client.player != null && client.targetedEntity == entity);
 	}
 
-	public static class GuardRenderState extends ZombieVillagerRenderState {
+	public static class GuardRenderState extends BipedEntityRenderState {
 		private boolean renderDebugOverlay;
 		private List<Text> debugLines = List.of();
 	}
