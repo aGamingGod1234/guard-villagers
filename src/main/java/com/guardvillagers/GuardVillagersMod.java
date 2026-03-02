@@ -294,6 +294,11 @@ public class GuardVillagersMod implements ModInitializer {
 						return updated;
 					})))
 			.then(CommandManager.literal("hierarchy")
+				.executes(context -> {
+					ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+					openHierarchyScreen(player);
+					return Command.SINGLE_SUCCESS;
+				})
 				.then(CommandManager.literal("add_role")
 					.executes(context -> {
 						ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
@@ -367,6 +372,18 @@ public class GuardVillagersMod implements ModInitializer {
 		} catch (RuntimeException exception) {
 			LOGGER.error("Failed to open tactics screen for {}", player.getName().getString(), exception);
 			player.sendMessage(Text.literal("Could not open tactics screen. Check server logs."), false);
+		}
+	}
+
+	public static void openHierarchyScreen(ServerPlayerEntity player) {
+		try {
+			player.openHandledScreen(new SimpleNamedScreenHandlerFactory(
+				(syncId, playerInventory, ignoredPlayer) -> new GuardTacticsScreenHandler(syncId, playerInventory, player),
+				Text.translatable("screen.guardvillagers.hierarchy")
+			));
+		} catch (RuntimeException exception) {
+			LOGGER.error("Failed to open hierarchy screen for {}", player.getName().getString(), exception);
+			player.sendMessage(Text.literal("Could not open hierarchy screen. Check server logs."), false);
 		}
 	}
 
