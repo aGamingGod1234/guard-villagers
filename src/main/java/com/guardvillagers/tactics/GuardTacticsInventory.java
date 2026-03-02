@@ -61,6 +61,10 @@ public final class GuardTacticsInventory extends SimpleInventory {
 	private int mapCenterZ;
 	private int activeColorId = 1;
 	private int hierarchyRowOffset = 0;
+<<<<<<< HEAD
+=======
+	private Long selectionAnchor;
+>>>>>>> origin/main
 	private UUID selectedGuardId;
 
 	public GuardTacticsInventory(ServerPlayerEntity owner) {
@@ -184,10 +188,37 @@ public final class GuardTacticsInventory extends SimpleInventory {
 		int chunkX = ChunkPos.getPackedX(chunkKey);
 		int chunkZ = ChunkPos.getPackedZ(chunkKey);
 		if (button == 1) {
+<<<<<<< HEAD
 			this.playerTactics.setZoneColor(chunkX, chunkZ, this.activeColorId);
 		} else {
 			this.playerTactics.setZoneColor(chunkX, chunkZ, ZoneColor.NONE.id);
 		}
+=======
+			this.playerTactics.setZoneColor(chunkX, chunkZ, ZoneColor.NONE.id);
+			this.selectionAnchor = null;
+			this.markTacticsDirty();
+			this.applyZoneHomesForOwnedGuards();
+			return true;
+		}
+
+		if (this.selectionAnchor == null) {
+			this.selectionAnchor = chunkKey;
+			return true;
+		}
+
+		int ax = ChunkPos.getPackedX(this.selectionAnchor);
+		int az = ChunkPos.getPackedZ(this.selectionAnchor);
+		int minX = Math.min(ax, chunkX);
+		int maxX = Math.max(ax, chunkX);
+		int minZ = Math.min(az, chunkZ);
+		int maxZ = Math.max(az, chunkZ);
+		for (int x = minX; x <= maxX; x++) {
+			for (int z = minZ; z <= maxZ; z++) {
+				this.playerTactics.setZoneColor(x, z, this.activeColorId);
+			}
+		}
+		this.selectionAnchor = null;
+>>>>>>> origin/main
 		this.markTacticsDirty();
 		this.applyZoneHomesForOwnedGuards();
 		return true;
@@ -311,15 +342,25 @@ public final class GuardTacticsInventory extends SimpleInventory {
 			this.zoneSlotChunks.put(slot, key);
 
 			ZoneColor color = ZoneColor.fromId(this.playerTactics.getZoneColor(chunkX, chunkZ));
+<<<<<<< HEAD
 			String title = "Chunk " + chunkX + ", " + chunkZ;
+=======
+			boolean isAnchor = this.selectionAnchor != null && this.selectionAnchor == key;
+			String title = "Chunk " + chunkX + ", " + chunkZ + (isAnchor ? " [Anchor]" : "");
+>>>>>>> origin/main
 			this.setStack(slot, this.card(
 				color.item,
 				title,
 				color.formatting,
 				"Zone: " + color.label,
+<<<<<<< HEAD
 				"Hierarchy: " + this.roleSummaryForColor(color.id),
 				"Left: Clear this chunk",
 				"Right: Paint with " + activeColor.label
+=======
+				"Left: Set anchor / fill rectangle",
+				"Right: Clear this chunk"
+>>>>>>> origin/main
 			));
 		}
 
@@ -327,7 +368,11 @@ public final class GuardTacticsInventory extends SimpleInventory {
 			Items.FILLED_MAP,
 			"Zones",
 			Formatting.AQUA,
+<<<<<<< HEAD
 			"Top-down rendered chunk map",
+=======
+			"Top-down chunk map",
+>>>>>>> origin/main
 			"Paint: " + activeColor.label,
 			"Zoom: " + this.zoom + "x  Center: " + this.mapCenterX + ", " + this.mapCenterZ,
 			"Assigned chunks: " + this.playerTactics.getColoredChunkCount()
@@ -457,14 +502,24 @@ public final class GuardTacticsInventory extends SimpleInventory {
 			this.setStack(PAN_NORTH_SLOT, this.card(Items.COMPASS, "Pan North", Formatting.GRAY));
 			this.setStack(PAN_SOUTH_SLOT, this.card(Items.COMPASS, "Pan South", Formatting.GRAY));
 			this.setStack(PAN_EAST_SLOT, this.card(Items.COMPASS, "Pan East", Formatting.GRAY));
+<<<<<<< HEAD
 			this.setStack(ADD_ROLE_SLOT, this.card(Items.NAME_TAG, "Selection Paint", Formatting.AQUA, "Client map supports drag-select + right-click paint"));
+=======
+			this.setStack(ADD_ROLE_SLOT, this.card(Items.NAME_TAG, "Region Fill", Formatting.AQUA, "Left-click first chunk to set anchor", "then left-click second chunk to fill area"));
+>>>>>>> origin/main
 			this.setStack(INFO_SLOT, this.card(
 				Items.WRITABLE_BOOK,
 				"Zone Controls",
 				Formatting.YELLOW,
+<<<<<<< HEAD
 				"Left click chunk: clear",
 				"Right click chunk: paint active color",
 				"Use color cards to change active paint"
+=======
+				"Left click: set anchor / fill rectangle",
+				"Right click: clear current chunk",
+				"Use color cards to set paint color"
+>>>>>>> origin/main
 			));
 		} else {
 			int roleCount = this.playerTactics.roleCount();
@@ -587,6 +642,7 @@ public final class GuardTacticsInventory extends SimpleInventory {
 		return loaded;
 	}
 
+<<<<<<< HEAD
 	private String roleSummaryForColor(int colorId) {
 		if (colorId <= 0) {
 			return "none";
@@ -621,6 +677,8 @@ public final class GuardTacticsInventory extends SimpleInventory {
 		return extra > 0 ? summary + " +" + extra : summary;
 	}
 
+=======
+>>>>>>> origin/main
 	private List<GuardEntity> collectOwnedGuards() {
 		MinecraftServer server = this.owner.getCommandSource().getServer();
 		if (server == null) {

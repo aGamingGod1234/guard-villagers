@@ -1,17 +1,24 @@
 package com.guardvillagers.client;
 
 import com.guardvillagers.tactics.GuardTacticsScreenHandler;
+<<<<<<< HEAD
 import net.minecraft.block.BlockState;
 import net.minecraft.block.MapColor;
 import net.minecraft.client.gui.Click;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.client.world.ClientWorld;
+=======
+import net.minecraft.client.gui.Click;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.screen.ingame.HandledScreen;
+>>>>>>> origin/main
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.text.Text;
+<<<<<<< HEAD
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.Heightmap;
@@ -33,16 +40,31 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private static final int MAP_SLOT_END = 44;
 	private static final int SLOT_TITLE = 4;
 	private static final int SLOT_MODE = 50;
+=======
+
+import java.util.HashMap;
+import java.util.Map;
+
+public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHandler> {
+	private static final int SLOT_TITLE = 4;
+	private static final int SLOT_MODE = 50;
+	private static final int SLOT_INFO = 52;
+>>>>>>> origin/main
 	private static final int[] COLOR_SLOTS = {5, 6, 7, 8};
 	private static final int[] RAIL_SLOTS = {45, 53, 47, 46, 49, 48, 50, 51, 52};
 
 	private static final int BG_DARK = 0xF10B111A;
+<<<<<<< HEAD
 	private static final int MAP_TINT = 0xFF040A11;
+=======
+	private static final int MAP_TINT = 0xCC1A2B3C;
+>>>>>>> origin/main
 	private static final int MAP_BORDER = 0xFF2F4F67;
 	private static final int HUD_BG = 0xC61A2A3D;
 	private static final int HUD_BORDER = 0xFF4C6B83;
 	private static final int TEXT_MAIN = 0xFFEAF4FF;
 	private static final int TEXT_SUB = 0xFFC0D3E6;
+<<<<<<< HEAD
 	private static final long SLOW_ZONE_RENDER_NANOS = 20_000_000L;
 	private static final long SLOW_ZONE_RENDER_LOG_COOLDOWN_NANOS = 2_000_000_000L;
 	private static final int MAX_TERRAIN_COLOR_CACHE_SIZE = 1024;
@@ -56,6 +78,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private ChunkPoint selectionEnd;
 	private boolean draggingSelection;
 	private double zoneZoom = 1.0D;
+=======
+
+	private final Map<Integer, HitArea> slotHitAreas = new HashMap<>();
+>>>>>>> origin/main
 
 	private int mapX;
 	private int mapY;
@@ -69,7 +95,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private int paletteY;
 	private int paletteSize;
 	private int paletteGap;
+<<<<<<< HEAD
 	private long lastSlowZoneRenderLogAt;
+=======
+>>>>>>> origin/main
 
 	public GuardTacticsScreen(GuardTacticsScreenHandler handler, PlayerInventory inventory, Text title) {
 		super(handler, inventory, title);
@@ -82,8 +111,11 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		this.backgroundHeight = this.height;
 		this.x = 0;
 		this.y = 0;
+<<<<<<< HEAD
 		this.terrainColorCache.clear();
 		this.lastSlowZoneRenderLogAt = 0L;
+=======
+>>>>>>> origin/main
 		this.computeLayout();
 	}
 
@@ -99,7 +131,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	protected void drawBackground(DrawContext context, float delta, int mouseX, int mouseY) {
 		this.computeLayout();
 		this.slotHitAreas.clear();
+<<<<<<< HEAD
 		this.zoneSlots.clear();
+=======
+>>>>>>> origin/main
 		this.drawMapBackdrop(context);
 		this.drawTopHud(context, mouseX, mouseY);
 		this.drawPalette(context, mouseX, mouseY);
@@ -127,12 +162,17 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			this.textRenderer,
 			hierarchy
 				? "Move guards between lanes and role slots. Use side controls for quick actions."
+<<<<<<< HEAD
 				: "Left drag: select rendered chunks | Right click: paint | Scroll: smooth zoom",
+=======
+				: "Paint and clear zone tiles with color chips and side controls.",
+>>>>>>> origin/main
 			this.mapX + 12,
 			this.mapY + this.mapH - 14,
 			TEXT_SUB,
 			false
 		);
+<<<<<<< HEAD
 		if (!hierarchy) {
 			context.drawText(
 				this.textRenderer,
@@ -143,6 +183,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 				false
 			);
 		}
+=======
+>>>>>>> origin/main
 	}
 
 	@Override
@@ -151,6 +193,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		if (button != 0 && button != 1) {
 			return super.mouseClicked(click, doubleClick);
 		}
+<<<<<<< HEAD
 
 		if (!this.isHierarchyMode() && this.contains(this.mapX, this.mapY, this.mapW, this.mapH, click.x(), click.y())) {
 			int zoneSlot = this.findZoneSlotAt(click.x(), click.y());
@@ -180,6 +223,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			return true;
 		}
 
+=======
+>>>>>>> origin/main
 		int slotId = this.findSlotAt(click.x(), click.y());
 		if (slotId >= 0) {
 			this.onMouseClick(this.handler.getSlot(slotId), slotId, button, SlotActionType.PICKUP);
@@ -192,6 +237,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	}
 
 	@Override
+<<<<<<< HEAD
 	public boolean mouseDragged(Click click, double deltaX, double deltaY) {
 		if (!this.isHierarchyMode() && this.draggingSelection && click.button() == 0) {
 			this.extendSelectionTo(click.x(), click.y());
@@ -224,12 +270,15 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	}
 
 	@Override
+=======
+>>>>>>> origin/main
 	protected boolean isPointWithinBounds(int x, int y, int width, int height, double pointX, double pointY) {
 		return false;
 	}
 
 	private void drawMapBackdrop(DrawContext context) {
 		context.fill(0, 0, this.width, this.height, BG_DARK);
+<<<<<<< HEAD
 		context.fill(this.mapX, this.mapY, this.mapX + this.mapW, this.mapY + this.mapH, MAP_TINT);
 
 		if (this.isHierarchyMode()) {
@@ -241,6 +290,24 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 				int tint = (i % 2 == 0) ? 0x122E4A3B : 0x122A3D4F;
 				context.fill(this.mapX + 1, y0, this.mapX + this.mapW - 1, y1, tint);
 			}
+=======
+		context.fill(this.mapX - 1, this.mapY - 1, this.mapX + this.mapW + 1, this.mapY + this.mapH + 1, 0xF2050A12);
+		context.fill(this.mapX, this.mapY, this.mapX + this.mapW, this.mapY + this.mapH, MAP_TINT);
+		this.drawOutline(context, this.mapX, this.mapY, this.mapW, this.mapH, MAP_BORDER);
+
+		int bands = 16;
+		for (int i = 0; i < bands; i++) {
+			int y0 = this.mapY + (i * this.mapH) / bands;
+			int y1 = this.mapY + ((i + 1) * this.mapH) / bands;
+			int tint = (i % 2 == 0) ? 0x122E4A3B : 0x122A3D4F;
+			context.fill(this.mapX + 1, y0, this.mapX + this.mapW - 1, y1, tint);
+		}
+
+		for (int i = 0; i < 9; i++) {
+			int ridgeY = this.mapY + 30 + i * Math.max(18, (this.mapH - 80) / 8);
+			int inset = (i % 2 == 0) ? 22 : 34;
+			context.fill(this.mapX + inset, ridgeY, this.mapX + this.mapW - inset, ridgeY + 1, 0x2A5E89A8);
+>>>>>>> origin/main
 		}
 	}
 
@@ -276,6 +343,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	}
 
 	private void drawZonesLayer(DrawContext context, int mouseX, int mouseY) {
+<<<<<<< HEAD
 		ClientWorld world = this.client == null ? null : this.client.world;
 		if (world == null) {
 			return;
@@ -345,6 +413,25 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 				this.mapY + this.mapH / 2 - 4,
 				0xFF9CB2C7
 			);
+=======
+		double baseX = this.mapX + 26;
+		double baseY = this.mapY + 52;
+		double stepX = (this.mapW - 110.0D) / 8.0D;
+		double stepY = (this.mapH - 130.0D) / 2.0D;
+		int tileW = Math.max(44, Math.min(64, (int) Math.floor(stepX - 7.0D)));
+		int tileH = Math.max(24, Math.min(34, (int) Math.floor(stepY - 12.0D)));
+
+		for (int slot = 18; slot <= 44; slot++) {
+			int idx = slot - 18;
+			int row = idx / 9;
+			int col = idx % 9;
+			double jitterX = Math.sin((col * 0.9D) + (row * 0.6D)) * 5.5D;
+			double jitterY = Math.cos((col * 0.8D) + (row * 1.1D)) * 4.0D;
+			double stagger = (row == 1) ? stepX * 0.34D : 0.0D;
+			int x = (int) Math.round(baseX + col * stepX + stagger + jitterX);
+			int y = (int) Math.round(baseY + row * stepY + jitterY);
+			this.drawSlotCard(context, slot, x, y, tileW, tileH, mouseX, mouseY, true, true);
+>>>>>>> origin/main
 		}
 	}
 
@@ -442,6 +529,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		return -1;
 	}
 
+<<<<<<< HEAD
 	private int findZoneSlotAt(double mouseX, double mouseY) {
 		for (Map.Entry<Integer, ZoneSlotView> entry : this.zoneSlots.entrySet()) {
 			HitArea area = this.slotHitAreas.get(entry.getKey());
@@ -455,6 +543,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		return -1;
 	}
 
+=======
+>>>>>>> origin/main
 	private boolean isHierarchyMode() {
 		ItemStack modeStack = this.handler.getSlot(SLOT_MODE).getStack();
 		return !modeStack.isEmpty() && modeStack.isOf(Items.COMPASS);
@@ -507,6 +597,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		return 0xC2364A5C;
 	}
 
+<<<<<<< HEAD
 	private ChunkPoint parseChunkPoint(int slotId) {
 		ItemStack stack = this.handler.getSlot(slotId).getStack();
 		if (stack.isEmpty()) {
@@ -665,6 +756,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		return (r << 16) | (g << 8) | b;
 	}
 
+=======
+>>>>>>> origin/main
 	private void drawOutline(DrawContext context, int x, int y, int w, int h, int color) {
 		context.fill(x, y, x + w, y + 1, color);
 		context.fill(x, y + h - 1, x + w, y + h, color);
@@ -699,6 +792,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		return (a << 24) | (r << 16) | (g << 8) | b;
 	}
 
+<<<<<<< HEAD
 	private void maybeLogSlowZoneRender(long renderStartNanos, int renderedChunkCount) {
 		long elapsed = System.nanoTime() - renderStartNanos;
 		if (elapsed < SLOW_ZONE_RENDER_NANOS) {
@@ -725,4 +819,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 	private record ChunkPoint(int x, int z) {
 	}
+=======
+	private record HitArea(int x, int y, int w, int h) {
+	}
+>>>>>>> origin/main
 }
