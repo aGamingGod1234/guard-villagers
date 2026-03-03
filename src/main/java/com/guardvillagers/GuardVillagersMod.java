@@ -239,7 +239,6 @@ public class GuardVillagersMod implements ModInitializer {
 
 	private void registerGuardCommands(com.mojang.brigadier.CommandDispatcher<ServerCommandSource> dispatcher, CommandRegistryAccess registryAccess, CommandManager.RegistrationEnvironment environment) {
 		dispatcher.register(buildGuardsCommand("guards"));
-		dispatcher.register(buildGuardsCommand("gaurds"));
 	}
 
 	private com.mojang.brigadier.builder.LiteralArgumentBuilder<ServerCommandSource> buildGuardsCommand(String rootLiteral) {

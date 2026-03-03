@@ -1035,8 +1035,12 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private void pickFallbackTarget(ServerWorld world) {
 		LivingEntity current = this.getTarget();
 		if (current != null && current.isAlive()) {
-			this.combatCooldown = 80;
-			return;
+			if (this.isAlly(current)) {
+				this.clearCombatTarget();
+			} else {
+				this.combatCooldown = 80;
+				return;
+			}
 		}
 
 		List<HostileEntity> hostiles = world.getEntitiesByClass(HostileEntity.class, this.getBoundingBox().expand(20.0D), this::canTargetHostile);
@@ -1184,6 +1188,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			return true;
 		}
 		if (entity instanceof PlayerEntity player) {
+			if (player.isSpectator() || player.getAbilities().creativeMode) {
+				return true;
+			}
 			if (this.ownerUuid != null && this.ownerUuid.equals(player.getUuid())) {
 				return true;
 			}
