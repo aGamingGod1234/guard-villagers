@@ -951,13 +951,16 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 				|| target.getMainHandStack().isOf(Items.TRIDENT);
 			boolean meleeWindow = this.getRole() != GuardRole.BOWMAN && distanceSq < 9.0D && !rangedThreat;
 			shouldBlock = !meleeWindow && distanceSq <= (rangedThreat ? 256.0D : 81.0D);
-			if (this.getRole() == GuardRole.BOWMAN && distanceSq <= 196.0D) {
+			if (this.getRole() == GuardRole.BOWMAN && !rangedThreat && distanceSq <= 196.0D) {
 				shouldBlock = false;
 			}
 		}
 
 		if (shouldBlock) {
-			if (!this.isUsingItem()) {
+			if (this.isUsingItem() && this.getActiveHand() == Hand.MAIN_HAND) {
+				this.clearActiveItem();
+			}
+			if (!this.isUsingItem() || this.getActiveHand() != Hand.OFF_HAND) {
 				this.setCurrentHand(Hand.OFF_HAND);
 			}
 		} else if (this.isUsingItem() && this.getActiveHand() == Hand.OFF_HAND) {
