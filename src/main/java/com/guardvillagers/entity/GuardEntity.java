@@ -935,7 +935,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private void updateShieldUsage() {
 		ItemStack shield = this.getEquippedStack(EquipmentSlot.OFFHAND);
 		if (!shield.isOf(Items.SHIELD)) {
-			if (this.isUsingItem()) {
+			if (this.isUsingItem() && this.getActiveHand() == Hand.OFF_HAND) {
 				this.clearActiveItem();
 			}
 			return;
@@ -960,7 +960,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			if (!this.isUsingItem()) {
 				this.setCurrentHand(Hand.OFF_HAND);
 			}
-		} else if (this.isUsingItem()) {
+		} else if (this.isUsingItem() && this.getActiveHand() == Hand.OFF_HAND) {
 			this.clearActiveItem();
 		}
 	}
