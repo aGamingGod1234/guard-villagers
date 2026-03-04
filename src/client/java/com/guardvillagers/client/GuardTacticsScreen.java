@@ -441,12 +441,27 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			GuardEntity guard = hoveredGuard.guard();
 			List<Text> tooltip = new ArrayList<>();
 			tooltip.add(guard.getName());
-			tooltip.add(Text.literal("Lv " + guard.getLevel()));
-			tooltip.add(Text.literal("Armor: "
-				+ this.itemName(guard.getEquippedStack(EquipmentSlot.HEAD)) + ", "
-				+ this.itemName(guard.getEquippedStack(EquipmentSlot.CHEST)) + ", "
-				+ this.itemName(guard.getEquippedStack(EquipmentSlot.LEGS)) + ", "
-				+ this.itemName(guard.getEquippedStack(EquipmentSlot.FEET))));
+			ItemStack weapon = guard.getMainHandStack();
+			ItemStack helmet = guard.getEquippedStack(EquipmentSlot.HEAD);
+			ItemStack chest = guard.getEquippedStack(EquipmentSlot.CHEST);
+			ItemStack legs = guard.getEquippedStack(EquipmentSlot.LEGS);
+			ItemStack boots = guard.getEquippedStack(EquipmentSlot.FEET);
+			int headArmor = this.armorPoints(helmet);
+			int chestArmor = this.armorPoints(chest);
+			int legsArmor = this.armorPoints(legs);
+			int bootsArmor = this.armorPoints(boots);
+			int totalArmor = headArmor + chestArmor + legsArmor + bootsArmor;
+			double attackSpeed = 1.6D;
+			int cooldownTicks = Math.max(1, (int) Math.round(20.0D / attackSpeed));
+			tooltip.add(Text.literal("\u00A77Weapon: \u00A7f" + this.itemName(weapon) + " (" + this.weaponDamage(weapon) + " dmg)"));
+			tooltip.add(Text.literal("\u00A77Helmet: \u00A7f" + this.itemName(helmet) + " (" + headArmor + ")"));
+			tooltip.add(Text.literal("\u00A77Chestplate: \u00A7f" + this.itemName(chest) + " (" + chestArmor + ")"));
+			tooltip.add(Text.literal("\u00A77Leggings: \u00A7f" + this.itemName(legs) + " (" + legsArmor + ")"));
+			tooltip.add(Text.literal("\u00A77Boots: \u00A7f" + this.itemName(boots) + " (" + bootsArmor + ")"));
+			tooltip.add(Text.literal("\u00A77Total armour: \u00A7f" + totalArmor));
+			tooltip.add(Text.literal("\u00A77Health: \u00A7f" + (int) guard.getMaxHealth() + " HP"));
+			tooltip.add(Text.literal("\u00A77Attack speed: \u00A7f" + String.format(Locale.ROOT, "%.2f", attackSpeed) + " (" + cooldownTicks + "t cd)"));
+			tooltip.add(Text.literal("\u00A77Hire price: \u00A7f" + com.guardvillagers.GuardHirePricing.getHirePrice(guard.getLevel()) + " emerald(s)"));
 			context.drawTooltip(this.textRenderer, tooltip, mouseX, mouseY);
 		}
 	}
@@ -611,6 +626,51 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			return "None";
 		}
 		return stack.getName().getString();
+	}
+
+	private int armorPoints(ItemStack stack) {
+		if (stack == null || stack.isEmpty()) {
+			return 0;
+		}
+		String path = Registries.ITEM.getId(stack.getItem()).getPath();
+		if (path.contains("helmet")) {
+			if (path.contains("netherite") || path.contains("diamond")) return 3;
+			if (path.contains("iron")) return 2;
+			if (path.contains("chainmail") || path.contains("golden")) return 2;
+			if (path.contains("leather")) return 1;
+		}
+		if (path.contains("chestplate")) {
+			if (path.contains("netherite") || path.contains("diamond")) return 8;
+			if (path.contains("iron")) return 6;
+			if (path.contains("chainmail") || path.contains("golden")) return 5;
+			if (path.contains("leather")) return 3;
+		}
+		if (path.contains("leggings")) {
+			if (path.contains("netherite") || path.contains("diamond")) return 6;
+			if (path.contains("iron")) return 5;
+			if (path.contains("chainmail") || path.contains("golden")) return 3;
+			if (path.contains("leather")) return 2;
+		}
+		if (path.contains("boots")) {
+			if (path.contains("netherite") || path.contains("diamond")) return 3;
+			if (path.contains("iron")) return 2;
+			if (path.contains("chainmail") || path.contains("golden")) return 1;
+			if (path.contains("leather")) return 1;
+		}
+		return 0;
+	}
+
+	private int weaponDamage(ItemStack stack) {
+		if (stack.isOf(Items.STONE_SWORD)) {
+			return 5;
+		}
+		if (stack.isOf(Items.IRON_SWORD)) {
+			return 6;
+		}
+		if (stack.isOf(Items.DIAMOND_SWORD)) {
+			return 7;
+		}
+		return 1;
 	}
 
 	private GuardCardHitbox findHoveredGuard(int mouseX, int mouseY) {

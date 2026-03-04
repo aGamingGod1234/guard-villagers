@@ -4,10 +4,9 @@ import net.minecraft.util.math.random.Random;
 
 public enum GuardBehavior {
 	PERIMETER(0),
-	BODYGUARD(1),
-	CROWD_CONTROL(2),
-	OFFENSIVE(3),
-	DEFENSIVE(4);
+	CROWD_CONTROL(1),
+	OFFENSIVE(2),
+	DEFENSIVE(3);
 
 	private final int id;
 

@@ -17,6 +17,8 @@ import java.util.Map;
 public final class ChunkTerrainCache {
 	private static final int MAX_TILES_PER_WORLD_DIMENSION = 2_048;
 	private static final int FALLBACK_COLOR = 0xFF2A313A;
+	private static final int TILE_RESOLUTION = 64;
+	private static final int TILE_PIXEL_COUNT = TILE_RESOLUTION * TILE_RESOLUTION;
 
 	private final Map<String, LinkedHashMap<Long, TerrainTile>> tilesByWorldDimension = new HashMap<>();
 	private final BlockPos.Mutable samplePos = new BlockPos.Mutable();
@@ -64,15 +66,17 @@ public final class ChunkTerrainCache {
 	}
 
 	private TerrainTile generateTile(ClientWorld world, WorldChunk chunk) {
-		int[] colors = new int[256];
+		int[] colors = new int[TILE_PIXEL_COUNT];
 		long sumRed = 0;
 		long sumGreen = 0;
 		long sumBlue = 0;
 		ChunkPos chunkPos = chunk.getPos();
 		int worldBottom = world.getBottomY();
 
-		for (int localZ = 0; localZ < 16; localZ++) {
-			for (int localX = 0; localX < 16; localX++) {
+		for (int pixelZ = 0; pixelZ < TILE_RESOLUTION; pixelZ++) {
+			for (int pixelX = 0; pixelX < TILE_RESOLUTION; pixelX++) {
+				int localX = (pixelX * 16) / TILE_RESOLUTION;
+				int localZ = (pixelZ * 16) / TILE_RESOLUTION;
 				int worldX = chunkPos.getStartX() + localX;
 				int worldZ = chunkPos.getStartZ() + localZ;
 				int topY = chunk.sampleHeightmap(Heightmap.Type.WORLD_SURFACE, localX, localZ);
@@ -89,7 +93,7 @@ public final class ChunkTerrainCache {
 
 				MapColor mapColor = state.getMapColor(world, this.samplePos);
 				int argb = mapColor == MapColor.CLEAR ? FALLBACK_COLOR : 0xFF000000 | mapColor.color;
-				int index = (localZ << 4) | localX;
+				int index = pixelZ * TILE_RESOLUTION + pixelX;
 				colors[index] = argb;
 				sumRed += (argb >> 16) & 0xFF;
 				sumGreen += (argb >> 8) & 0xFF;
@@ -97,9 +101,9 @@ public final class ChunkTerrainCache {
 			}
 		}
 
-		int averageRed = (int) (sumRed / 256L);
-		int averageGreen = (int) (sumGreen / 256L);
-		int averageBlue = (int) (sumBlue / 256L);
+		int averageRed = (int) (sumRed / TILE_PIXEL_COUNT);
+		int averageGreen = (int) (sumGreen / TILE_PIXEL_COUNT);
+		int averageBlue = (int) (sumBlue / TILE_PIXEL_COUNT);
 		int averageColor = 0xFF000000 | (averageRed << 16) | (averageGreen << 8) | averageBlue;
 		return new TerrainTile(colors, averageColor);
 	}

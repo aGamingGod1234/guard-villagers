@@ -5,7 +5,6 @@ import com.guardvillagers.GuardOwnershipIndex;
 import com.guardvillagers.GuardPlayerUpgrades;
 import com.guardvillagers.GuardReputationManager;
 import com.guardvillagers.GuardVillagersMod;
-import com.guardvillagers.entity.goal.BodyguardGoal;
 import com.guardvillagers.entity.goal.CrowdControlGoal;
 import com.guardvillagers.entity.goal.ElectLeaderGoal;
 import com.guardvillagers.entity.goal.FormationFollowOwnerGoal;
@@ -212,13 +211,12 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.goalSelector.add(1, new TacticalRetreatGoal(this, 1.35D));
 		this.goalSelector.add(2, new LongDoorInteractGoal(this, true));
 		this.goalSelector.add(3, new RaidTacticsGoal(this, 1.2D));
-		this.goalSelector.add(4, new BodyguardGoal(this, 1.15D));
-		this.goalSelector.add(5, new PerimeterPatrolGoal(this, 1.0D));
-		this.goalSelector.add(6, new CrowdControlGoal(this, 1.0D));
-		this.goalSelector.add(7, new FormationFollowOwnerGoal(this, 1.0D));
-		this.goalSelector.add(8, new WanderAroundFarGoal(this, 0.8D));
-		this.goalSelector.add(9, new LookAtEntityGoal(this, PlayerEntity.class, 8.0F));
-		this.goalSelector.add(10, new LookAroundGoal(this));
+		this.goalSelector.add(4, new PerimeterPatrolGoal(this, 1.0D));
+		this.goalSelector.add(5, new CrowdControlGoal(this, 1.0D));
+		this.goalSelector.add(6, new FormationFollowOwnerGoal(this, 1.0D));
+		this.goalSelector.add(7, new WanderAroundFarGoal(this, 0.8D));
+		this.goalSelector.add(8, new LookAtEntityGoal(this, PlayerEntity.class, 8.0F));
+		this.goalSelector.add(9, new LookAroundGoal(this));
 
 		this.targetSelector.add(1, new RevengeGoal(this, GuardEntity.class));
 		this.targetSelector.add(2, new ActiveTargetGoal<>(this, HostileEntity.class, true, false));
@@ -514,43 +512,6 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		return owner;
 	}
 
-	public LivingEntity findBodyguardTarget(ServerWorld world) {
-		LivingEntity best = null;
-		double bestScore = Double.NEGATIVE_INFINITY;
-
-		for (ServerPlayerEntity player : world.getPlayers(p -> !p.isSpectator(), 32)) {
-			if (player == this.resolveOwner(world)) {
-				continue;
-			}
-			int rep = GuardReputationManager.getEffectiveReputation(world, player.getUuid(), this.getBlockPos(), 48);
-			boolean highValue = rep >= 20 || player.hasStatusEffect(net.minecraft.entity.effect.StatusEffects.HERO_OF_THE_VILLAGE);
-			if (!highValue) {
-				continue;
-			}
-
-			double score = 1000.0D - this.squaredDistanceTo(player) + rep * 5.0D;
-			if (score > bestScore) {
-				bestScore = score;
-				best = player;
-			}
-		}
-
-		Box box = this.getBoundingBox().expand(32.0D);
-		for (VillagerEntity villager : world.getEntitiesByClass(VillagerEntity.class, box, VillagerEntity::isAlive)) {
-			boolean farmer = villager.getVillagerData().profession().matchesKey(VillagerProfession.FARMER);
-			boolean librarian = villager.getVillagerData().profession().matchesKey(VillagerProfession.LIBRARIAN);
-			if (!farmer && !librarian) {
-				continue;
-			}
-			double score = 500.0D - this.squaredDistanceTo(villager);
-			if (score > bestScore) {
-				bestScore = score;
-				best = villager;
-			}
-		}
-		return best;
-	}
-
 	public void assignRandomRole(ServerWorld world) {
 		this.setRole(GuardRole.random(world.getRandom()));
 	}
@@ -569,7 +530,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		if (!this.hasOwner()) {
 			this.assignRandomRole(world);
 		}
-		this.setBehavior(GuardBehavior.BODYGUARD);
+		this.setBehavior(GuardBehavior.DEFENSIVE);
 		this.setFormationType(FormationType.FOLLOW);
 		this.setHierarchyRow(Math.max(0, 2 - Math.min(2, this.getLevel() / 4)));
 		this.setHierarchyColumn(world.getRandom().nextBetween(0, 2));
@@ -716,13 +677,18 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 					player.sendMessage(Text.literal("The guard distrusts you due to village reputation."), true);
 					return ActionResult.SUCCESS;
 				}
+				int hirePrice = com.guardvillagers.GuardHirePricing.getHirePrice(this.getLevel());
+				if (!player.getAbilities().creativeMode && stack.getCount() < hirePrice) {
+					player.sendMessage(Text.literal("Need " + hirePrice + " emerald(s) to hire this guard."), true);
+					return ActionResult.SUCCESS;
+				}
 
 				this.setOwnerUuid(player.getUuid());
 				this.setStaying(false);
-				this.setBehavior(GuardBehavior.BODYGUARD);
+				this.setBehavior(GuardBehavior.DEFENSIVE);
 				this.setFormationType(FormationType.FOLLOW);
 				if (!player.getAbilities().creativeMode) {
-					stack.decrement(1);
+					stack.decrement(hirePrice);
 				}
 				player.sendMessage(Text.literal("Guard is now loyal to you."), true);
 			}

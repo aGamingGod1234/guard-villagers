@@ -13,6 +13,7 @@ public final class ChunkMapWidget {
 	private static final int MAP_BACKGROUND = 0xFF10161D;
 	private static final int SELECTION_OVERLAY = 0x446FD3FF;
 	private static final int HOVER_OVERLAY = 0x33FFFFFF;
+	private static final int TERRAIN_TILE_RESOLUTION = 64;
 
 	private final ClientTacticsDataStore dataStore;
 	private final ChunkTerrainCache terrainCache;
@@ -296,19 +297,19 @@ public final class ChunkMapWidget {
 		int widthPixels = right - left;
 		int heightPixels = bottom - top;
 		int[] colors = tile.colors();
-		for (int pixelZ = 0; pixelZ < 16; pixelZ++) {
-			int rowTop = top + (heightPixels * pixelZ) / 16;
-			int rowBottom = top + (heightPixels * (pixelZ + 1)) / 16;
+		for (int pixelZ = 0; pixelZ < TERRAIN_TILE_RESOLUTION; pixelZ++) {
+			int rowTop = top + (heightPixels * pixelZ) / TERRAIN_TILE_RESOLUTION;
+			int rowBottom = top + (heightPixels * (pixelZ + 1)) / TERRAIN_TILE_RESOLUTION;
 			if (rowBottom <= rowTop) {
 				continue;
 			}
-			for (int pixelX = 0; pixelX < 16; pixelX++) {
-				int columnLeft = left + (widthPixels * pixelX) / 16;
-				int columnRight = left + (widthPixels * (pixelX + 1)) / 16;
+			for (int pixelX = 0; pixelX < TERRAIN_TILE_RESOLUTION; pixelX++) {
+				int columnLeft = left + (widthPixels * pixelX) / TERRAIN_TILE_RESOLUTION;
+				int columnRight = left + (widthPixels * (pixelX + 1)) / TERRAIN_TILE_RESOLUTION;
 				if (columnRight <= columnLeft) {
 					continue;
 				}
-				int color = colors[(pixelZ << 4) | pixelX];
+				int color = colors[pixelZ * TERRAIN_TILE_RESOLUTION + pixelX];
 				context.fill(columnLeft, rowTop, columnRight, rowBottom, color);
 			}
 		}

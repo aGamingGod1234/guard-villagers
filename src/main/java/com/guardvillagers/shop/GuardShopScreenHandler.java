@@ -49,7 +49,8 @@ public class GuardShopScreenHandler extends GenericContainerScreenHandler {
 			}
 
 			try {
-				if (this.shopInventory.handleClick(slotIndex)) {
+				boolean bulkPurchase = actionType == SlotActionType.QUICK_MOVE;
+				if (this.shopInventory.handleClick(slotIndex, bulkPurchase)) {
 					this.shopInventory.refresh();
 					this.sendContentUpdates();
 				}

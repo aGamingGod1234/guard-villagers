@@ -9,6 +9,7 @@ public final class GuardPlayerUpgrades {
 	public static final int MAX_ARMOR_LEVEL = 8;
 	public static final int MAX_WEAPON_LEVEL = 5;
 	public static final int MAX_SUPPORT_LEVEL = 3;
+	public static final int MAX_HIRE_LEVEL = 1 + MAX_ARMOR_LEVEL + MAX_WEAPON_LEVEL + MAX_SUPPORT_LEVEL;
 	private static final Codec<Integer> ARMOR_LEVEL_CODEC = Codec.intRange(0, MAX_ARMOR_LEVEL);
 	private static final Codec<Integer> WEAPON_LEVEL_CODEC = Codec.intRange(0, MAX_WEAPON_LEVEL);
 	private static final Codec<Integer> SUPPORT_LEVEL_CODEC = Codec.intRange(0, MAX_SUPPORT_LEVEL);
@@ -103,15 +104,29 @@ public final class GuardPlayerUpgrades {
 	}
 
 	public int getGuardCost() {
-		return 1 + this.armorLevel + this.weaponLevel + this.supportLevel;
+		return GuardHirePricing.getHirePrice(this.getHireLevel());
+	}
+
+	public int getHireLevel() {
+		return Math.max(1, 1 + this.armorLevel + this.weaponLevel + this.supportLevel);
 	}
 
 	public int getArmorUpgradeCost() {
-		return 2 << this.armorLevel;
+		return this.getArmorUpgradeCostForLevel(this.armorLevel);
+	}
+
+	public int getArmorUpgradeCostForLevel(int level) {
+		int normalized = Math.max(0, Math.min(MAX_ARMOR_LEVEL, level));
+		return 2 << normalized;
 	}
 
 	public int getWeaponUpgradeCost() {
-		return 2 << this.weaponLevel;
+		return this.getWeaponUpgradeCostForLevel(this.weaponLevel);
+	}
+
+	public int getWeaponUpgradeCostForLevel(int level) {
+		int normalized = Math.max(0, Math.min(MAX_WEAPON_LEVEL, level));
+		return 2 << normalized;
 	}
 
 	public int getHealingUpgradeCost() {

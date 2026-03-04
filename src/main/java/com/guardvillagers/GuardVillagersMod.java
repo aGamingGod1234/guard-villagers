@@ -271,14 +271,12 @@ public class GuardVillagersMod implements ModInitializer {
 				}))
 			.then(CommandManager.literal("behavior")
 				.then(CommandManager.literal("perimeter").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.PERIMETER)))
-				.then(CommandManager.literal("bodyguard").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.BODYGUARD)))
 				.then(CommandManager.literal("crowd_control").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.CROWD_CONTROL)))
 				.then(CommandManager.literal("offensive").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.OFFENSIVE)))
 				.then(CommandManager.literal("defensive").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.DEFENSIVE)))
 				.then(CommandManager.literal("random").executes(context -> setBehaviorRandom(context.getSource().getPlayerOrThrow()))))
 			.then(CommandManager.literal("behaviour")
 				.then(CommandManager.literal("perimeter").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.PERIMETER)))
-				.then(CommandManager.literal("bodyguard").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.BODYGUARD)))
 				.then(CommandManager.literal("crowd_control").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.CROWD_CONTROL)))
 				.then(CommandManager.literal("offensive").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.OFFENSIVE)))
 				.then(CommandManager.literal("defensive").executes(context -> setBehavior(context.getSource().getPlayerOrThrow(), GuardBehavior.DEFENSIVE)))
@@ -388,35 +386,52 @@ public class GuardVillagersMod implements ModInitializer {
 
 	public static int getAdjustedGuardCost(ServerPlayerEntity player) {
 		GuardPlayerUpgrades upgrades = getUpgrades(player);
-		int ownedGuards = countOwnedGuards(player.getCommandSource().getServer(), player.getUuid());
-		int scaled = getScaledGuardCost(upgrades, ownedGuards);
-		return Math.min(64, GuardReputationManager.getAdjustedGuardCost(player, scaled));
+		int base = GuardHirePricing.getHirePrice(upgrades.getHireLevel());
+		return GuardReputationManager.getAdjustedGuardCost(player, base);
 	}
 
 	public static GuardPurchaseResult purchaseGuard(ServerPlayerEntity player) {
+		return purchaseGuards(player, 1).result();
+	}
+
+	public static PurchaseBatchResult purchaseGuards(ServerPlayerEntity player, int requestedCount) {
 		if (!GuardReputationManager.isTrustedByGuards(player.getEntityWorld(), player.getUuid(), player.getBlockPos())) {
-			return GuardPurchaseResult.NOT_TRUSTED;
+			return new PurchaseBatchResult(GuardPurchaseResult.NOT_TRUSTED, 0);
 		}
 
+		int normalizedCount = Math.max(1, requestedCount);
 		GuardPlayerUpgrades upgrades = getUpgrades(player);
-		int ownedGuards = countOwnedGuards(player.getCommandSource().getServer(), player.getUuid());
-		int cost = Math.min(64, GuardReputationManager.getAdjustedGuardCost(player, getScaledGuardCost(upgrades, ownedGuards)));
-		if (!GuardEconomy.spendEmeraldBlocks(player, cost)) {
-			return GuardPurchaseResult.INSUFFICIENT_FUNDS;
+		int costPerGuard = GuardReputationManager.getAdjustedGuardCost(player, GuardHirePricing.getHirePrice(upgrades.getHireLevel()));
+		int affordable = costPerGuard <= 0 ? 0 : GuardEconomy.countEmeraldBlocks(player.getInventory()) / costPerGuard;
+		int toSpawn = Math.min(normalizedCount, affordable);
+		if (toSpawn <= 0) {
+			return new PurchaseBatchResult(GuardPurchaseResult.INSUFFICIENT_FUNDS, 0);
 		}
 
 		ServerWorld world = player.getEntityWorld();
+		int spawned = 0;
 		try {
-			if (trySpawnPurchasedGuard(world, player, upgrades)) {
-				return GuardPurchaseResult.SUCCESS;
+			int startRoleIndex = countOwnedGuards(player.getCommandSource().getServer(), player.getUuid()) % GuardRole.values().length;
+			for (int i = 0; i < toSpawn; i++) {
+				if (!GuardEconomy.spendEmeraldBlocks(player, costPerGuard)) {
+					break;
+				}
+				GuardRole roleForSpawn = GuardRole.values()[(startRoleIndex + i) % GuardRole.values().length];
+				if (trySpawnPurchasedGuard(world, player, upgrades, roleForSpawn)) {
+					spawned++;
+					continue;
+				}
+				GuardEconomy.refundEmeraldBlocks(player, costPerGuard);
+				break;
 			}
-			GuardEconomy.refundEmeraldBlocks(player, cost);
+			if (spawned > 0) {
+				return new PurchaseBatchResult(GuardPurchaseResult.SUCCESS, spawned);
+			}
 			LOGGER.warn("Guard purchase failed to spawn for {} in world {}", player.getName().getString(), world.getRegistryKey().getValue());
-			return GuardPurchaseResult.SPAWN_FAILED;
+			return new PurchaseBatchResult(GuardPurchaseResult.SPAWN_FAILED, 0);
 		} catch (RuntimeException exception) {
-			GuardEconomy.refundEmeraldBlocks(player, cost);
 			LOGGER.error("Guard purchase crashed for {}", player.getName().getString(), exception);
-			return GuardPurchaseResult.INTERNAL_ERROR;
+			return new PurchaseBatchResult(GuardPurchaseResult.INTERNAL_ERROR, spawned);
 		}
 	}
 
@@ -424,7 +439,7 @@ public class GuardVillagersMod implements ModInitializer {
 		return GuardEconomy.spendEmeraldBlocks(player, amount);
 	}
 
-	private static boolean trySpawnPurchasedGuard(ServerWorld world, ServerPlayerEntity player, GuardPlayerUpgrades upgrades) {
+	private static boolean trySpawnPurchasedGuard(ServerWorld world, ServerPlayerEntity player, GuardPlayerUpgrades upgrades, GuardRole assignedRole) {
 		double[][] offsets = {
 			{1.0D, 1.0D},
 			{-1.0D, -1.0D},
@@ -446,7 +461,7 @@ public class GuardVillagersMod implements ModInitializer {
 			guard.refreshPositionAndAngles(spawn.getX() + 0.5D, spawn.getY(), spawn.getZ() + 0.5D, player.getYaw(), 0.0F);
 			guard.setOwnerUuid(player.getUuid());
 			guard.setStaying(false);
-			guard.setRole(pickDynamicPurchasedRole(world, player.getUuid(), player.getBlockPos()));
+			guard.setRole(assignedRole);
 			guard.applyPurchasedLoadout(world, upgrades);
 			guard.setSquadLeader(false);
 			if (world.spawnEntity(guard)) {
@@ -462,9 +477,6 @@ public class GuardVillagersMod implements ModInitializer {
 			guard.setStaying(staying);
 			if (!staying) {
 				guard.clearHome();
-				if (guard.getBehavior() == GuardBehavior.BODYGUARD) {
-					guard.setBehavior(GuardBehavior.DEFENSIVE);
-				}
 				guard.clearCombatTarget();
 			}
 			changed++;
@@ -559,41 +571,11 @@ public class GuardVillagersMod implements ModInitializer {
 		return GuardOwnershipIndex.countOwnedGuards(server, ownerUuid);
 	}
 
-	private static int getScaledGuardCost(GuardPlayerUpgrades upgrades, int ownedGuards) {
-		int base = upgrades.getGuardCost();
-		double growth = 1.0D + Math.min(2.0D, ownedGuards * 0.08D);
-		int scaled = (int) Math.round(base * growth);
-		return Math.max(1, Math.min(64, scaled));
-	}
-
 	private static List<GuardEntity> getOwnedGuards(MinecraftServer server, UUID ownerUuid) {
 		return GuardOwnershipIndex.getOwnedGuards(server, ownerUuid);
 	}
 
-	private static GuardRole pickDynamicPurchasedRole(ServerWorld world, UUID ownerUuid, BlockPos center) {
-		List<GuardEntity> owned = world.getEntitiesByClass(
-			GuardEntity.class,
-			new Box(center).expand(128.0D),
-			guard -> guard.isOwnedBy(ownerUuid)
-		);
-		Map<GuardRole, Integer> counts = new java.util.EnumMap<>(GuardRole.class);
-		for (GuardRole role : GuardRole.values()) {
-			counts.put(role, 0);
-		}
-		for (GuardEntity guard : owned) {
-			counts.computeIfPresent(guard.getRole(), (role, count) -> count + 1);
-		}
-
-		GuardRole choice = GuardRole.SWORDSMAN;
-		int best = Integer.MAX_VALUE;
-		for (GuardRole role : GuardRole.values()) {
-			int count = counts.getOrDefault(role, 0);
-			if (count < best) {
-				best = count;
-				choice = role;
-			}
-		}
-		return choice;
+	public record PurchaseBatchResult(GuardPurchaseResult result, int spawnedCount) {
 	}
 
 	public static BlockPos findGuardSpawnPos(ServerWorld world, BlockPos origin, int verticalRange) {
