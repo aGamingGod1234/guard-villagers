@@ -90,6 +90,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private static final TrackedData<Integer> FORMATION = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.INTEGER);
 	private static final TrackedData<Boolean> SQUAD_LEADER = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
 	private static final TrackedData<Integer> EXPERIENCE = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.INTEGER);
+	private static final TrackedData<Boolean> DEBUG_ACTIVE = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
+	private static final TrackedData<Optional<BlockPos>> SYNCED_HOME = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.OPTIONAL_BLOCK_POS);
+	private static final TrackedData<Integer> SYNCED_PATROL_RADIUS = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.INTEGER);
 
 	private static final Identifier LEVEL_HEALTH_MODIFIER_ID = GuardVillagersMod.id("guard_level_health");
 	private static final Identifier LEVEL_DAMAGE_MODIFIER_ID = GuardVillagersMod.id("guard_level_damage");
@@ -113,14 +116,18 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private static final String HOME_Y_KEY = "HomeY";
 	private static final String HOME_Z_KEY = "HomeZ";
 	private static final String PATROL_RADIUS_KEY = "PatrolRadius";
-	private static final String HIERARCHY_ROW_KEY = "HierarchyRow";
-	private static final String HIERARCHY_COLUMN_KEY = "HierarchyColumn";
-	private static final String HIERARCHY_ROLE_KEY = "HierarchyRole";
+	private static final String GROUP_INDEX_KEY = "GroupIndex";
+	private static final String GROUP_COLUMN_KEY = "GroupColumn";
+	private static final String GROUP_NAME_KEY = "GroupName";
+	// Legacy keys for migration
+	private static final String LEGACY_HIERARCHY_ROW_KEY = "HierarchyRow";
+	private static final String LEGACY_HIERARCHY_COLUMN_KEY = "HierarchyColumn";
+	private static final String LEGACY_HIERARCHY_ROLE_KEY = "HierarchyRole";
 	private static final String LAST_LAND_X_KEY = "LastLandX";
 	private static final String LAST_LAND_Y_KEY = "LastLandY";
 	private static final String LAST_LAND_Z_KEY = "LastLandZ";
 	private static final String HAS_LAST_LAND_KEY = "HasLastLand";
-	private static final String HIERARCHY_NAME_PREFIX = "[H] ";
+	private static final String GROUP_NAME_PREFIX = "[G] ";
 	private static final String DEBUG_NAME_PREFIX = "[DBG] ";
 
 	private static final Map<Item, Integer> SWORD_SCORE = Map.ofEntries(
@@ -177,9 +184,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private int patrolRadius = 0;
 	private BlockPos lastLandPos;
 	private BlockPos lastLandCheckPos;
-	private int hierarchyRow = 0;
-	private int hierarchyColumn = 1;
-	private String hierarchyRole = "Vanguard";
+	private int groupIndex = 0;
+	private int groupColumn = 1;
+	private String groupName = "Alpha";
 	private boolean playerMainHand;
 	private final EnumMap<EquipmentSlot, Boolean> playerArmor = new EnumMap<>(EquipmentSlot.class);
 
@@ -241,6 +248,17 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		builder.add(FORMATION, FormationType.FOLLOW.getId());
 		builder.add(SQUAD_LEADER, false);
 		builder.add(EXPERIENCE, 0);
+		builder.add(DEBUG_ACTIVE, false);
+		builder.add(SYNCED_HOME, Optional.empty());
+		builder.add(SYNCED_PATROL_RADIUS, 0);
+	}
+
+	public boolean isDebugActive() {
+		return this.dataTracker.get(DEBUG_ACTIVE);
+	}
+
+	public void setDebugActive(boolean active) {
+		this.dataTracker.set(DEBUG_ACTIVE, active);
 	}
 
 	public GuardRole getRole() {
@@ -373,6 +391,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	public void setHome(BlockPos home, int patrolRadius) {
 		this.home = home.toImmutable();
 		this.setPatrolRadius(patrolRadius);
+		this.syncHomeData();
 	}
 
 	public void setHome(BlockPos home) {
@@ -382,10 +401,25 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	public void clearHome() {
 		this.home = null;
 		this.patrolRadius = 0;
+		this.syncHomeData();
 	}
 
 	public void setPatrolRadius(int patrolRadius) {
 		this.patrolRadius = MathHelper.clamp(patrolRadius, 0, 128);
+		this.syncHomeData();
+	}
+
+	private void syncHomeData() {
+		this.dataTracker.set(SYNCED_HOME, Optional.ofNullable(this.home));
+		this.dataTracker.set(SYNCED_PATROL_RADIUS, this.patrolRadius);
+	}
+
+	public Optional<BlockPos> getSyncedHome() {
+		return this.dataTracker.get(SYNCED_HOME);
+	}
+
+	public int getSyncedPatrolRadius() {
+		return this.dataTracker.get(SYNCED_PATROL_RADIUS);
 	}
 
 	public BlockPos getLastLandPos() {
@@ -404,36 +438,36 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.lastLandPos = currentPos.toImmutable();
 	}
 
-	public int getHierarchyRow() {
-		return this.hierarchyRow;
+	public int getGroupIndex() {
+		return this.groupIndex;
 	}
 
-	public void setHierarchyRow(int hierarchyRow) {
-		this.hierarchyRow = MathHelper.clamp(hierarchyRow, 0, 31);
+	public void setGroupIndex(int groupIndex) {
+		this.groupIndex = MathHelper.clamp(groupIndex, 0, 31);
 	}
 
-	public int getHierarchyColumn() {
-		return this.hierarchyColumn;
+	public int getGroupColumn() {
+		return this.groupColumn;
 	}
 
-	public void setHierarchyColumn(int hierarchyColumn) {
-		this.hierarchyColumn = MathHelper.clamp(hierarchyColumn, 0, 2);
+	public void setGroupColumn(int groupColumn) {
+		this.groupColumn = MathHelper.clamp(groupColumn, 0, 2);
 	}
 
-	public String getHierarchyRole() {
-		if (this.hierarchyRole == null || this.hierarchyRole.isBlank()) {
+	public String getGroupName() {
+		if (this.groupName == null || this.groupName.isBlank()) {
 			return "Role";
 		}
-		return this.hierarchyRole;
+		return this.groupName;
 	}
 
-	public void setHierarchyRole(String hierarchyRole) {
-		if (hierarchyRole == null || hierarchyRole.isBlank()) {
-			this.hierarchyRole = "Role";
+	public void setGroupName(String name) {
+		if (name == null || name.isBlank()) {
+			this.groupName = "Alpha";
 			return;
 		}
-		String trimmed = hierarchyRole.trim();
-		this.hierarchyRole = trimmed.length() <= 24 ? trimmed : trimmed.substring(0, 24);
+		String trimmed = name.trim();
+		this.groupName = trimmed.length() <= 24 ? trimmed : trimmed.substring(0, 24);
 	}
 
 	public void clearCombatTarget() {
@@ -545,9 +579,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.assignRandomRole(world);
 		this.setBehavior(GuardBehavior.random(world.getRandom()));
 		this.setFormationType(FormationType.FOLLOW);
-		this.setHierarchyRow(2);
-		this.setHierarchyColumn(world.getRandom().nextBetween(0, 2));
-		this.setHierarchyRole("Reserve");
+		this.setGroupIndex(2);
+		this.setGroupColumn(world.getRandom().nextBetween(0, 2));
+		this.setGroupName("Gamma");
 		this.equipGuardGear(world, 0, new GuardPlayerUpgrades());
 	}
 
@@ -557,9 +591,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 		this.setBehavior(GuardBehavior.DEFENSIVE);
 		this.setFormationType(FormationType.FOLLOW);
-		this.setHierarchyRow(Math.max(0, 2 - Math.min(2, this.getLevel() / 4)));
-		this.setHierarchyColumn(world.getRandom().nextBetween(0, 2));
-		this.setHierarchyRole("Vanguard");
+		this.setGroupIndex(Math.max(0, 2 - Math.min(2, this.getLevel() / 4)));
+		this.setGroupColumn(world.getRandom().nextBetween(0, 2));
+		this.setGroupName("Alpha");
 		this.equipGuardGear(world, upgrades.getWeaponLevel(), upgrades);
 	}
 
@@ -905,7 +939,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.handleSquadTargetSharing(world);
 		this.syncSupportEquipment(world);
 		this.updateShieldUsage();
-		this.updateHierarchyNameplate();
+		this.updateGroupNameplate();
 
 		int healInterval = GuardVillagersMod.getHealingIntervalTicks(world, this.ownerUuid);
 		if (healInterval > 0 && this.age % healInterval == 0 && this.combatCooldown <= 0 && this.getHealth() < this.getMaxHealth() * 0.6F) {
@@ -963,7 +997,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 	}
 
-	private void updateHierarchyNameplate() {
+	private void updateGroupNameplate() {
 		if (this.age % 10 != 0) {
 			return;
 		}
@@ -974,15 +1008,14 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 
 		if (!this.hasOwner()) {
-			if (currentText.startsWith(HIERARCHY_NAME_PREFIX)) {
+			if (currentText.startsWith(GROUP_NAME_PREFIX)) {
 				this.setCustomName(null);
 				this.setCustomNameVisible(false);
 			}
 			return;
 		}
 
-		String rowCol = "R" + (this.hierarchyRow + 1) + " C" + (this.hierarchyColumn + 1);
-		String badge = HIERARCHY_NAME_PREFIX + rowCol + "  " + this.getHierarchyRole() + "  Lv " + this.getLevel();
+		String badge = GROUP_NAME_PREFIX + this.getGroupName() + "  Lv " + this.getLevel();
 		if (!badge.equals(currentText)) {
 			this.setCustomName(Text.literal(badge).formatted(Formatting.AQUA));
 		}
@@ -1392,9 +1425,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			view.putInt(HOME_Z_KEY, this.home.getZ());
 		}
 		view.putInt(PATROL_RADIUS_KEY, this.patrolRadius);
-		view.putInt(HIERARCHY_ROW_KEY, this.hierarchyRow);
-		view.putInt(HIERARCHY_COLUMN_KEY, this.hierarchyColumn);
-		view.putString(HIERARCHY_ROLE_KEY, this.getHierarchyRole());
+		view.putInt(GROUP_INDEX_KEY, this.groupIndex);
+		view.putInt(GROUP_COLUMN_KEY, this.groupColumn);
+		view.putString(GROUP_NAME_KEY, this.getGroupName());
 		boolean hasLastLand = this.lastLandPos != null;
 		view.putBoolean(HAS_LAST_LAND_KEY, hasLastLand);
 		if (hasLastLand) {
@@ -1431,9 +1464,22 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			this.home = null;
 		}
 		this.patrolRadius = MathHelper.clamp(view.getInt(PATROL_RADIUS_KEY, 0), 0, 128);
-		this.hierarchyRow = MathHelper.clamp(view.getInt(HIERARCHY_ROW_KEY, 0), 0, 31);
-		this.hierarchyColumn = MathHelper.clamp(view.getInt(HIERARCHY_COLUMN_KEY, 1), 0, 2);
-		this.setHierarchyRole(view.getString(HIERARCHY_ROLE_KEY, "Role"));
+		// Read new keys first, fall back to legacy keys for migration
+		int readGroupIndex = view.getInt(GROUP_INDEX_KEY, -1);
+		if (readGroupIndex < 0) {
+			readGroupIndex = view.getInt(LEGACY_HIERARCHY_ROW_KEY, 0);
+		}
+		this.groupIndex = MathHelper.clamp(readGroupIndex, 0, 31);
+		int readGroupColumn = view.getInt(GROUP_COLUMN_KEY, -1);
+		if (readGroupColumn < 0) {
+			readGroupColumn = view.getInt(LEGACY_HIERARCHY_COLUMN_KEY, 1);
+		}
+		this.groupColumn = MathHelper.clamp(readGroupColumn, 0, 2);
+		String readGroupName = view.getString(GROUP_NAME_KEY, "");
+		if (readGroupName.isEmpty()) {
+			readGroupName = view.getString(LEGACY_HIERARCHY_ROLE_KEY, "Alpha");
+		}
+		this.setGroupName(readGroupName);
 		if (view.getBoolean(HAS_LAST_LAND_KEY, false)) {
 			this.lastLandPos = new BlockPos(
 				view.getInt(LAST_LAND_X_KEY, 0),

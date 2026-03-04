@@ -17,7 +17,7 @@ import java.util.Map;
 public final class ChunkTerrainCache {
 	private static final int MAX_TILES_PER_WORLD_DIMENSION = 2_048;
 	private static final int FALLBACK_COLOR = 0xFF2A313A;
-	private static final int TILE_RESOLUTION = 64;
+	private static final int TILE_RESOLUTION = 16;
 	private static final int TILE_PIXEL_COUNT = TILE_RESOLUTION * TILE_RESOLUTION;
 
 	private final Map<String, LinkedHashMap<Long, TerrainTile>> tilesByWorldDimension = new HashMap<>();

@@ -156,26 +156,51 @@ public class GuardShopInventory extends SimpleInventory {
 		));
 
 		int armorLevel = upgrades.getArmorLevel();
-		int armorCost = upgrades.getArmorUpgradeCostForLevel(armorLevel >= GuardPlayerUpgrades.MAX_ARMOR_LEVEL ? GuardPlayerUpgrades.MAX_ARMOR_LEVEL : armorLevel);
-		this.setStack(SLOT_UPGRADE_ARMOR, this.card(
-			Items.IRON_CHESTPLATE,
-			"Upgrade Armor",
-			Formatting.AQUA,
-			"Cost: " + armorCost + " emerald block(s)",
-			"Current: Lv " + upgrades.getArmorLevel() + "/" + GuardPlayerUpgrades.MAX_ARMOR_LEVEL,
-			"Power increases linearly;",
-			"cost scales exponentially."
-		));
+		if (armorLevel >= GuardPlayerUpgrades.MAX_ARMOR_LEVEL) {
+			GuardPlayerUpgrades.ArmorDistribution currentDist = upgrades.getArmorDistribution();
+			this.setStack(SLOT_UPGRADE_ARMOR, this.card(
+				Items.IRON_CHESTPLATE,
+				"Upgrade Armor",
+				Formatting.AQUA,
+				"Maxed",
+				"L:" + currentDist.leather() + "% I:" + currentDist.iron() + "% G:" + currentDist.gold() + "% D:" + currentDist.diamond() + "%"
+			));
+		} else {
+			int armorCost = upgrades.getArmorUpgradeCostForLevel(armorLevel);
+			GuardPlayerUpgrades.ArmorDistribution currentDist = upgrades.getArmorDistribution();
+			GuardPlayerUpgrades nextArmor = upgrades.copy();
+			nextArmor.upgradeArmor();
+			GuardPlayerUpgrades.ArmorDistribution nextDist = nextArmor.getArmorDistribution();
+			this.setStack(SLOT_UPGRADE_ARMOR, this.card(
+				Items.IRON_CHESTPLATE,
+				"Upgrade Armor",
+				Formatting.AQUA,
+				"Cost: " + armorCost + " emerald block(s)",
+				"Current: L:" + currentDist.leather() + "% I:" + currentDist.iron() + "% G:" + currentDist.gold() + "% D:" + currentDist.diamond() + "%",
+				"Upgraded: L:" + nextDist.leather() + "% I:" + nextDist.iron() + "% G:" + nextDist.gold() + "% D:" + nextDist.diamond() + "%"
+			));
+		}
 
-		int weaponCost = upgrades.getWeaponUpgradeCost();
-		this.setStack(SLOT_UPGRADE_WEAPON, this.card(
-			Items.IRON_SWORD,
-			"Upgrade Weapons",
-			Formatting.RED,
-			"Cost: " + weaponCost + " emerald block(s)",
-			"Current: " + describeWeaponLevel(upgrades.getWeaponLevel()),
-			"Next: " + describeWeaponLevel(Math.min(GuardPlayerUpgrades.MAX_WEAPON_LEVEL, upgrades.getWeaponLevel() + 1))
-		));
+		int weaponLevel = upgrades.getWeaponLevel();
+		if (weaponLevel >= GuardPlayerUpgrades.MAX_WEAPON_LEVEL) {
+			this.setStack(SLOT_UPGRADE_WEAPON, this.card(
+				Items.IRON_SWORD,
+				"Upgrade Weapons",
+				Formatting.RED,
+				"Maxed",
+				"Current: " + describeWeaponLevel(weaponLevel)
+			));
+		} else {
+			int weaponCost = upgrades.getWeaponUpgradeCost();
+			this.setStack(SLOT_UPGRADE_WEAPON, this.card(
+				Items.IRON_SWORD,
+				"Upgrade Weapons",
+				Formatting.RED,
+				"Cost: " + weaponCost + " emerald block(s)",
+				"Current: " + describeWeaponLevel(weaponLevel),
+				"Upgraded: " + describeWeaponLevel(weaponLevel + 1)
+			));
+		}
 
 		if (upgrades.getSupportLevel() >= GuardPlayerUpgrades.MAX_SUPPORT_LEVEL) {
 			this.setStack(SLOT_UPGRADE_HEAL, this.card(
@@ -239,7 +264,18 @@ public class GuardShopInventory extends SimpleInventory {
 		lines.add("\u00A77Health: \u00A7f" + (int) health + " HP");
 		lines.add("\u00A77Attack speed: \u00A7f" + String.format("%.2f", attackSpeed) + " (" + cooldownTicks + "t cd)");
 		lines.add("\u00A77Hire price: \u00A7f" + GuardVillagersMod.getAdjustedGuardCost(this.player) + " emerald block(s)");
-		lines.add("\u00A77Armor odds: \u00A7fL " + upgrades.getArmorDistribution().leather() + "% I " + upgrades.getArmorDistribution().iron() + "% G " + upgrades.getArmorDistribution().gold() + "% D " + upgrades.getArmorDistribution().diamond() + "%");
+		GuardPlayerUpgrades.ArmorDistribution dist = upgrades.getArmorDistribution();
+		lines.add("\u00A77Armor odds: \u00A7fL:" + dist.leather() + "% I:" + dist.iron() + "% G:" + dist.gold() + "% D:" + dist.diamond() + "%");
+		if (upgrades.getArmorLevel() < GuardPlayerUpgrades.MAX_ARMOR_LEVEL) {
+			GuardPlayerUpgrades nextArmor = upgrades.copy();
+			nextArmor.upgradeArmor();
+			GuardPlayerUpgrades.ArmorDistribution nextDist = nextArmor.getArmorDistribution();
+			lines.add("\u00A77Next armor: \u00A7fL:" + nextDist.leather() + "% I:" + nextDist.iron() + "% G:" + nextDist.gold() + "% D:" + nextDist.diamond() + "%");
+		}
+		lines.add("\u00A77Weapon: \u00A7f" + describeWeaponLevel(upgrades.getWeaponLevel()));
+		if (upgrades.getWeaponLevel() < GuardPlayerUpgrades.MAX_WEAPON_LEVEL) {
+			lines.add("\u00A77Next weapon: \u00A7f" + describeWeaponLevel(upgrades.getWeaponLevel() + 1));
+		}
 		return lines;
 	}
 
@@ -345,12 +381,13 @@ public class GuardShopInventory extends SimpleInventory {
 
 	private String describeWeaponLevel(int level) {
 		return switch (Math.max(0, level)) {
-			case 0 -> "Stone/Basic Bow";
-			case 1 -> "Iron + enchant I";
-			case 2 -> "Diamond + enchant II";
-			case 3 -> "Diamond + enchant III";
-			case 4 -> "Diamond + cap tier";
-			default -> "Diamond + cap tier";
+			case 0 -> "Stone Sword / Basic Bow";
+			case 1 -> "Iron Sword / Sharpness I";
+			case 2 -> "Diamond Sword / Sharpness II";
+			case 3 -> "Diamond Sword / Sharpness III";
+			case 4 -> "Diamond Sword / Sharpness IV";
+			case 5 -> "Diamond Sword / Sharpness V";
+			default -> "Diamond Sword / Sharpness V";
 		};
 	}
 

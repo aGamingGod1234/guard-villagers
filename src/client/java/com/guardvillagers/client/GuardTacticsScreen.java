@@ -33,7 +33,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private static final int TEXT_PRIMARY = 0xFFEAF1FA;
 	private static final int TEXT_SECONDARY = 0xFFB6C6D6;
 	private static final int SUBTITLE_TACTICS = 0xFF8FD2FF;
-	private static final int SUBTITLE_HIERARCHY = 0xFFFFCB90;
+	private static final int SUBTITLE_GROUPS = 0xFFFFCB90;
 	private static final int ROW_BACKGROUND = 0xCC1B2531;
 	private static final int ROW_BORDER = 0xFF334154;
 	private static final int CARD_BACKGROUND = 0xEE17212D;
@@ -47,8 +47,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private static final int PLAYER_PANEL_WIDTH = 180;
 	private static final int PLAYER_PANEL_HEIGHT = 28;
 	private static final int ROW_HEIGHT = 58;
-	private static final int ROLE_HEADER_WIDTH = 190;
-	private static final int ROLE_HEADER_HEIGHT = 24;
+	private static final int GROUP_HEADER_WIDTH = 190;
+	private static final int GROUP_HEADER_HEIGHT = 24;
 	private static final int GUARD_CARD_WIDTH = 78;
 	private static final int GUARD_CARD_HEIGHT = 46;
 	private static final int GUARD_CARD_GAP = 6;
@@ -59,7 +59,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private final ChunkMapWidget chunkMapWidget = new ChunkMapWidget(this.dataStore, GuardVillagersClient.terrainCache());
 	private final ViewMode mode;
 	private final List<PaletteSwatch> paletteSwatches = new ArrayList<>();
-	private final List<RoleRowHitbox> roleRows = new ArrayList<>();
+	private final List<GroupRowHitbox> groupRows = new ArrayList<>();
 	private final List<GuardCardHitbox> guardCards = new ArrayList<>();
 
 	private int panelX;
@@ -70,17 +70,17 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private int contentY;
 	private int contentWidth;
 	private int contentHeight;
-	private int hierarchyRowsStartY;
-	private int hierarchyRowsHeight;
-	private int hierarchyMaxScroll;
-	private int hierarchyScrollRows;
-	private TextFieldWidget roleRenameField;
+	private int groupRowsStartY;
+	private int groupRowsHeight;
+	private int groupMaxScroll;
+	private int groupScrollRows;
+	private TextFieldWidget groupRenameField;
 	private int editingRow = -1;
 
 	public GuardTacticsScreen(GuardTacticsScreenHandler handler, PlayerInventory inventory, Text title) {
 		super(handler, inventory, title);
 		String normalized = title.getString().toLowerCase(Locale.ROOT);
-		this.mode = normalized.contains("hierarchy") ? ViewMode.HIERARCHY : ViewMode.TACTICS;
+		this.mode = normalized.contains("group") || normalized.contains("hierarchy") ? ViewMode.GROUPS : ViewMode.TACTICS;
 	}
 
 	@Override
@@ -92,10 +92,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		this.y = 0;
 		this.computeLayout();
 
-		this.roleRenameField = new TextFieldWidget(this.textRenderer, 0, 0, ROLE_HEADER_WIDTH - 8, 18, Text.literal("Role Name"));
-		this.roleRenameField.setVisible(false);
-		this.roleRenameField.setMaxLength(24);
-		this.addDrawableChild(this.roleRenameField);
+		this.groupRenameField = new TextFieldWidget(this.textRenderer, 0, 0, GROUP_HEADER_WIDTH - 8, 18, Text.literal("Group Name"));
+		this.groupRenameField.setVisible(false);
+		this.groupRenameField.setMaxLength(24);
+		this.addDrawableChild(this.groupRenameField);
 
 		if (this.client != null && this.client.player != null) {
 			this.chunkMapWidget.ensureCameraCentered(this.client.player.getChunkPos());
@@ -112,11 +112,11 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		if (this.mode == ViewMode.TACTICS) {
 			this.renderTactics(context, mouseX, mouseY);
 		} else {
-			this.renderHierarchy(context, mouseX, mouseY);
+			this.renderGroups(context, mouseX, mouseY);
 		}
 		this.renderCommonHeader(context);
-		if (this.roleRenameField != null && this.roleRenameField.isVisible()) {
-			this.roleRenameField.render(context, mouseX, mouseY, delta);
+		if (this.groupRenameField != null && this.groupRenameField.isVisible()) {
+			this.groupRenameField.render(context, mouseX, mouseY, delta);
 		}
 	}
 
@@ -126,7 +126,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		double mouseY = click.y();
 		int button = click.button();
 
-		if (this.roleRenameField != null && this.roleRenameField.isVisible() && this.roleRenameField.mouseClicked(click, doubleClick)) {
+		if (this.groupRenameField != null && this.groupRenameField.isVisible() && this.groupRenameField.mouseClicked(click, doubleClick)) {
 			return true;
 		}
 
@@ -150,7 +150,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			return super.mouseClicked(click, doubleClick);
 		}
 
-		if (this.handleHierarchyClick(mouseX, mouseY, button, click.buttonInfo().hasShift())) {
+		if (this.handleGroupsClick(mouseX, mouseY, button, click.buttonInfo().hasShift())) {
 			return true;
 		}
 		if (this.contains(this.panelX, this.panelY, this.panelWidth, this.panelHeight, mouseX, mouseY)) {
@@ -194,9 +194,9 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
 		}
 
-		if (this.contains(this.contentX, this.hierarchyRowsStartY, this.contentWidth, this.hierarchyRowsHeight, mouseX, mouseY)) {
+		if (this.contains(this.contentX, this.groupRowsStartY, this.contentWidth, this.groupRowsHeight, mouseX, mouseY)) {
 			int direction = verticalAmount < 0 ? 1 : -1;
-			this.hierarchyScrollRows = MathHelper.clamp(this.hierarchyScrollRows + direction, 0, this.hierarchyMaxScroll);
+			this.groupScrollRows = MathHelper.clamp(this.groupScrollRows + direction, 0, this.groupMaxScroll);
 			return true;
 		}
 		return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
@@ -204,16 +204,16 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 	@Override
 	public boolean keyPressed(KeyInput keyInput) {
-		if (this.roleRenameField != null && this.roleRenameField.isVisible()) {
+		if (this.groupRenameField != null && this.groupRenameField.isVisible()) {
 			if (keyInput.isEnter()) {
-				this.commitRoleRename();
+				this.commitGroupRename();
 				return true;
 			}
 			if (keyInput.isEscape()) {
-				this.cancelRoleRename();
+				this.cancelGroupRename();
 				return true;
 			}
-			if (this.roleRenameField.keyPressed(keyInput)) {
+			if (this.groupRenameField.keyPressed(keyInput)) {
 				return true;
 			}
 		}
@@ -227,8 +227,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 	@Override
 	public boolean charTyped(CharInput charInput) {
-		if (this.roleRenameField != null && this.roleRenameField.isVisible()) {
-			return this.roleRenameField.charTyped(charInput);
+		if (this.groupRenameField != null && this.groupRenameField.isVisible()) {
+			return this.groupRenameField.charTyped(charInput);
 		}
 		return super.charTyped(charInput);
 	}
@@ -237,17 +237,17 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		context.drawText(this.textRenderer, this.title, this.panelX + 10, this.panelY + 8, TEXT_PRIMARY, false);
 		context.drawText(
 			this.textRenderer,
-			this.mode == ViewMode.HIERARCHY ? Text.literal("Hierarchy Tactical View") : Text.literal("Zone Tactical View"),
+			this.mode == ViewMode.GROUPS ? Text.literal("Group Configuration") : Text.literal("Zone Tactical View"),
 			this.panelX + 10,
 			this.panelY + 20,
-			this.mode == ViewMode.HIERARCHY ? SUBTITLE_HIERARCHY : SUBTITLE_TACTICS,
+			this.mode == ViewMode.GROUPS ? SUBTITLE_GROUPS : SUBTITLE_TACTICS,
 			false
 		);
 	}
 
 	private void renderTactics(DrawContext context, int mouseX, int mouseY) {
-		if (this.roleRenameField != null && this.roleRenameField.isVisible()) {
-			this.roleRenameField.setVisible(false);
+		if (this.groupRenameField != null && this.groupRenameField.isVisible()) {
+			this.groupRenameField.setVisible(false);
 			this.editingRow = -1;
 		}
 
@@ -285,16 +285,16 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		ChunkPos hovered = this.chunkMapWidget.hoveredChunk();
 		if (hovered != null && worldContext != null) {
 			RegionColor zoneColor = this.dataStore.getRegionColor(worldContext, hovered.x, hovered.z);
-			String hierarchy = "None";
+			String groupLabel = "None";
 			if (zoneColor != RegionColor.NONE) {
-				hierarchy = this.dataStore.roleBindingForColor(worldContext, zoneColor)
-					.map(binding -> binding.roleName() + " (R" + (binding.row() + 1) + ")")
+				groupLabel = this.dataStore.groupBindingForColor(worldContext, zoneColor)
+					.map(binding -> binding.groupName() + " (R" + (binding.row() + 1) + ")")
 					.orElse("None");
 			}
 			List<Text> tooltip = new ArrayList<>();
 			tooltip.add(Text.literal("Chunk: " + hovered.x + ", " + hovered.z));
 			tooltip.add(Text.literal("Zone: " + zoneColor.label()));
-			tooltip.add(Text.literal("Hierarchy: " + hierarchy));
+			tooltip.add(Text.literal("Group: " + groupLabel));
 			tooltip.add(Text.literal("LMB drag select | RMB paint"));
 			context.drawTooltip(this.textRenderer, tooltip, mouseX, mouseY);
 		}
@@ -326,14 +326,14 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		return false;
 	}
 
-	private void renderHierarchy(DrawContext context, int mouseX, int mouseY) {
-		if (this.roleRenameField != null && this.editingRow >= 0) {
-			this.roleRenameField.setVisible(false);
+	private void renderGroups(DrawContext context, int mouseX, int mouseY) {
+		if (this.groupRenameField != null && this.editingRow >= 0) {
+			this.groupRenameField.setVisible(false);
 		}
 
 		ClientTacticsDataStore.WorldContext worldContext = this.resolveWorldContext();
 		if (worldContext == null || this.client == null || this.client.player == null || this.client.world == null) {
-			context.drawText(this.textRenderer, Text.literal("Hierarchy data unavailable."), this.contentX, this.contentY, TEXT_SECONDARY, false);
+			context.drawText(this.textRenderer, Text.literal("Group data unavailable."), this.contentX, this.contentY, TEXT_SECONDARY, false);
 			return;
 		}
 
@@ -341,7 +341,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		Map<Integer, List<GuardEntity>> guardsByRow = new HashMap<>();
 		int maxGuardRow = 0;
 		for (GuardEntity guard : guards) {
-			int row = Math.max(0, guard.getHierarchyRow());
+			int row = Math.max(0, guard.getGroupIndex());
 			maxGuardRow = Math.max(maxGuardRow, row);
 			guardsByRow.computeIfAbsent(row, ignored -> new ArrayList<>()).add(guard);
 		}
@@ -353,8 +353,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 				.thenComparing(guard -> guard.getName().getString(), String.CASE_INSENSITIVE_ORDER));
 		}
 
-		int roleCount = Math.max(3, Math.max(maxGuardRow + 1, this.dataStore.roleCount(worldContext)));
-		this.dataStore.ensureRoleCount(worldContext, roleCount);
+		int groupCount = Math.max(3, Math.max(maxGuardRow + 1, this.dataStore.groupCount(worldContext)));
+		this.dataStore.ensureGroupCount(worldContext, groupCount);
 
 		int playerPanelX = this.contentX + (this.contentWidth - PLAYER_PANEL_WIDTH) / 2;
 		int playerPanelY = this.contentY;
@@ -365,22 +365,22 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		context.drawItem(GUARD_HEAD_ICON, playerPanelX + 6, playerPanelY + 6);
 		context.drawText(this.textRenderer, this.client.player.getName(), playerPanelX + 28, playerPanelY + 10, TEXT_PRIMARY, false);
 
-		this.roleRows.clear();
+		this.groupRows.clear();
 		this.guardCards.clear();
-		this.hierarchyRowsStartY = playerPanelY + PLAYER_PANEL_HEIGHT + 10;
-		this.hierarchyRowsHeight = Math.max(0, this.contentHeight - PLAYER_PANEL_HEIGHT - 16);
-		int visibleRows = Math.max(1, this.hierarchyRowsHeight / ROW_HEIGHT);
-		this.hierarchyMaxScroll = Math.max(0, roleCount - visibleRows);
-		this.hierarchyScrollRows = MathHelper.clamp(this.hierarchyScrollRows, 0, this.hierarchyMaxScroll);
+		this.groupRowsStartY = playerPanelY + PLAYER_PANEL_HEIGHT + 10;
+		this.groupRowsHeight = Math.max(0, this.contentHeight - PLAYER_PANEL_HEIGHT - 16);
+		int visibleRows = Math.max(1, this.groupRowsHeight / ROW_HEIGHT);
+		this.groupMaxScroll = Math.max(0, groupCount - visibleRows);
+		this.groupScrollRows = MathHelper.clamp(this.groupScrollRows, 0, this.groupMaxScroll);
 
-		context.enableScissor(this.contentX, this.hierarchyRowsStartY, this.contentX + this.contentWidth, this.hierarchyRowsStartY + this.hierarchyRowsHeight);
+		context.enableScissor(this.contentX, this.groupRowsStartY, this.contentX + this.contentWidth, this.groupRowsStartY + this.groupRowsHeight);
 		for (int visibleIndex = 0; visibleIndex < visibleRows; visibleIndex++) {
-			int row = visibleIndex + this.hierarchyScrollRows;
-			if (row >= roleCount) {
+			int row = visibleIndex + this.groupScrollRows;
+			if (row >= groupCount) {
 				break;
 			}
 
-			int rowY = this.hierarchyRowsStartY + visibleIndex * ROW_HEIGHT;
+			int rowY = this.groupRowsStartY + visibleIndex * ROW_HEIGHT;
 			int rowX = this.contentX + 4;
 			int rowW = this.contentWidth - 8;
 			context.fill(rowX, rowY, rowX + rowW, rowY + ROW_HEIGHT - 4, ROW_BACKGROUND);
@@ -388,33 +388,33 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 			int swatchX = rowX + 6;
 			int swatchY = rowY + 20;
-			RegionColor roleColor = this.dataStore.getRoleColor(worldContext, row);
-			int swatchFill = roleColor == RegionColor.NONE ? 0xFF2C323D : roleColor.swatchArgb();
+			RegionColor groupColor = this.dataStore.getGroupColor(worldContext, row);
+			int swatchFill = groupColor == RegionColor.NONE ? 0xFF2C323D : groupColor.swatchArgb();
 			context.fill(swatchX, swatchY, swatchX + 14, swatchY + 14, swatchFill);
 			this.drawBorder(context, swatchX, swatchY, 14, 14, 0xFF6A7A8D);
 
 			int headerX = rowX + 28;
 			int headerY = rowY + 15;
-			context.fill(headerX, headerY, headerX + ROLE_HEADER_WIDTH, headerY + ROLE_HEADER_HEIGHT, 0xCC121A24);
-			this.drawBorder(context, headerX, headerY, ROLE_HEADER_WIDTH, ROLE_HEADER_HEIGHT, 0xFF4D5E73);
+			context.fill(headerX, headerY, headerX + GROUP_HEADER_WIDTH, headerY + GROUP_HEADER_HEIGHT, 0xCC121A24);
+			this.drawBorder(context, headerX, headerY, GROUP_HEADER_WIDTH, GROUP_HEADER_HEIGHT, 0xFF4D5E73);
 
 			List<GuardEntity> rowGuards = guardsByRow.getOrDefault(row, List.of());
-			String roleName = this.resolveRoleName(worldContext, row, rowGuards);
-			context.drawText(this.textRenderer, Text.literal(roleName), headerX + 5, headerY + 4, TEXT_PRIMARY, false);
+			String groupName = this.resolveGroupName(worldContext, row, rowGuards);
+			context.drawText(this.textRenderer, Text.literal(groupName), headerX + 5, headerY + 4, TEXT_PRIMARY, false);
 			context.drawText(this.textRenderer, Text.literal(rowGuards.size() + " guards"), headerX + 5, headerY + 14, TEXT_SECONDARY, false);
-			this.roleRows.add(new RoleRowHitbox(row, swatchX, swatchY, 14, 14, headerX, headerY, ROLE_HEADER_WIDTH, ROLE_HEADER_HEIGHT, roleName));
+			this.groupRows.add(new GroupRowHitbox(row, swatchX, swatchY, 14, 14, headerX, headerY, GROUP_HEADER_WIDTH, GROUP_HEADER_HEIGHT, groupName));
 
-			if (this.editingRow == row && this.roleRenameField != null) {
-				this.roleRenameField.setVisible(true);
-				this.roleRenameField.setX(headerX + 4);
-				this.roleRenameField.setY(headerY + 3);
-				this.roleRenameField.setWidth(ROLE_HEADER_WIDTH - 8);
+			if (this.editingRow == row && this.groupRenameField != null) {
+				this.groupRenameField.setVisible(true);
+				this.groupRenameField.setX(headerX + 4);
+				this.groupRenameField.setY(headerY + 3);
+				this.groupRenameField.setWidth(GROUP_HEADER_WIDTH - 8);
 			}
 
-			int headerCenterY = headerY + ROLE_HEADER_HEIGHT / 2;
-			this.drawConnector(context, playerCenterX, playerBottomY, headerX + ROLE_HEADER_WIDTH / 2, headerCenterY, CONNECTOR_COLOR);
+			int headerCenterY = headerY + GROUP_HEADER_HEIGHT / 2;
+			this.drawConnector(context, playerCenterX, playerBottomY, headerX + GROUP_HEADER_WIDTH / 2, headerCenterY, CONNECTOR_COLOR);
 
-			int cardsStartX = headerX + ROLE_HEADER_WIDTH + 14;
+			int cardsStartX = headerX + GROUP_HEADER_WIDTH + 14;
 			int cardY = rowY + 6;
 			int availableWidth = rowX + rowW - cardsStartX - 4;
 			int cardsFit = Math.max(0, (availableWidth + GUARD_CARD_GAP) / (GUARD_CARD_WIDTH + GUARD_CARD_GAP));
@@ -424,13 +424,13 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 				int cardX = cardsStartX + i * (GUARD_CARD_WIDTH + GUARD_CARD_GAP);
 				this.renderGuardCard(context, guard, cardX, cardY);
 				this.guardCards.add(new GuardCardHitbox(guard, cardX, cardY, GUARD_CARD_WIDTH, GUARD_CARD_HEIGHT));
-				this.drawConnector(context, headerX + ROLE_HEADER_WIDTH, headerCenterY, cardX, cardY + GUARD_CARD_HEIGHT / 2, CONNECTOR_COLOR);
+				this.drawConnector(context, headerX + GROUP_HEADER_WIDTH, headerCenterY, cardX, cardY + GUARD_CARD_HEIGHT / 2, CONNECTOR_COLOR);
 			}
 		}
 		context.disableScissor();
 
-		if (this.editingRow >= 0 && this.roleRenameField != null && !this.roleRenameField.isVisible()) {
-			this.cancelRoleRename();
+		if (this.editingRow >= 0 && this.groupRenameField != null && !this.groupRenameField.isVisible()) {
+			this.cancelGroupRename();
 		}
 
 		context.fill(this.contentX, this.contentY + this.contentHeight - BOTTOM_BAR_HEIGHT, this.contentX + this.contentWidth, this.contentY + this.contentHeight, 0xAA131B25);
@@ -466,15 +466,15 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		}
 	}
 
-	private boolean handleHierarchyClick(double mouseX, double mouseY, int button, boolean shiftDown) {
+	private boolean handleGroupsClick(double mouseX, double mouseY, int button, boolean shiftDown) {
 		ClientTacticsDataStore.WorldContext worldContext = this.resolveWorldContext();
 		if (worldContext == null) {
 			return false;
 		}
 
-		for (RoleRowHitbox row : this.roleRows) {
+		for (GroupRowHitbox row : this.groupRows) {
 			if (row.containsSwatch(mouseX, mouseY)) {
-				RegionColor current = this.dataStore.getRoleColor(worldContext, row.row());
+				RegionColor current = this.dataStore.getGroupColor(worldContext, row.row());
 				RegionColor next = switch (current) {
 					case NONE -> RegionColor.BLUE;
 					case BLUE -> RegionColor.RED;
@@ -485,11 +485,11 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 				if (button == 1) {
 					next = RegionColor.NONE;
 				}
-				this.dataStore.setRoleColor(worldContext, row.row(), next);
+				this.dataStore.setGroupColor(worldContext, row.row(), next);
 				return true;
 			}
 			if (row.containsHeader(mouseX, mouseY) && button == 1 && shiftDown) {
-				this.startRoleRename(row.row(), row.roleName());
+				this.startGroupRename(row.row(), row.groupName());
 				return true;
 			}
 		}
@@ -500,45 +500,45 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	protected void drawBackground(DrawContext context, float delta, int mouseX, int mouseY) {
 	}
 
-	private void startRoleRename(int row, String currentName) {
-		if (this.roleRenameField == null) {
+	private void startGroupRename(int row, String currentName) {
+		if (this.groupRenameField == null) {
 			return;
 		}
 		this.editingRow = row;
-		this.roleRenameField.setVisible(true);
-		this.roleRenameField.setText(currentName);
-		this.roleRenameField.setCursorToEnd(false);
-		this.setFocused(this.roleRenameField);
+		this.groupRenameField.setVisible(true);
+		this.groupRenameField.setText(currentName);
+		this.groupRenameField.setCursorToEnd(false);
+		this.setFocused(this.groupRenameField);
 	}
 
-	private void commitRoleRename() {
-		if (this.roleRenameField == null || this.editingRow < 0) {
+	private void commitGroupRename() {
+		if (this.groupRenameField == null || this.editingRow < 0) {
 			return;
 		}
 		ClientTacticsDataStore.WorldContext worldContext = this.resolveWorldContext();
 		if (worldContext == null) {
-			this.cancelRoleRename();
+			this.cancelGroupRename();
 			return;
 		}
-		String requested = this.roleRenameField.getText();
+		String requested = this.groupRenameField.getText();
 		if (requested == null || requested.isBlank()) {
 			requested = "Role";
 		}
-		this.dataStore.setRoleName(worldContext, this.editingRow, requested);
+		this.dataStore.setGroupName(worldContext, this.editingRow, requested);
 
 		if (this.client != null && this.client.getNetworkHandler() != null) {
-			String command = "guards hierarchy rename " + (this.editingRow + 1) + " " + requested.trim();
+			String command = "guards groups rename " + (this.editingRow + 1) + " " + requested.trim();
 			this.client.getNetworkHandler().sendChatCommand(command);
 		}
 
-		this.roleRenameField.setVisible(false);
+		this.groupRenameField.setVisible(false);
 		this.editingRow = -1;
 		this.setFocused(null);
 	}
 
-	private void cancelRoleRename() {
-		if (this.roleRenameField != null) {
-			this.roleRenameField.setVisible(false);
+	private void cancelGroupRename() {
+		if (this.groupRenameField != null) {
+			this.groupRenameField.setVisible(false);
 		}
 		this.editingRow = -1;
 		this.setFocused(null);
@@ -602,10 +602,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		return 0;
 	}
 
-	private String resolveRoleName(ClientTacticsDataStore.WorldContext worldContext, int row, List<GuardEntity> rowGuards) {
-		String stored = this.dataStore.getRoleName(worldContext, row);
-		if (!rowGuards.isEmpty() && this.isGenericRoleName(stored)) {
-			String fromGuard = rowGuards.getFirst().getHierarchyRole();
+	private String resolveGroupName(ClientTacticsDataStore.WorldContext worldContext, int row, List<GuardEntity> rowGuards) {
+		String stored = this.dataStore.getGroupName(worldContext, row);
+		if (!rowGuards.isEmpty() && this.isGenericGroupName(stored)) {
+			String fromGuard = rowGuards.getFirst().getGroupName();
 			if (fromGuard != null && !fromGuard.isBlank()) {
 				return fromGuard;
 			}
@@ -613,11 +613,11 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		return stored;
 	}
 
-	private boolean isGenericRoleName(String roleName) {
-		if (roleName == null) {
+	private boolean isGenericGroupName(String groupName) {
+		if (groupName == null) {
 			return true;
 		}
-		String trimmed = roleName.trim();
+		String trimmed = groupName.trim();
 		return trimmed.equals("Role") || trimmed.matches("Role\\s+\\d+");
 	}
 
@@ -722,7 +722,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 	private enum ViewMode {
 		TACTICS,
-		HIERARCHY
+		GROUPS
 	}
 
 	private record PaletteSwatch(RegionColor color, int x, int y, int width, int height) {
@@ -731,7 +731,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		}
 	}
 
-	private record RoleRowHitbox(
+	private record GroupRowHitbox(
 		int row,
 		int swatchX,
 		int swatchY,
@@ -741,7 +741,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		int headerY,
 		int headerW,
 		int headerH,
-		String roleName
+		String groupName
 	) {
 		private boolean containsSwatch(double mouseX, double mouseY) {
 			return mouseX >= this.swatchX && mouseY >= this.swatchY && mouseX < this.swatchX + this.swatchW && mouseY < this.swatchY + this.swatchH;
