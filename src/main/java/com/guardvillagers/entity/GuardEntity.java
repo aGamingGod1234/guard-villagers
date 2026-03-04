@@ -11,6 +11,7 @@ import com.guardvillagers.entity.goal.FormationFollowOwnerGoal;
 import com.guardvillagers.entity.goal.GuardBowAttackGoal;
 import com.guardvillagers.entity.goal.PerimeterPatrolGoal;
 import com.guardvillagers.entity.goal.RaidTacticsGoal;
+import com.guardvillagers.entity.goal.ReturnToLandGoal;
 import com.guardvillagers.entity.goal.TacticalRetreatGoal;
 import net.minecraft.enchantment.Enchantment;
 import net.minecraft.enchantment.EnchantmentHelper;
@@ -115,6 +116,10 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private static final String HIERARCHY_ROW_KEY = "HierarchyRow";
 	private static final String HIERARCHY_COLUMN_KEY = "HierarchyColumn";
 	private static final String HIERARCHY_ROLE_KEY = "HierarchyRole";
+	private static final String LAST_LAND_X_KEY = "LastLandX";
+	private static final String LAST_LAND_Y_KEY = "LastLandY";
+	private static final String LAST_LAND_Z_KEY = "LastLandZ";
+	private static final String HAS_LAST_LAND_KEY = "HasLastLand";
 	private static final String HIERARCHY_NAME_PREFIX = "[H] ";
 	private static final String DEBUG_NAME_PREFIX = "[DBG] ";
 
@@ -170,6 +175,8 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private BlockPos rallyPoint;
 	private BlockPos home;
 	private int patrolRadius = 0;
+	private BlockPos lastLandPos;
+	private BlockPos lastLandCheckPos;
 	private int hierarchyRow = 0;
 	private int hierarchyColumn = 1;
 	private String hierarchyRole = "Vanguard";
@@ -179,6 +186,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	public GuardEntity(EntityType<? extends PathAwareEntity> entityType, net.minecraft.world.World world) {
 		super(entityType, world);
 		this.getNavigation().setCanOpenDoors(true);
+		this.setPathfindingPenalty(net.minecraft.entity.ai.pathing.PathNodeType.WATER, 8.0F);
 		for (EquipmentSlot slot : List.of(EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET)) {
 			this.playerArmor.put(slot, false);
 		}
@@ -210,13 +218,14 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.goalSelector.add(0, new SwimGoal(this));
 		this.goalSelector.add(1, new TacticalRetreatGoal(this, 1.35D));
 		this.goalSelector.add(2, new LongDoorInteractGoal(this, true));
-		this.goalSelector.add(3, new RaidTacticsGoal(this, 1.2D));
-		this.goalSelector.add(4, new PerimeterPatrolGoal(this, 1.0D));
-		this.goalSelector.add(5, new CrowdControlGoal(this, 1.0D));
-		this.goalSelector.add(6, new FormationFollowOwnerGoal(this, 1.0D));
-		this.goalSelector.add(7, new WanderAroundFarGoal(this, 0.8D));
-		this.goalSelector.add(8, new LookAtEntityGoal(this, PlayerEntity.class, 8.0F));
-		this.goalSelector.add(9, new LookAroundGoal(this));
+		this.goalSelector.add(3, new ReturnToLandGoal(this, 1.2D));
+		this.goalSelector.add(4, new RaidTacticsGoal(this, 1.2D));
+		this.goalSelector.add(5, new PerimeterPatrolGoal(this, 1.0D));
+		this.goalSelector.add(6, new CrowdControlGoal(this, 1.0D));
+		this.goalSelector.add(7, new FormationFollowOwnerGoal(this, 1.0D));
+		this.goalSelector.add(8, new WanderAroundFarGoal(this, 0.8D));
+		this.goalSelector.add(9, new LookAtEntityGoal(this, PlayerEntity.class, 8.0F));
+		this.goalSelector.add(10, new LookAroundGoal(this));
 
 		this.targetSelector.add(1, new RevengeGoal(this, GuardEntity.class));
 		this.targetSelector.add(2, new ActiveTargetGoal<>(this, HostileEntity.class, true, false));
@@ -377,6 +386,22 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	public void setPatrolRadius(int patrolRadius) {
 		this.patrolRadius = MathHelper.clamp(patrolRadius, 0, 128);
+	}
+
+	public BlockPos getLastLandPos() {
+		return this.lastLandPos;
+	}
+
+	private void updateLastLandPos() {
+		if (this.isTouchingWater() || !this.isOnGround()) {
+			return;
+		}
+		BlockPos currentPos = this.getBlockPos();
+		if (currentPos.equals(this.lastLandCheckPos)) {
+			return;
+		}
+		this.lastLandCheckPos = currentPos;
+		this.lastLandPos = currentPos.toImmutable();
 	}
 
 	public int getHierarchyRow() {
@@ -850,6 +875,10 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		super.mobTick(world);
 		if (this.age % 40 == 0 || this.ownerUuid == null) {
 			GuardOwnershipIndex.track(this);
+		}
+
+		if (this.age % 20 == 0) {
+			this.updateLastLandPos();
 		}
 
 		if (this.combatCooldown > 0) {
@@ -1366,6 +1395,13 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		view.putInt(HIERARCHY_ROW_KEY, this.hierarchyRow);
 		view.putInt(HIERARCHY_COLUMN_KEY, this.hierarchyColumn);
 		view.putString(HIERARCHY_ROLE_KEY, this.getHierarchyRole());
+		boolean hasLastLand = this.lastLandPos != null;
+		view.putBoolean(HAS_LAST_LAND_KEY, hasLastLand);
+		if (hasLastLand) {
+			view.putInt(LAST_LAND_X_KEY, this.lastLandPos.getX());
+			view.putInt(LAST_LAND_Y_KEY, this.lastLandPos.getY());
+			view.putInt(LAST_LAND_Z_KEY, this.lastLandPos.getZ());
+		}
 	}
 
 	@Override
@@ -1398,6 +1434,13 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.hierarchyRow = MathHelper.clamp(view.getInt(HIERARCHY_ROW_KEY, 0), 0, 31);
 		this.hierarchyColumn = MathHelper.clamp(view.getInt(HIERARCHY_COLUMN_KEY, 1), 0, 2);
 		this.setHierarchyRole(view.getString(HIERARCHY_ROLE_KEY, "Role"));
+		if (view.getBoolean(HAS_LAST_LAND_KEY, false)) {
+			this.lastLandPos = new BlockPos(
+				view.getInt(LAST_LAND_X_KEY, 0),
+				view.getInt(LAST_LAND_Y_KEY, 0),
+				view.getInt(LAST_LAND_Z_KEY, 0)
+			);
+		}
 		this.applyLevelModifiers();
 		this.updateCombatGoals();
 		if (this.getEntityWorld() instanceof ServerWorld) {

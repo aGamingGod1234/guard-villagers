@@ -16,13 +16,23 @@ import java.util.List;
 import java.util.Optional;
 
 public final class PerimeterPatrolGoal extends Goal {
+	private static final int EDGE_STEP = 6;
+	private static final int EDGE_JITTER = 2;
+	private static final int INTERIOR_STEP = 8;
+	private static final int INTERIOR_JITTER = 3;
+	private static final int MIN_NEXT_DISTANCE_SQ = 36;
+	private static final int RECALCULATE_INTERVAL = 120;
+	private static final int MODE_SWITCH_BASE = 400;
+
 	private final GuardEntity guard;
 	private final double speed;
 	private VillageDescriptor village;
-	private final List<BlockPos> perimeterPoints = new ArrayList<>();
+	private final List<BlockPos> edgePoints = new ArrayList<>();
+	private final List<BlockPos> interiorPoints = new ArrayList<>();
+	private boolean patrollingInterior;
 	private int pointIndex;
 	private int recalculateTicks;
-	private int shuffleTicks;
+	private int modeSwitchTicks;
 
 	public PerimeterPatrolGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
@@ -41,14 +51,15 @@ public final class PerimeterPatrolGoal extends Goal {
 	public boolean shouldContinue() {
 		return this.guard.getBehavior() == GuardBehavior.PERIMETER
 			&& this.guard.canExecuteBehaviorGoals()
-			&& !this.perimeterPoints.isEmpty();
+			&& (!this.edgePoints.isEmpty() || !this.interiorPoints.isEmpty());
 	}
 
 	@Override
 	public void start() {
 		this.pointIndex = 0;
 		this.recalculateTicks = 0;
-		this.shuffleTicks = 0;
+		this.modeSwitchTicks = MODE_SWITCH_BASE + this.guard.getRandom().nextInt(200);
+		this.patrollingInterior = false;
 	}
 
 	@Override
@@ -59,27 +70,54 @@ public final class PerimeterPatrolGoal extends Goal {
 
 		if (this.recalculateTicks-- <= 0) {
 			this.refreshVillageData();
-			this.recalculateTicks = 120;
-		}
-		if (this.shuffleTicks-- <= 0 && this.perimeterPoints.size() > 3) {
-			Collections.rotate(this.perimeterPoints, 1 + (this.guard.getId() % 3));
-			this.shuffleTicks = 200 + this.guard.getRandom().nextInt(120);
+			this.recalculateTicks = RECALCULATE_INTERVAL;
 		}
 
-		if (this.perimeterPoints.isEmpty()) {
-			return;
+		if (this.modeSwitchTicks-- <= 0) {
+			this.patrollingInterior = !this.patrollingInterior;
+			this.pointIndex = 0;
+			this.modeSwitchTicks = MODE_SWITCH_BASE + this.guard.getRandom().nextInt(200);
+			List<BlockPos> active = this.activePoints();
+			if (!active.isEmpty()) {
+				Collections.shuffle(active, new java.util.Random(this.guard.getRandom().nextLong()));
+			}
 		}
 
-		BlockPos target = this.perimeterPoints.get(this.pointIndex % this.perimeterPoints.size());
+		List<BlockPos> points = this.activePoints();
+		if (points.isEmpty()) {
+			this.patrollingInterior = !this.patrollingInterior;
+			points = this.activePoints();
+			if (points.isEmpty()) {
+				return;
+			}
+		}
+
+		BlockPos target = points.get(this.pointIndex % points.size());
 		double distanceSq = this.guard.squaredDistanceTo(target.getX() + 0.5D, target.getY(), target.getZ() + 0.5D);
 		if (distanceSq < 9.0D) {
-			int advance = 1 + this.guard.getRandom().nextInt(Math.min(3, this.perimeterPoints.size()));
-			this.pointIndex = (this.pointIndex + advance) % this.perimeterPoints.size();
-			target = this.perimeterPoints.get(this.pointIndex);
+			this.advancePoint(points);
+			target = points.get(this.pointIndex % points.size());
 		}
 
 		BlockPos top = world.getTopPosition(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, target);
 		this.guard.getNavigation().startMovingTo(top.getX() + 0.5D, top.getY(), top.getZ() + 0.5D, this.speed);
+	}
+
+	private void advancePoint(List<BlockPos> points) {
+		if (points.size() <= 1) {
+			return;
+		}
+		BlockPos guardPos = this.guard.getBlockPos();
+		int attempts = 0;
+		do {
+			int advance = 1 + this.guard.getRandom().nextInt(Math.min(4, points.size()));
+			this.pointIndex = (this.pointIndex + advance) % points.size();
+			attempts++;
+		} while (attempts < 3 && guardPos.getSquaredDistance(points.get(this.pointIndex)) < MIN_NEXT_DISTANCE_SQ);
+	}
+
+	private List<BlockPos> activePoints() {
+		return this.patrollingInterior ? this.interiorPoints : this.edgePoints;
 	}
 
 	private boolean refreshVillageData() {
@@ -92,12 +130,13 @@ public final class PerimeterPatrolGoal extends Goal {
 			return false;
 		}
 		this.village = descriptor.get();
-		this.rebuildPerimeterPoints();
-		return !this.perimeterPoints.isEmpty();
+		this.rebuildPatrolPoints();
+		return !this.edgePoints.isEmpty() || !this.interiorPoints.isEmpty();
 	}
 
-	private void rebuildPerimeterPoints() {
-		this.perimeterPoints.clear();
+	private void rebuildPatrolPoints() {
+		this.edgePoints.clear();
+		this.interiorPoints.clear();
 		if (this.village == null) {
 			return;
 		}
@@ -107,18 +146,30 @@ public final class PerimeterPatrolGoal extends Goal {
 		int minZ = this.village.bounds().getMinZ();
 		int maxZ = this.village.bounds().getMaxZ();
 		int y = this.village.center().getY();
-		int step = 6;
-		int jitter = 2;
-		for (int x = minX; x <= maxX; x += step) {
-			this.perimeterPoints.add(jittered(x, y, minZ, jitter));
-			this.perimeterPoints.add(jittered(x, y, maxZ, jitter));
+
+		// Edge patrol points (perimeter boundary)
+		for (int x = minX; x <= maxX; x += EDGE_STEP) {
+			this.edgePoints.add(jittered(x, y, minZ, EDGE_JITTER));
+			this.edgePoints.add(jittered(x, y, maxZ, EDGE_JITTER));
 		}
-		for (int z = minZ + step; z < maxZ; z += step) {
-			this.perimeterPoints.add(jittered(minX, y, z, jitter));
-			this.perimeterPoints.add(jittered(maxX, y, z, jitter));
+		for (int z = minZ + EDGE_STEP; z < maxZ; z += EDGE_STEP) {
+			this.edgePoints.add(jittered(minX, y, z, EDGE_JITTER));
+			this.edgePoints.add(jittered(maxX, y, z, EDGE_JITTER));
 		}
-		if (!this.perimeterPoints.isEmpty()) {
-			Collections.rotate(this.perimeterPoints, this.guard.getId() % this.perimeterPoints.size());
+
+		// Interior patrol points (fill the zone area)
+		for (int x = minX + INTERIOR_STEP; x < maxX; x += INTERIOR_STEP) {
+			for (int z = minZ + INTERIOR_STEP; z < maxZ; z += INTERIOR_STEP) {
+				this.interiorPoints.add(jittered(x, y, z, INTERIOR_JITTER));
+			}
+		}
+
+		int guardSeed = this.guard.getId();
+		if (!this.edgePoints.isEmpty()) {
+			Collections.rotate(this.edgePoints, guardSeed % this.edgePoints.size());
+		}
+		if (!this.interiorPoints.isEmpty()) {
+			Collections.rotate(this.interiorPoints, guardSeed % this.interiorPoints.size());
 		}
 	}
 

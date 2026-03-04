@@ -90,8 +90,15 @@ public final class VillageManagerHandler {
 			int regrowthCap = Math.max(initial, (int) Math.floor(initial * 1.5D));
 			int dynamicCap = Math.max(1, Math.min(MAX_GUARDS_PER_VILLAGE, Math.min(deterministicCap, regrowthCap)));
 
+			// Update max guard count if the dynamic cap has increased
+			state.updateMaxGuardCount(village.id(), dynamicCap);
+			int maxGuards = Math.min(MAX_GUARDS_PER_VILLAGE, state.getMaxGuardCount(village.id()));
+			if (maxGuards <= 0) {
+				maxGuards = dynamicCap;
+			}
+
 			int naturalGuardCount = countNaturalGuards(world, village);
-			if (naturalGuardCount >= dynamicCap) {
+			if (naturalGuardCount >= maxGuards) {
 				continue;
 			}
 
@@ -101,7 +108,7 @@ public final class VillageManagerHandler {
 				continue;
 			}
 
-			int spawnBudget = Math.min(MAX_SPAWNS_PER_VILLAGE, dynamicCap - naturalGuardCount);
+			int spawnBudget = Math.min(MAX_SPAWNS_PER_VILLAGE, maxGuards - naturalGuardCount);
 			boolean spawned = false;
 			for (int i = 0; i < spawnBudget; i++) {
 				spawned |= spawnVillageGuard(world, village, naturalGuardCount + i);
@@ -142,6 +149,10 @@ public final class VillageManagerHandler {
 		return villagers;
 	}
 
+	/**
+	 * B1: A villager belongs to a village iff the villager has either a bed (HOME POI)
+	 * or a job site located within the inner bounding box of the chunk.
+	 */
 	private static Map<String, VillageAggregation> aggregateVillages(ServerWorld world, List<VillagerEntity> villagers) {
 		Map<Long, Optional<VillageDescriptor>> chunkCache = new HashMap<>();
 		Map<String, VillageAggregation> villages = new HashMap<>();
@@ -159,11 +170,53 @@ public final class VillageManagerHandler {
 			}
 
 			VillageDescriptor village = descriptor.get();
+
+			// B1: Verify the villager has a bed or job site within the village bounds
+			if (!villagerBelongsToVillage(world, villager, village)) {
+				continue;
+			}
+
 			VillageAggregation aggregation = villages.computeIfAbsent(village.id(), ignored -> new VillageAggregation(village));
 			aggregation.villagerCount++;
 		}
 
 		return villages;
+	}
+
+	/**
+	 * A villager belongs to a village iff it has a bed (HOME POI) or a job site
+	 * located within the inner bounding box.
+	 */
+	private static boolean villagerBelongsToVillage(ServerWorld world, VillagerEntity villager, VillageDescriptor village) {
+		BlockBox bounds = village.bounds();
+
+		// Check for bed (HOME POI) within village bounds near the villager
+		boolean hasBedInBounds = world.getPointOfInterestStorage().getInSquare(
+			entry -> entry.matchesKey(PointOfInterestTypes.HOME),
+			villager.getBlockPos(),
+			48,
+			PointOfInterestStorage.OccupationStatus.ANY
+		).anyMatch(poi -> bounds.contains(poi.getPos()));
+
+		if (hasBedInBounds) {
+			return true;
+		}
+
+		// Check for any job site POI within village bounds near the villager
+		boolean hasJobSiteInBounds = world.getPointOfInterestStorage().getInSquare(
+			entry -> !entry.matchesKey(PointOfInterestTypes.HOME)
+				&& !entry.matchesKey(PointOfInterestTypes.MEETING)
+				&& !entry.matchesKey(PointOfInterestTypes.NETHER_PORTAL)
+				&& !entry.matchesKey(PointOfInterestTypes.LIGHTNING_ROD)
+				&& !entry.matchesKey(PointOfInterestTypes.LODESTONE)
+				&& !entry.matchesKey(PointOfInterestTypes.BEE_NEST)
+				&& !entry.matchesKey(PointOfInterestTypes.BEEHIVE),
+			villager.getBlockPos(),
+			48,
+			PointOfInterestStorage.OccupationStatus.ANY
+		).anyMatch(poi -> bounds.contains(poi.getPos()));
+
+		return hasJobSiteInBounds;
 	}
 
 	private static Optional<VillageDescriptor> findFallbackVillageDescriptor(ServerWorld world, BlockPos origin) {
@@ -275,6 +328,10 @@ public final class VillageManagerHandler {
 		int zOffset = SPAWN_RING_OFFSETS[(ringIndex + 1) % SPAWN_RING_OFFSETS.length];
 		BlockPos origin = village.center().add(xOffset, 0, zOffset);
 		BlockPos spawn = GuardVillagersMod.findGuardSpawnPos(world, origin, 10);
+		if (spawn == null) {
+			GuardVillagersMod.LOGGER.warn("No valid spawn position found for village guard in {}", village.id());
+			return false;
+		}
 
 		guard.refreshPositionAndAngles(spawn.getX() + 0.5D, spawn.getY(), spawn.getZ() + 0.5D, world.getRandom().nextFloat() * 360.0F, 0.0F);
 		guard.applyNaturalLoadout(world);
