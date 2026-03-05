@@ -91,7 +91,9 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private TextFieldWidget groupRenameField;
 	private int editingRow = -1;
 	private int paletteScrollOffset = 0;
+	private float paletteScrollAnimated = 0.0f;
 	private static final int VISIBLE_SWATCHES = 4;
+	private static final float SCROLL_LERP_SPEED = 0.25f;
 
 	// Groups two-pane layout
 	private int leftPaneX;
@@ -302,15 +304,15 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	}
 
 	private void renderCommonHeader(DrawContext context) {
-		context.drawText(this.textRenderer, this.title, this.panelX + 10, this.panelY + 8, TEXT_PRIMARY, false);
-		context.drawText(
-			this.textRenderer,
-			this.mode == ViewMode.GROUPS ? Text.literal("Group Configuration") : Text.literal("Zone Tactical View"),
-			this.panelX + 10,
-			this.panelY + 20,
-			this.mode == ViewMode.GROUPS ? SUBTITLE_GROUPS : SUBTITLE_TACTICS,
-			false
-		);
+		// Center title text horizontally in header
+		int titleWidth = this.textRenderer.getWidth(this.title);
+		int titleX = this.panelX + (this.panelWidth - titleWidth) / 2;
+		context.drawText(this.textRenderer, this.title, titleX, this.panelY + 4, TEXT_PRIMARY, false);
+
+		Text subtitle = this.mode == ViewMode.GROUPS ? Text.literal("Group Configuration") : Text.literal("Zone Tactical View");
+		int subtitleWidth = this.textRenderer.getWidth(subtitle);
+		int subtitleX = this.panelX + (this.panelWidth - subtitleWidth) / 2;
+		context.drawText(this.textRenderer, subtitle, subtitleX, this.panelY + 15, this.mode == ViewMode.GROUPS ? SUBTITLE_GROUPS : SUBTITLE_TACTICS, false);
 	}
 
 	private void renderTactics(DrawContext context, int mouseX, int mouseY) {
@@ -374,13 +376,21 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		int maxOffset = Math.max(0, allColors.length - VISIBLE_SWATCHES);
 		this.paletteScrollOffset = Math.min(this.paletteScrollOffset, maxOffset);
 
-		// Toggle button (rightmost position)
+		// Smooth scroll animation
+		float target = this.paletteScrollOffset;
+		float diff = target - this.paletteScrollAnimated;
+		if (Math.abs(diff) < 0.01f) {
+			this.paletteScrollAnimated = target;
+		} else {
+			this.paletteScrollAnimated += diff * SCROLL_LERP_SPEED;
+		}
+
+		// Toggle button (rightmost position, centered in header)
 		int toggleSize = SWATCH_SIZE;
 		int toggleX = this.panelX + this.panelWidth - 10 - toggleSize;
-		int toggleY = this.panelY + 9;
+		int toggleY = this.panelY + (HEADER_HEIGHT - toggleSize) / 2;
 		context.fill(toggleX, toggleY, toggleX + toggleSize, toggleY + toggleSize, 0xFF334154);
 		this.drawBorder(context, toggleX, toggleY, toggleSize, toggleSize, 0xFF5A6A7E);
-		// Draw "G" for groups toggle
 		context.drawText(this.textRenderer, Text.literal("G"), toggleX + 3, toggleY + 3, 0xFFEAF1FA, false);
 		this.paletteSwatches.add(new PaletteSwatch(null, toggleX, toggleY, toggleSize, toggleSize));
 
@@ -388,28 +398,38 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		int sepX = toggleX - 5;
 		context.fill(sepX, toggleY, sepX + 1, toggleY + toggleSize, PANEL_BORDER);
 
-		// Color swatches with scroll window
+		// Color swatches with smooth scroll
 		int swatchAreaWidth = VISIBLE_SWATCHES * SWATCH_SIZE + (VISIBLE_SWATCHES - 1) * SWATCH_GAP;
 		int startX = sepX - 5 - swatchAreaWidth;
 		int y = toggleY;
 
-		for (int i = 0; i < VISIBLE_SWATCHES && (i + this.paletteScrollOffset) < allColors.length; i++) {
-			int colorIndex = i + this.paletteScrollOffset;
-			RegionColor color = allColors[colorIndex];
-			int x = startX + i * (SWATCH_SIZE + SWATCH_GAP);
+		// Use animated offset for smooth sliding
+		float animOffset = this.paletteScrollAnimated;
+		int baseIndex = (int) Math.floor(animOffset);
+		float fractional = animOffset - baseIndex;
+		int pixelShift = (int) (fractional * (SWATCH_SIZE + SWATCH_GAP));
 
-			// Fade last swatch if more colors exist beyond view
-			boolean isLast = (i == VISIBLE_SWATCHES - 1) && (colorIndex < allColors.length - 1);
+		// Render one extra swatch for smooth transition
+		int renderCount = VISIBLE_SWATCHES + 1;
+
+		context.enableScissor(startX, y, startX + swatchAreaWidth, y + SWATCH_SIZE);
+		for (int i = 0; i < renderCount && (i + baseIndex) < allColors.length; i++) {
+			int colorIndex = i + baseIndex;
+			if (colorIndex < 0) continue;
+			RegionColor color = allColors[colorIndex];
+			int x = startX + i * (SWATCH_SIZE + SWATCH_GAP) - pixelShift;
+
 			int fillColor = color.swatchArgb();
-			if (isLast) {
-				// Reduce alpha for fade effect
-				fillColor = (fillColor & 0x00FFFFFF) | 0xAA000000;
-			}
 			context.fill(x, y, x + SWATCH_SIZE, y + SWATCH_SIZE, fillColor);
 			int border = this.chunkMapWidget.activeColor() == color ? 0xFFDCEBFF : 0xFF3B4A5E;
 			this.drawBorder(context, x, y, SWATCH_SIZE, SWATCH_SIZE, border);
-			this.paletteSwatches.add(new PaletteSwatch(color, x, y, SWATCH_SIZE, SWATCH_SIZE));
+
+			// Only register clickable swatches that are fully visible
+			if (x >= startX && x + SWATCH_SIZE <= startX + swatchAreaWidth) {
+				this.paletteSwatches.add(new PaletteSwatch(color, x, y, SWATCH_SIZE, SWATCH_SIZE));
+			}
 		}
+		context.disableScissor();
 
 		// Separator before palette area
 		int sepX2 = startX - 5;
@@ -438,7 +458,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		// Toggle button to switch back to Zones view
 		int toggleSize = SWATCH_SIZE;
 		int toggleX = this.panelX + this.panelWidth - 10 - toggleSize;
-		int toggleY = this.panelY + 9;
+		int toggleY = this.panelY + (HEADER_HEIGHT - toggleSize) / 2;
 		context.fill(toggleX, toggleY, toggleX + toggleSize, toggleY + toggleSize, 0xFF334154);
 		this.drawBorder(context, toggleX, toggleY, toggleSize, toggleSize, 0xFF5A6A7E);
 		context.drawText(this.textRenderer, Text.literal("Z"), toggleX + 3, toggleY + 3, 0xFFEAF1FA, false);
@@ -475,8 +495,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		}
 		unassigned.sort(guardSorter);
 
-		int groupCount = Math.max(3, Math.max(maxGroupRow + 1, this.dataStore.groupCount(worldContext)));
-		this.dataStore.ensureGroupCount(worldContext, groupCount);
+		int groupCount = Math.max(maxGroupRow + 1, this.dataStore.groupCount(worldContext));
 
 		// Two-pane layout
 		this.leftPaneW = (this.contentWidth - PANE_GAP) * LEFT_PANE_RATIO / 100;

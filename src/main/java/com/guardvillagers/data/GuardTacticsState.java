@@ -67,7 +67,7 @@ public final class GuardTacticsState extends PersistentState {
 		private static final int MAX_COLUMN_INDEX = 2;
 		private static final int MAX_GROUP_NAME_LENGTH = 24;
 		private static final int MAX_GROUP_COUNT = MAX_ROW_INDEX + 1;
-		private static final List<String> DEFAULT_GROUPS = List.of("Alpha", "Beta", "Gamma");
+		private static final List<String> DEFAULT_GROUPS = List.of();
 		private static final List<String> GROUP_NAME_CYCLE = List.of(
 			"Alpha",
 			"Beta",
@@ -95,13 +95,13 @@ public final class GuardTacticsState extends PersistentState {
 		private int preferredFormationId;
 
 		public PlayerTactics() {
-			this(Map.of(), Map.of(), DEFAULT_GROUPS, DEFAULT_FORMATION_ID, List.of());
+			this(Map.of(), Map.of(), List.of(), DEFAULT_FORMATION_ID, List.of());
 		}
 
 		private PlayerTactics(Map<String, Integer> zoneColors, Map<String, Integer> rowColumnZones, List<String> groupNames, int preferredFormationId, List<String> legacyRoles) {
-			// Migration: if groups is empty but legacy roles exist, use roles
+			// Migration: if groups is empty but legacy roles exist, use roles; otherwise start empty
 			List<String> effectiveNames = (groupNames == null || groupNames.isEmpty()) && legacyRoles != null && !legacyRoles.isEmpty()
-					? legacyRoles : (groupNames != null && !groupNames.isEmpty() ? groupNames : DEFAULT_GROUPS);
+					? legacyRoles : (groupNames != null ? groupNames : List.of());
 			this.zoneColors = new HashMap<>();
 			for (Map.Entry<String, Integer> entry : zoneColors.entrySet()) {
 				Integer colorId = entry.getValue();
@@ -139,9 +139,7 @@ public final class GuardTacticsState extends PersistentState {
 					}
 				}
 			}
-			if (this.groupNames.isEmpty()) {
-				this.groupNames.addAll(DEFAULT_GROUPS);
-			}
+			// Groups start empty — players create groups via the UI or /guards commands
 			this.preferredFormationId = normalizeFormationId(preferredFormationId);
 		}
 
@@ -365,7 +363,7 @@ public final class GuardTacticsState extends PersistentState {
 
 		private static String sanitizeGroupName(String name) {
 			if (name == null || name.isBlank()) {
-				return "Alpha";
+				return "Group";
 			}
 			String trimmed = name.trim();
 			return trimmed.length() <= MAX_GROUP_NAME_LENGTH ? trimmed : trimmed.substring(0, MAX_GROUP_NAME_LENGTH);
