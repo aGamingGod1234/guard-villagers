@@ -322,6 +322,21 @@ public class GuardVillagersMod implements ModInitializer {
 								}
 								context.getSource().sendError(Text.literal("Could not rename that group."));
 								return 0;
+							}))))
+				.then(CommandManager.literal("assign")
+					.then(CommandManager.argument("guardUuid", StringArgumentType.string())
+						.then(CommandManager.argument("groupRow", IntegerArgumentType.integer(1, 32))
+							.executes(context -> {
+								ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+								String uuidStr = StringArgumentType.getString(context, "guardUuid");
+								int groupRow = IntegerArgumentType.getInteger(context, "groupRow") - 1;
+								int result = assignGuardToGroup(player, uuidStr, groupRow);
+								if (result > 0) {
+									context.getSource().sendFeedback(() -> Text.literal("Assigned guard to group " + (groupRow + 1) + "."), false);
+								} else {
+									context.getSource().sendError(Text.literal("Could not assign guard (not found or not owned)."));
+								}
+								return result;
 							})))))
 			// Keep old "hierarchy" command as alias
 			.then(CommandManager.literal("hierarchy")
@@ -597,6 +612,33 @@ public class GuardVillagersMod implements ModInitializer {
 		}
 		state.markDirty();
 		return true;
+	}
+
+	private static int assignGuardToGroup(ServerPlayerEntity player, String uuidStr, int groupRow) {
+		UUID guardUuid;
+		try {
+			guardUuid = UUID.fromString(uuidStr);
+		} catch (IllegalArgumentException e) {
+			return 0;
+		}
+		MinecraftServer server = player.getCommandSource().getServer();
+		if (server == null) {
+			return 0;
+		}
+		for (GuardEntity guard : getOwnedGuards(server, player.getUuid())) {
+			if (guard.getUuid().equals(guardUuid)) {
+				guard.setGroupIndex(groupRow);
+				GuardTacticsState state = GuardTacticsManager.getState(server);
+				GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUuid());
+				String groupName = tactics.getGroupName(groupRow);
+				if (groupName != null && !groupName.isBlank()) {
+					guard.setGroupName(groupName);
+				}
+				guard.updateGroupNameplate();
+				return 1;
+			}
+		}
+		return 0;
 	}
 
 	private static void refreshOpenTacticsScreen(ServerPlayerEntity player) {
