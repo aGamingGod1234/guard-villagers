@@ -20,7 +20,7 @@ import java.util.UUID;
 
 public final class GuardTacticsState extends PersistentState {
 	private static final Codec<Map<String, Integer>> STRING_INT_MAP_CODEC = Codec.unboundedMap(Codec.STRING, Codec.intRange(0, 4));
-	private static final Codec<List<String>> ROLE_LIST_CODEC = Codec.STRING.listOf();
+	private static final Codec<List<String>> GROUP_LIST_CODEC = Codec.STRING.listOf();
 	private static final Codec<Map<UUID, PlayerTactics>> TACTICS_MAP_CODEC = Codec.unboundedMap(Uuids.STRING_CODEC, PlayerTactics.CODEC);
 
 	public static final Codec<GuardTacticsState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
@@ -59,45 +59,49 @@ public final class GuardTacticsState extends PersistentState {
 	}
 
 	public static final class PlayerTactics {
-		private static final int MAX_COLOR_ID = 4;
+		private static final int MAX_COLOR_ID = 10;
 		private static final int DEFAULT_FORMATION_ID = FormationType.FOLLOW.getId();
 		private static final int MIN_ROW_INDEX = 0;
 		private static final int MAX_ROW_INDEX = 31;
 		private static final int MIN_COLUMN_INDEX = 0;
 		private static final int MAX_COLUMN_INDEX = 2;
-		private static final int MAX_ROLE_NAME_LENGTH = 24;
-		private static final int MAX_ROLE_COUNT = MAX_ROW_INDEX + 1;
-		private static final List<String> DEFAULT_ROLES = List.of("Vanguard", "Core", "Reserve");
-		private static final List<String> ROLE_NAME_CYCLE = List.of(
-			"Vanguard",
-			"Core",
-			"Reserve",
-			"Skirmisher",
-			"Sentinel",
-			"Scout",
-			"Guard Wing",
-			"Spearhead",
-			"Support",
-			"Shield Wall"
+		private static final int MAX_GROUP_NAME_LENGTH = 24;
+		private static final int MAX_GROUP_COUNT = MAX_ROW_INDEX + 1;
+		private static final List<String> DEFAULT_GROUPS = List.of("Alpha", "Beta", "Gamma");
+		private static final List<String> GROUP_NAME_CYCLE = List.of(
+			"Alpha",
+			"Beta",
+			"Gamma",
+			"Delta",
+			"Epsilon",
+			"Zeta",
+			"Eta",
+			"Theta",
+			"Iota",
+			"Kappa"
 		);
 
 		public static final Codec<PlayerTactics> CODEC = RecordCodecBuilder.create(instance -> instance.group(
 			STRING_INT_MAP_CODEC.optionalFieldOf("zone_colors", Map.of()).forGetter(PlayerTactics::zoneColorsForCodec),
 			STRING_INT_MAP_CODEC.optionalFieldOf("row_column_zones", Map.of()).forGetter(PlayerTactics::rowColumnZonesForCodec),
-			ROLE_LIST_CODEC.optionalFieldOf("roles", DEFAULT_ROLES).forGetter(PlayerTactics::roleNamesForCodec),
-			Codec.INT.optionalFieldOf("preferred_formation", DEFAULT_FORMATION_ID).forGetter(PlayerTactics::preferredFormationIdForCodec)
+			GROUP_LIST_CODEC.optionalFieldOf("groups", List.of()).forGetter(PlayerTactics::groupNamesForCodec),
+			Codec.INT.optionalFieldOf("preferred_formation", DEFAULT_FORMATION_ID).forGetter(PlayerTactics::preferredFormationIdForCodec),
+			GROUP_LIST_CODEC.optionalFieldOf("roles", List.of()).forGetter(pt -> List.of())
 		).apply(instance, PlayerTactics::new));
 
 		private final Map<String, Integer> zoneColors;
 		private final Map<String, Integer> rowColumnZones;
-		private final List<String> roleNames;
+		private final List<String> groupNames;
 		private int preferredFormationId;
 
 		public PlayerTactics() {
-			this(Map.of(), Map.of(), DEFAULT_ROLES, DEFAULT_FORMATION_ID);
+			this(Map.of(), Map.of(), DEFAULT_GROUPS, DEFAULT_FORMATION_ID, List.of());
 		}
 
-		private PlayerTactics(Map<String, Integer> zoneColors, Map<String, Integer> rowColumnZones, List<String> roleNames, int preferredFormationId) {
+		private PlayerTactics(Map<String, Integer> zoneColors, Map<String, Integer> rowColumnZones, List<String> groupNames, int preferredFormationId, List<String> legacyRoles) {
+			// Migration: if groups is empty but legacy roles exist, use roles
+			List<String> effectiveNames = (groupNames == null || groupNames.isEmpty()) && legacyRoles != null && !legacyRoles.isEmpty()
+					? legacyRoles : (groupNames != null && !groupNames.isEmpty() ? groupNames : DEFAULT_GROUPS);
 			this.zoneColors = new HashMap<>();
 			for (Map.Entry<String, Integer> entry : zoneColors.entrySet()) {
 				Integer colorId = entry.getValue();
@@ -125,24 +129,24 @@ public final class GuardTacticsState extends PersistentState {
 				}
 				this.rowColumnZones.put(toRowColumnKey(rowColumn[0], rowColumn[1]), colorId);
 			}
-			this.roleNames = new ArrayList<>();
-			for (String role : roleNames) {
-				String sanitized = sanitizeRoleName(role);
+			this.groupNames = new ArrayList<>();
+			for (String name : effectiveNames) {
+				String sanitized = sanitizeGroupName(name);
 				if (!sanitized.isEmpty()) {
-					this.roleNames.add(sanitized);
-					if (this.roleNames.size() >= MAX_ROLE_COUNT) {
+					this.groupNames.add(sanitized);
+					if (this.groupNames.size() >= MAX_GROUP_COUNT) {
 						break;
 					}
 				}
 			}
-			if (this.roleNames.isEmpty()) {
-				this.roleNames.addAll(DEFAULT_ROLES);
+			if (this.groupNames.isEmpty()) {
+				this.groupNames.addAll(DEFAULT_GROUPS);
 			}
 			this.preferredFormationId = normalizeFormationId(preferredFormationId);
 		}
 
 		public PlayerTactics copy() {
-			return new PlayerTactics(this.zoneColors, this.rowColumnZones, this.roleNames, this.preferredFormationId);
+			return new PlayerTactics(this.zoneColors, this.rowColumnZones, this.groupNames, this.preferredFormationId, List.of());
 		}
 
 		public FormationType getPreferredFormation() {
@@ -209,57 +213,60 @@ public final class GuardTacticsState extends PersistentState {
 			}
 		}
 
-		public int roleCount() {
-			return this.roleNames.size();
+		public int groupCount() {
+			return this.groupNames.size();
 		}
 
-		public String getRoleName(int row) {
+		public String getGroupName(int row) {
 			int normalizedRow = normalizeRow(row);
-			this.ensureRoleCount(normalizedRow + 1);
-			return this.roleNames.get(normalizedRow);
+			this.ensureGroupCount(normalizedRow + 1);
+			return this.groupNames.get(normalizedRow);
 		}
 
-		public void setRoleName(int row, String roleName) {
+		public void setGroupName(int row, String name) {
 			if (row < 0) {
 				return;
 			}
 			int normalizedRow = normalizeRow(row);
-			this.ensureRoleCount(normalizedRow + 1);
-			this.roleNames.set(normalizedRow, sanitizeRoleName(roleName));
+			this.ensureGroupCount(normalizedRow + 1);
+			this.groupNames.set(normalizedRow, sanitizeGroupName(name));
 		}
 
-		public int addRole() {
-			if (this.roleNames.size() >= MAX_ROLE_COUNT) {
-				return MAX_ROLE_COUNT - 1;
+		public int addGroup() {
+			if (this.groupNames.size() >= MAX_GROUP_COUNT) {
+				return MAX_GROUP_COUNT - 1;
 			}
-			String roleName = "Role " + (this.roleNames.size() + 1);
-			this.roleNames.add(roleName);
-			return this.roleNames.size() - 1;
+			int index = this.groupNames.size();
+			String name = index < GROUP_NAME_CYCLE.size() ? GROUP_NAME_CYCLE.get(index) : "Group " + (index + 1);
+			this.groupNames.add(name);
+			return this.groupNames.size() - 1;
 		}
 
-		public int cycleRoleName(int row) {
+		public int cycleGroupName(int row) {
 			if (row < 0) {
 				return -1;
 			}
 			int normalizedRow = normalizeRow(row);
-			this.ensureRoleCount(normalizedRow + 1);
-			String current = this.roleNames.get(normalizedRow);
-			int index = ROLE_NAME_CYCLE.indexOf(current);
-			int nextIndex = (index + 1) % ROLE_NAME_CYCLE.size();
+			this.ensureGroupCount(normalizedRow + 1);
+			String current = this.groupNames.get(normalizedRow);
+			int index = GROUP_NAME_CYCLE.indexOf(current);
+			int nextIndex = (index + 1) % GROUP_NAME_CYCLE.size();
 			if (index < 0) {
 				nextIndex = 0;
 			}
-			this.roleNames.set(normalizedRow, ROLE_NAME_CYCLE.get(nextIndex));
+			this.groupNames.set(normalizedRow, GROUP_NAME_CYCLE.get(nextIndex));
 			return nextIndex;
 		}
 
-		public void ensureRoleCount(int count) {
-			int normalizedCount = Math.max(0, Math.min(MAX_ROLE_COUNT, count));
-			if (normalizedCount <= this.roleNames.size()) {
+		public void ensureGroupCount(int count) {
+			int normalizedCount = Math.max(0, Math.min(MAX_GROUP_COUNT, count));
+			if (normalizedCount <= this.groupNames.size()) {
 				return;
 			}
-			while (this.roleNames.size() < normalizedCount) {
-				this.roleNames.add("Role " + (this.roleNames.size() + 1));
+			while (this.groupNames.size() < normalizedCount) {
+				int index = this.groupNames.size();
+				String name = index < GROUP_NAME_CYCLE.size() ? GROUP_NAME_CYCLE.get(index) : "Group " + (index + 1);
+				this.groupNames.add(name);
 			}
 		}
 
@@ -279,8 +286,8 @@ public final class GuardTacticsState extends PersistentState {
 			return Collections.unmodifiableMap(this.rowColumnZones);
 		}
 
-		private List<String> roleNamesForCodec() {
-			return Collections.unmodifiableList(this.roleNames);
+		private List<String> groupNamesForCodec() {
+			return Collections.unmodifiableList(this.groupNames);
 		}
 
 		private int preferredFormationIdForCodec() {
@@ -356,12 +363,12 @@ public final class GuardTacticsState extends PersistentState {
 			return Math.max(MIN_COLUMN_INDEX, Math.min(MAX_COLUMN_INDEX, column));
 		}
 
-		private static String sanitizeRoleName(String roleName) {
-			if (roleName == null || roleName.isBlank()) {
-				return "Role";
+		private static String sanitizeGroupName(String name) {
+			if (name == null || name.isBlank()) {
+				return "Alpha";
 			}
-			String trimmed = roleName.trim();
-			return trimmed.length() <= MAX_ROLE_NAME_LENGTH ? trimmed : trimmed.substring(0, MAX_ROLE_NAME_LENGTH);
+			String trimmed = name.trim();
+			return trimmed.length() <= MAX_GROUP_NAME_LENGTH ? trimmed : trimmed.substring(0, MAX_GROUP_NAME_LENGTH);
 		}
 
 		private static int normalizeFormationId(int formationId) {

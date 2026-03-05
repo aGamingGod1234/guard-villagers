@@ -23,6 +23,7 @@ public class GuardVillagersClient implements ClientModInitializer {
 		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_LAYER, GuardEntityModel::getTexturedModelData);
 		EntityRendererRegistry.register(GuardVillagersMod.GUARD_ENTITY_TYPE, GuardEntityRenderer::new);
 		HandledScreens.register(GuardVillagersMod.GUARD_TACTICS_SCREEN_HANDLER, GuardTacticsScreen::new);
+		GuardDebugRenderer.register();
 
 		ClientChunkEvents.CHUNK_LOAD.register((world, chunk) -> {
 			MinecraftClient client = MinecraftClient.getInstance();

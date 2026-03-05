@@ -37,7 +37,7 @@ public final class ClientTacticsDataStore {
 	private static final long SAVE_DEBOUNCE_MILLIS = 1_200L;
 	private static final int MAX_ROLE_NAME_LENGTH = 24;
 	private static final Path SAVE_PATH = FabricLoader.getInstance().getConfigDir().resolve("guardvillagers_client_tactics.json");
-	private static final List<String> DEFAULT_ROLE_NAMES = List.of("Vanguard", "Core", "Reserve");
+	private static final List<String> DEFAULT_GROUP_NAMES = List.of("Alpha", "Beta", "Gamma");
 	private static final ClientTacticsDataStore INSTANCE = new ClientTacticsDataStore();
 
 	private final Map<String, WorldData> worlds = new HashMap<>();
@@ -91,84 +91,84 @@ public final class ClientTacticsDataStore {
 		}
 	}
 
-	public int roleCount(WorldContext context) {
-		return this.world(context).roleNames.size();
+	public int groupCount(WorldContext context) {
+		return this.world(context).groupNames.size();
 	}
 
-	public void ensureRoleCount(WorldContext context, int roleCount) {
-		int targetCount = Math.max(0, roleCount);
+	public void ensureGroupCount(WorldContext context, int groupCount) {
+		int targetCount = Math.max(0, groupCount);
 		WorldData worldData = this.world(context);
-		if (targetCount <= worldData.roleNames.size()) {
+		if (targetCount <= worldData.groupNames.size()) {
 			return;
 		}
-		while (worldData.roleNames.size() < targetCount) {
-			worldData.roleNames.add("Role " + (worldData.roleNames.size() + 1));
+		while (worldData.groupNames.size() < targetCount) {
+			worldData.groupNames.add("Group " + (worldData.groupNames.size() + 1));
 		}
 		this.markDirty();
 	}
 
-	public String getRoleName(WorldContext context, int row) {
+	public String getGroupName(WorldContext context, int row) {
 		int normalizedRow = Math.max(0, row);
-		this.ensureRoleCount(context, normalizedRow + 1);
-		return this.world(context).roleNames.get(normalizedRow);
+		this.ensureGroupCount(context, normalizedRow + 1);
+		return this.world(context).groupNames.get(normalizedRow);
 	}
 
-	public void setRoleName(WorldContext context, int row, String roleName) {
+	public void setGroupName(WorldContext context, int row, String roleName) {
 		int normalizedRow = Math.max(0, row);
-		this.ensureRoleCount(context, normalizedRow + 1);
-		String sanitized = sanitizeRoleName(roleName);
+		this.ensureGroupCount(context, normalizedRow + 1);
+		String sanitized = sanitizeGroupName(roleName);
 		WorldData worldData = this.world(context);
-		String previous = worldData.roleNames.set(normalizedRow, sanitized);
+		String previous = worldData.groupNames.set(normalizedRow, sanitized);
 		if (!previous.equals(sanitized)) {
 			this.markDirty();
 		}
 	}
 
-	public RegionColor getRoleColor(WorldContext context, int row) {
-		int colorId = this.world(context).rowColorByRole.get(Math.max(0, row));
+	public RegionColor getGroupColor(WorldContext context, int row) {
+		int colorId = this.world(context).rowColorByGroup.get(Math.max(0, row));
 		return RegionColor.fromId(colorId);
 	}
 
-	public void setRoleColor(WorldContext context, int row, RegionColor color) {
+	public void setGroupColor(WorldContext context, int row, RegionColor color) {
 		int normalizedRow = Math.max(0, row);
 		RegionColor normalized = color == null ? RegionColor.NONE : color;
 		WorldData worldData = this.world(context);
 
 		if (normalized != RegionColor.NONE) {
 			int toClear = Integer.MIN_VALUE;
-			for (Int2IntMap.Entry entry : worldData.rowColorByRole.int2IntEntrySet()) {
+			for (Int2IntMap.Entry entry : worldData.rowColorByGroup.int2IntEntrySet()) {
 				if (entry.getIntKey() != normalizedRow && entry.getIntValue() == normalized.id()) {
 					toClear = entry.getIntKey();
 					break;
 				}
 			}
 			if (toClear != Integer.MIN_VALUE) {
-				worldData.rowColorByRole.remove(toClear);
+				worldData.rowColorByGroup.remove(toClear);
 			}
 		}
 
 		if (normalized == RegionColor.NONE) {
-			if (worldData.rowColorByRole.remove(normalizedRow) != 0) {
+			if (worldData.rowColorByGroup.remove(normalizedRow) != 0) {
 				this.markDirty();
 			}
 			return;
 		}
 
-		if (worldData.rowColorByRole.put(normalizedRow, normalized.id()) != normalized.id()) {
+		if (worldData.rowColorByGroup.put(normalizedRow, normalized.id()) != normalized.id()) {
 			this.markDirty();
 		} else {
 			this.markDirty();
 		}
 	}
 
-	public Optional<RoleColorBinding> roleBindingForColor(WorldContext context, RegionColor color) {
+	public Optional<GroupColorBinding> groupBindingForColor(WorldContext context, RegionColor color) {
 		if (color == null || color == RegionColor.NONE) {
 			return Optional.empty();
 		}
 		int colorId = color.id();
 		WorldData worldData = this.world(context);
 		int bestRow = Integer.MAX_VALUE;
-		for (Int2IntMap.Entry entry : worldData.rowColorByRole.int2IntEntrySet()) {
+		for (Int2IntMap.Entry entry : worldData.rowColorByGroup.int2IntEntrySet()) {
 			if (entry.getIntValue() == colorId && entry.getIntKey() < bestRow) {
 				bestRow = entry.getIntKey();
 			}
@@ -176,7 +176,7 @@ public final class ClientTacticsDataStore {
 		if (bestRow == Integer.MAX_VALUE) {
 			return Optional.empty();
 		}
-		return Optional.of(new RoleColorBinding(bestRow, this.getRoleName(context, bestRow)));
+		return Optional.of(new GroupColorBinding(bestRow, this.getGroupName(context, bestRow)));
 	}
 
 	public void tickSave() {
@@ -232,19 +232,19 @@ public final class ClientTacticsDataStore {
 					continue;
 				}
 				WorldData worldData = new WorldData();
-				worldData.roleNames.clear();
+				worldData.groupNames.clear();
 
-				JsonArray rolesArray = asArray(worldObject.get("roleNames"));
+				JsonArray rolesArray = asArray(worldObject.get("groupNames"));
 				if (rolesArray != null) {
 					for (JsonElement roleElement : rolesArray) {
-						String sanitized = sanitizeRoleName(asString(roleElement));
+						String sanitized = sanitizeGroupName(asString(roleElement));
 						if (!sanitized.isBlank()) {
-							worldData.roleNames.add(sanitized);
+							worldData.groupNames.add(sanitized);
 						}
 					}
 				}
-				if (worldData.roleNames.isEmpty()) {
-					worldData.roleNames.addAll(DEFAULT_ROLE_NAMES);
+				if (worldData.groupNames.isEmpty()) {
+					worldData.groupNames.addAll(DEFAULT_GROUP_NAMES);
 				}
 
 				JsonObject rowColorsObject = asObject(worldObject.get("rowColors"));
@@ -254,7 +254,7 @@ public final class ClientTacticsDataStore {
 							int row = Integer.parseInt(colorEntry.getKey());
 							RegionColor color = RegionColor.fromId(asInt(colorEntry.getValue(), 0));
 							if (row >= 0 && color != RegionColor.NONE) {
-								worldData.rowColorByRole.put(row, color.id());
+								worldData.rowColorByGroup.put(row, color.id());
 							}
 						} catch (NumberFormatException ignored) {
 						}
@@ -315,13 +315,13 @@ public final class ClientTacticsDataStore {
 			worldsObject.add(worldEntry.getKey(), worldObject);
 
 			JsonArray roleArray = new JsonArray();
-			for (String roleName : worldData.roleNames) {
-				roleArray.add(sanitizeRoleName(roleName));
+			for (String roleName : worldData.groupNames) {
+				roleArray.add(sanitizeGroupName(roleName));
 			}
-			worldObject.add("roleNames", roleArray);
+			worldObject.add("groupNames", roleArray);
 
 			JsonObject rowColorObject = new JsonObject();
-			for (Int2IntMap.Entry colorEntry : worldData.rowColorByRole.int2IntEntrySet()) {
+			for (Int2IntMap.Entry colorEntry : worldData.rowColorByGroup.int2IntEntrySet()) {
 				RegionColor color = RegionColor.fromId(colorEntry.getIntValue());
 				if (color != RegionColor.NONE) {
 					rowColorObject.addProperty(Integer.toString(colorEntry.getIntKey()), color.id());
@@ -392,11 +392,11 @@ public final class ClientTacticsDataStore {
 		return value.replace('\\', '_').replace('/', '_').replace(':', '_');
 	}
 
-	private static String sanitizeRoleName(String roleName) {
-		if (roleName == null || roleName.isBlank()) {
-			return "Role";
+	private static String sanitizeGroupName(String name) {
+		if (name == null || name.isBlank()) {
+			return "Alpha";
 		}
-		String trimmed = roleName.trim();
+		String trimmed = name.trim();
 		return trimmed.length() <= MAX_ROLE_NAME_LENGTH ? trimmed : trimmed.substring(0, MAX_ROLE_NAME_LENGTH);
 	}
 
@@ -425,11 +425,11 @@ public final class ClientTacticsDataStore {
 
 	private static final class WorldData {
 		private final Map<String, DimensionData> dimensions = new HashMap<>();
-		private final List<String> roleNames = new ArrayList<>(DEFAULT_ROLE_NAMES);
-		private final Int2IntOpenHashMap rowColorByRole = new Int2IntOpenHashMap();
+		private final List<String> groupNames = new ArrayList<>(DEFAULT_GROUP_NAMES);
+		private final Int2IntOpenHashMap rowColorByGroup = new Int2IntOpenHashMap();
 
 		private WorldData() {
-			this.rowColorByRole.defaultReturnValue(0);
+			this.rowColorByGroup.defaultReturnValue(0);
 		}
 	}
 
@@ -445,6 +445,6 @@ public final class ClientTacticsDataStore {
 	public record WorldContext(String worldId, String dimensionId) {
 	}
 
-	public record RoleColorBinding(int row, String roleName) {
+	public record GroupColorBinding(int row, String groupName) {
 	}
 }

@@ -5,15 +5,16 @@ import net.minecraft.client.world.ClientWorld;
 import net.minecraft.util.math.ChunkPos;
 
 public final class ChunkMapWidget {
-	private static final double MIN_ZOOM = 0.25D;
-	private static final double MAX_ZOOM = 8.0D;
+	private static final double MIN_ZOOM = 0.05D;
+	private static final double MAX_ZOOM = 16.0D;
 	private static final double ZOOM_STEP_BASE = 1.1D;
 	private static final double BASE_CHUNK_PIXELS = 24.0D;
 
 	private static final int MAP_BACKGROUND = 0xFF10161D;
 	private static final int SELECTION_OVERLAY = 0x446FD3FF;
 	private static final int HOVER_OVERLAY = 0x33FFFFFF;
-	private static final int TERRAIN_TILE_RESOLUTION = 64;
+	private static final int TERRAIN_TILE_RESOLUTION = 16;
+	private static final int MAX_CHUNKS_PER_FRAME = 2000;
 
 	private final ClientTacticsDataStore dataStore;
 	private final ChunkTerrainCache terrainCache;
@@ -76,8 +77,12 @@ public final class ChunkMapWidget {
 		int maxChunkZ = (int) Math.ceil(this.screenToChunkZ(this.y + this.height)) + 1;
 
 		context.enableScissor(this.x, this.y, this.x + this.width, this.y + this.height);
+		int chunksRendered = 0;
 		for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
 			for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+				if (chunksRendered >= MAX_CHUNKS_PER_FRAME) {
+					break;
+				}
 				if (!this.dataStore.isDiscovered(worldContext, chunkX, chunkZ)) {
 					continue;
 				}
@@ -90,6 +95,7 @@ public final class ChunkMapWidget {
 					continue;
 				}
 				this.renderChunkTerrain(context, world, worldContext, chunkX, chunkZ, left, top, right, bottom);
+				chunksRendered++;
 
 				RegionColor regionColor = this.dataStore.getRegionColor(worldContext, chunkX, chunkZ);
 				if (regionColor != RegionColor.NONE) {
