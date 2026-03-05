@@ -57,10 +57,11 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 	private final ClientTacticsDataStore dataStore = ClientTacticsDataStore.getInstance();
 	private final ChunkMapWidget chunkMapWidget = new ChunkMapWidget(this.dataStore, GuardVillagersClient.terrainCache());
-	private final ViewMode mode;
+	private ViewMode mode;
 	private final List<PaletteSwatch> paletteSwatches = new ArrayList<>();
 	private final List<GroupRowHitbox> groupRows = new ArrayList<>();
 	private final List<GuardCardHitbox> guardCards = new ArrayList<>();
+	private PaletteSwatch groupsToggleSwatch;
 
 	private int panelX;
 	private int panelY;
@@ -76,6 +77,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private int groupScrollRows;
 	private TextFieldWidget groupRenameField;
 	private int editingRow = -1;
+	private int paletteScrollOffset = 0;
+	private static final int VISIBLE_SWATCHES = 4;
 
 	public GuardTacticsScreen(GuardTacticsScreenHandler handler, PlayerInventory inventory, Text title) {
 		super(handler, inventory, title);
@@ -188,6 +191,13 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	@Override
 	public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
 		if (this.mode == ViewMode.TACTICS) {
+			// Check if scrolling over palette area
+			if (this.isPaletteHovered(mouseX, mouseY)) {
+				int direction = verticalAmount < 0 ? 1 : -1;
+				int maxOffset = Math.max(0, RegionColor.paletteCount() - VISIBLE_SWATCHES);
+				this.paletteScrollOffset = MathHelper.clamp(this.paletteScrollOffset + direction, 0, maxOffset);
+				return true;
+			}
 			if (this.chunkMapWidget.mouseScrolled(mouseX, mouseY, verticalAmount)) {
 				return true;
 			}
@@ -302,23 +312,60 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 	private void renderPalette(DrawContext context) {
 		this.paletteSwatches.clear();
-		RegionColor[] colors = {RegionColor.BLUE, RegionColor.RED, RegionColor.YELLOW, RegionColor.GREEN};
-		int totalWidth = colors.length * SWATCH_SIZE + (colors.length - 1) * SWATCH_GAP;
-		int startX = this.panelX + this.panelWidth - 10 - totalWidth;
-		int y = this.panelY + 9;
-		for (int i = 0; i < colors.length; i++) {
-			RegionColor color = colors[i];
+		RegionColor[] allColors = RegionColor.paletteColors();
+		int maxOffset = Math.max(0, allColors.length - VISIBLE_SWATCHES);
+		this.paletteScrollOffset = Math.min(this.paletteScrollOffset, maxOffset);
+
+		// Toggle button (rightmost position)
+		int toggleSize = SWATCH_SIZE;
+		int toggleX = this.panelX + this.panelWidth - 10 - toggleSize;
+		int toggleY = this.panelY + 9;
+		context.fill(toggleX, toggleY, toggleX + toggleSize, toggleY + toggleSize, 0xFF334154);
+		this.drawBorder(context, toggleX, toggleY, toggleSize, toggleSize, 0xFF5A6A7E);
+		// Draw "G" for groups toggle
+		context.drawText(this.textRenderer, Text.literal("G"), toggleX + 3, toggleY + 3, 0xFFEAF1FA, false);
+		this.paletteSwatches.add(new PaletteSwatch(null, toggleX, toggleY, toggleSize, toggleSize));
+
+		// Separator line
+		int sepX = toggleX - 5;
+		context.fill(sepX, toggleY, sepX + 1, toggleY + toggleSize, PANEL_BORDER);
+
+		// Color swatches with scroll window
+		int swatchAreaWidth = VISIBLE_SWATCHES * SWATCH_SIZE + (VISIBLE_SWATCHES - 1) * SWATCH_GAP;
+		int startX = sepX - 5 - swatchAreaWidth;
+		int y = toggleY;
+
+		for (int i = 0; i < VISIBLE_SWATCHES && (i + this.paletteScrollOffset) < allColors.length; i++) {
+			int colorIndex = i + this.paletteScrollOffset;
+			RegionColor color = allColors[colorIndex];
 			int x = startX + i * (SWATCH_SIZE + SWATCH_GAP);
-			context.fill(x, y, x + SWATCH_SIZE, y + SWATCH_SIZE, color.swatchArgb());
+
+			// Fade last swatch if more colors exist beyond view
+			boolean isLast = (i == VISIBLE_SWATCHES - 1) && (colorIndex < allColors.length - 1);
+			int fillColor = color.swatchArgb();
+			if (isLast) {
+				// Reduce alpha for fade effect
+				fillColor = (fillColor & 0x00FFFFFF) | 0xAA000000;
+			}
+			context.fill(x, y, x + SWATCH_SIZE, y + SWATCH_SIZE, fillColor);
 			int border = this.chunkMapWidget.activeColor() == color ? 0xFFDCEBFF : 0xFF3B4A5E;
 			this.drawBorder(context, x, y, SWATCH_SIZE, SWATCH_SIZE, border);
 			this.paletteSwatches.add(new PaletteSwatch(color, x, y, SWATCH_SIZE, SWATCH_SIZE));
 		}
+
+		// Separator before palette area
+		int sepX2 = startX - 5;
+		context.fill(sepX2, y, sepX2 + 1, y + toggleSize, PANEL_BORDER);
 	}
 
 	private boolean handlePaletteClick(double mouseX, double mouseY) {
 		for (PaletteSwatch swatch : this.paletteSwatches) {
 			if (swatch.contains(mouseX, mouseY)) {
+				if (swatch.color() == null) {
+					// Toggle button — switch to Groups mode
+					this.mode = ViewMode.GROUPS;
+					return true;
+				}
 				this.chunkMapWidget.setActiveColor(swatch.color());
 				return true;
 			}
@@ -330,6 +377,15 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		if (this.groupRenameField != null && this.editingRow >= 0) {
 			this.groupRenameField.setVisible(false);
 		}
+
+		// Toggle button to switch back to Zones view
+		int toggleSize = SWATCH_SIZE;
+		int toggleX = this.panelX + this.panelWidth - 10 - toggleSize;
+		int toggleY = this.panelY + 9;
+		context.fill(toggleX, toggleY, toggleX + toggleSize, toggleY + toggleSize, 0xFF334154);
+		this.drawBorder(context, toggleX, toggleY, toggleSize, toggleSize, 0xFF5A6A7E);
+		context.drawText(this.textRenderer, Text.literal("Z"), toggleX + 3, toggleY + 3, 0xFFEAF1FA, false);
+		this.groupsToggleSwatch = new PaletteSwatch(null, toggleX, toggleY, toggleSize, toggleSize);
 
 		ClientTacticsDataStore.WorldContext worldContext = this.resolveWorldContext();
 		if (worldContext == null || this.client == null || this.client.player == null || this.client.world == null) {
@@ -467,6 +523,12 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	}
 
 	private boolean handleGroupsClick(double mouseX, double mouseY, int button, boolean shiftDown) {
+		// Check toggle button first
+		if (this.groupsToggleSwatch != null && this.groupsToggleSwatch.contains(mouseX, mouseY)) {
+			this.mode = ViewMode.TACTICS;
+			return true;
+		}
+
 		ClientTacticsDataStore.WorldContext worldContext = this.resolveWorldContext();
 		if (worldContext == null) {
 			return false;
@@ -475,17 +537,12 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		for (GroupRowHitbox row : this.groupRows) {
 			if (row.containsSwatch(mouseX, mouseY)) {
 				RegionColor current = this.dataStore.getGroupColor(worldContext, row.row());
-				RegionColor next = switch (current) {
-					case NONE -> RegionColor.BLUE;
-					case BLUE -> RegionColor.RED;
-					case RED -> RegionColor.YELLOW;
-					case YELLOW -> RegionColor.GREEN;
-					case GREEN -> RegionColor.NONE;
-				};
 				if (button == 1) {
-					next = RegionColor.NONE;
+					this.dataStore.setGroupColor(worldContext, row.row(), RegionColor.NONE);
+				} else {
+					RegionColor next = (current == RegionColor.NONE) ? RegionColor.BLUE : current.nextPaletteColor();
+					this.dataStore.setGroupColor(worldContext, row.row(), next);
 				}
-				this.dataStore.setGroupColor(worldContext, row.row(), next);
 				return true;
 			}
 			if (row.containsHeader(mouseX, mouseY) && button == 1 && shiftDown) {
@@ -687,6 +744,33 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			return null;
 		}
 		return ClientTacticsDataStore.resolveContext(this.client, this.client.world);
+	}
+
+	private boolean isPaletteHovered(double mouseX, double mouseY) {
+		for (PaletteSwatch swatch : this.paletteSwatches) {
+			if (swatch.color() != null && swatch.contains(mouseX, mouseY)) {
+				return true;
+			}
+		}
+		// Also check the area between swatches (the full palette row)
+		if (!this.paletteSwatches.isEmpty()) {
+			int minX = Integer.MAX_VALUE;
+			int maxX = Integer.MIN_VALUE;
+			int minY = Integer.MAX_VALUE;
+			int maxY = Integer.MIN_VALUE;
+			for (PaletteSwatch swatch : this.paletteSwatches) {
+				if (swatch.color() != null) {
+					minX = Math.min(minX, swatch.x());
+					maxX = Math.max(maxX, swatch.x() + swatch.width());
+					minY = Math.min(minY, swatch.y());
+					maxY = Math.max(maxY, swatch.y() + swatch.height());
+				}
+			}
+			if (minX != Integer.MAX_VALUE && mouseX >= minX && mouseX < maxX && mouseY >= minY && mouseY < maxY) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void drawConnector(DrawContext context, int fromX, int fromY, int toX, int toY, int color) {

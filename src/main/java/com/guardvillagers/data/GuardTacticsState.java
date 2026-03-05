@@ -59,7 +59,7 @@ public final class GuardTacticsState extends PersistentState {
 	}
 
 	public static final class PlayerTactics {
-		private static final int MAX_COLOR_ID = 4;
+		private static final int MAX_COLOR_ID = 10;
 		private static final int DEFAULT_FORMATION_ID = FormationType.FOLLOW.getId();
 		private static final int MIN_ROW_INDEX = 0;
 		private static final int MAX_ROW_INDEX = 31;
