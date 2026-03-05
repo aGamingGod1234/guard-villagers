@@ -740,11 +740,18 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	}
 
 	private List<GuardEntity> collectOwnedGuards(UUID owner) {
-		if (this.client == null || this.client.world == null) {
+		if (this.client == null || this.client.world == null || this.client.player == null) {
 			return List.of();
 		}
-		List<GuardEntity> allGuards = this.client.world.getEntitiesByClass(GuardEntity.class, new Box(-30_000_000, this.client.world.getBottomY(), -30_000_000, 30_000_000, this.client.world.getTopYInclusive(), 30_000_000), guard -> guard.isOwnedBy(owner));
-		return allGuards;
+		// Use player-centered bounding box matching server view distance instead of world-spanning box
+		double range = 256.0;
+		double px = this.client.player.getX();
+		double pz = this.client.player.getZ();
+		Box searchBox = new Box(
+			px - range, this.client.world.getBottomY(), pz - range,
+			px + range, this.client.world.getTopYInclusive(), pz + range
+		);
+		return this.client.world.getEntitiesByClass(GuardEntity.class, searchBox, guard -> guard.isOwnedBy(owner));
 	}
 
 	private void renderGuardCard(DrawContext context, GuardEntity guard, int x, int y) {
