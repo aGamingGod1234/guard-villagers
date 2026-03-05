@@ -997,7 +997,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 	}
 
-	private void updateGroupNameplate() {
+	public void updateGroupNameplate() {
 		if (this.age % 10 != 0) {
 			return;
 		}
