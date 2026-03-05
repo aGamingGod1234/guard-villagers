@@ -71,10 +71,10 @@ public final class GuardDragHandler {
 		int y = (int) this.dragY - cardH / 2;
 
 		// Draw with slight scale-up effect (1.1x) via translate
-		context.getMatrices().push();
-		context.getMatrices().translate(this.dragX, this.dragY, 200);
-		context.getMatrices().scale(1.1F, 1.1F, 1.0F);
-		context.getMatrices().translate(-this.dragX, -this.dragY, 0);
+		context.getMatrices().pushMatrix();
+		context.getMatrices().translate((float) this.dragX, (float) this.dragY);
+		context.getMatrices().scale(1.1F, 1.1F);
+		context.getMatrices().translate((float) -this.dragX, (float) -this.dragY);
 
 		context.fill(x, y, x + cardW, y + cardH, 0xEE1E2A38);
 		drawBorder(context, x, y, cardW, cardH, 0xFF6A8FBF);
@@ -92,7 +92,7 @@ public final class GuardDragHandler {
 		drawArmorIcon(context, this.draggedGuard.getEquippedStack(EquipmentSlot.LEGS), x + 40, y + 26);
 		drawArmorIcon(context, this.draggedGuard.getEquippedStack(EquipmentSlot.FEET), x + 58, y + 26);
 
-		context.getMatrices().pop();
+		context.getMatrices().popMatrix();
 	}
 
 	private static void drawArmorIcon(DrawContext context, ItemStack stack, int x, int y) {
