@@ -37,7 +37,7 @@ public final class ClientTacticsDataStore {
 	private static final long SAVE_DEBOUNCE_MILLIS = 1_200L;
 	private static final int MAX_ROLE_NAME_LENGTH = 24;
 	private static final Path SAVE_PATH = FabricLoader.getInstance().getConfigDir().resolve("guardvillagers_client_tactics.json");
-	private static final List<String> DEFAULT_GROUP_NAMES = List.of("Alpha", "Beta", "Gamma");
+	private static final List<String> DEFAULT_GROUP_NAMES = List.of();
 	private static final ClientTacticsDataStore INSTANCE = new ClientTacticsDataStore();
 
 	private final Map<String, WorldData> worlds = new HashMap<>();
@@ -243,9 +243,7 @@ public final class ClientTacticsDataStore {
 						}
 					}
 				}
-				if (worldData.groupNames.isEmpty()) {
-					worldData.groupNames.addAll(DEFAULT_GROUP_NAMES);
-				}
+				// Groups start empty — players create groups via the UI
 
 				JsonObject rowColorsObject = asObject(worldObject.get("rowColors"));
 				if (rowColorsObject != null) {
@@ -394,7 +392,7 @@ public final class ClientTacticsDataStore {
 
 	private static String sanitizeGroupName(String name) {
 		if (name == null || name.isBlank()) {
-			return "Alpha";
+			return "Group";
 		}
 		String trimmed = name.trim();
 		return trimmed.length() <= MAX_ROLE_NAME_LENGTH ? trimmed : trimmed.substring(0, MAX_ROLE_NAME_LENGTH);
