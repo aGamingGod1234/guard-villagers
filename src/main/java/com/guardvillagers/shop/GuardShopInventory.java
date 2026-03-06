@@ -151,8 +151,7 @@ public class GuardShopInventory extends SimpleInventory {
 			"Hire Guard",
 			Formatting.GREEN,
 			"Cost: " + guardCost + " emerald block(s)",
-			"Shift-click buys multiple",
-			"with round-robin roles."
+			"Shifh-click to buy max."
 		));
 
 		int armorLevel = upgrades.getArmorLevel();

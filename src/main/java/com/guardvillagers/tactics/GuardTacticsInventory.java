@@ -26,7 +26,6 @@ public final class GuardTacticsInventory extends SimpleInventory {
 		}
 		this.tacticsState = GuardTacticsManager.getState(server);
 		this.playerTactics = this.tacticsState.getOrCreate(this.owner.getUuid());
-		this.playerTactics.ensureGroupCount(3);
 		this.refresh();
 	}
 

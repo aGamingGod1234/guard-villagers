@@ -54,6 +54,8 @@ import net.minecraft.registry.Registry;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.registry.RegistryKeys;
 import net.minecraft.registry.entry.RegistryEntry;
+import net.minecraft.command.permission.LeveledPermissionPredicate;
+import net.minecraft.command.permission.PermissionLevel;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundEvent;
@@ -119,6 +121,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private static final String GROUP_INDEX_KEY = "GroupIndex";
 	private static final String GROUP_COLUMN_KEY = "GroupColumn";
 	private static final String GROUP_NAME_KEY = "GroupName";
+	private static final String SKIN_PROFILE_KEY = "GuardSkinProfile";
 	// Legacy keys for migration
 	private static final String LEGACY_HIERARCHY_ROW_KEY = "HierarchyRow";
 	private static final String LEGACY_HIERARCHY_COLUMN_KEY = "HierarchyColumn";
@@ -127,6 +130,10 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private static final String LAST_LAND_Y_KEY = "LastLandY";
 	private static final String LAST_LAND_Z_KEY = "LastLandZ";
 	private static final String HAS_LAST_LAND_KEY = "HasLastLand";
+	private static final int MIN_GROUP_INDEX = -1;
+	private static final int MAX_GROUP_INDEX = 31;
+	private static final String DEFAULT_UNASSIGNED_GROUP_NAME = "Unassigned";
+	private static final int MAX_SKIN_PROFILE_LENGTH = 64;
 	private static final String GROUP_NAME_PREFIX = "[G] ";
 	private static final String DEBUG_NAME_PREFIX = "[DBG] ";
 
@@ -184,9 +191,10 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private int patrolRadius = 0;
 	private BlockPos lastLandPos;
 	private BlockPos lastLandCheckPos;
-	private int groupIndex = 0;
+	private int groupIndex = MIN_GROUP_INDEX;
 	private int groupColumn = 1;
-	private String groupName = "Alpha";
+	private String groupName = DEFAULT_UNASSIGNED_GROUP_NAME;
+	private String skinProfileId = "";
 	private boolean playerMainHand;
 	private final EnumMap<EquipmentSlot, Boolean> playerArmor = new EnumMap<>(EquipmentSlot.class);
 
@@ -443,7 +451,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	public void setGroupIndex(int groupIndex) {
-		this.groupIndex = MathHelper.clamp(groupIndex, 0, 31);
+		this.groupIndex = MathHelper.clamp(groupIndex, MIN_GROUP_INDEX, MAX_GROUP_INDEX);
 	}
 
 	public int getGroupColumn() {
@@ -456,18 +464,31 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	public String getGroupName() {
 		if (this.groupName == null || this.groupName.isBlank()) {
-			return "Role";
+			return DEFAULT_UNASSIGNED_GROUP_NAME;
 		}
 		return this.groupName;
 	}
 
 	public void setGroupName(String name) {
 		if (name == null || name.isBlank()) {
-			this.groupName = "Alpha";
+			this.groupName = DEFAULT_UNASSIGNED_GROUP_NAME;
 			return;
 		}
 		String trimmed = name.trim();
 		this.groupName = trimmed.length() <= 24 ? trimmed : trimmed.substring(0, 24);
+	}
+
+	public String getSkinProfileId() {
+		return this.skinProfileId;
+	}
+
+	public void setSkinProfileId(String skinProfileId) {
+		if (skinProfileId == null || skinProfileId.isBlank()) {
+			this.skinProfileId = "";
+			return;
+		}
+		String trimmed = skinProfileId.trim();
+		this.skinProfileId = trimmed.length() <= MAX_SKIN_PROFILE_LENGTH ? trimmed : trimmed.substring(0, MAX_SKIN_PROFILE_LENGTH);
 	}
 
 	public void clearCombatTarget() {
@@ -579,9 +600,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.assignRandomRole(world);
 		this.setBehavior(GuardBehavior.random(world.getRandom()));
 		this.setFormationType(FormationType.FOLLOW);
-		this.setGroupIndex(2);
+		this.setGroupIndex(MIN_GROUP_INDEX);
 		this.setGroupColumn(world.getRandom().nextBetween(0, 2));
-		this.setGroupName("Gamma");
+		this.setGroupName(DEFAULT_UNASSIGNED_GROUP_NAME);
 		this.equipGuardGear(world, 0, new GuardPlayerUpgrades());
 	}
 
@@ -591,9 +612,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 		this.setBehavior(GuardBehavior.DEFENSIVE);
 		this.setFormationType(FormationType.FOLLOW);
-		this.setGroupIndex(Math.max(0, 2 - Math.min(2, this.getLevel() / 4)));
+		this.setGroupIndex(MIN_GROUP_INDEX);
 		this.setGroupColumn(world.getRandom().nextBetween(0, 2));
-		this.setGroupName("Alpha");
+		this.setGroupName(DEFAULT_UNASSIGNED_GROUP_NAME);
 		this.equipGuardGear(world, upgrades.getWeaponLevel(), upgrades);
 	}
 
@@ -1096,8 +1117,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			return;
 		}
 
-		int reputation = GuardReputationManager.getEffectiveReputation(world, this.ownerUuid, this.getBlockPos(), 64);
-		if (reputation <= -35) {
+		if (GuardReputationManager.shouldGuardsTurnHostile(world, this.ownerUuid, this.getBlockPos())) {
 			ServerPlayerEntity owner = this.resolveOwner(world);
 			if (owner != null && !owner.getAbilities().creativeMode && this.squaredDistanceTo(owner) < 256.0D) {
 				this.setPriorityTarget(owner);
@@ -1309,6 +1329,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 				this.clearCombatTarget();
 				return true;
 			}
+			if (attacker instanceof PlayerEntity player && this.isCreativeOperator(player)) {
+				return true;
+			}
 			if (!this.isAlly(attacker) && this.canSee(attacker)) {
 				this.setPriorityTarget(attacker);
 				this.rallyNearbyGuards(world, attacker);
@@ -1319,6 +1342,19 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 
 		return true;
+	}
+
+	private boolean isCreativeOperator(PlayerEntity player) {
+		if (!(player instanceof ServerPlayerEntity serverPlayer)) {
+			return false;
+		}
+		if (!serverPlayer.getAbilities().creativeMode) {
+			return false;
+		}
+		if (!(serverPlayer.getCommandSource().getPermissions() instanceof LeveledPermissionPredicate leveled)) {
+			return false;
+		}
+		return leveled.getLevel().isAtLeast(PermissionLevel.GAMEMASTERS);
 	}
 
 	@Override
@@ -1335,6 +1371,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			if (other instanceof RaiderEntity) {
 				GuardReputationManager.recordRaidDefense(world, this.ownerUuid);
 			}
+		}
+		if (other instanceof PlayerEntity player) {
+			GuardReputationManager.resetReputation(world, player.getUuid());
 		}
 		return result;
 	}
@@ -1428,6 +1467,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		view.putInt(GROUP_INDEX_KEY, this.groupIndex);
 		view.putInt(GROUP_COLUMN_KEY, this.groupColumn);
 		view.putString(GROUP_NAME_KEY, this.getGroupName());
+		view.putString(SKIN_PROFILE_KEY, this.skinProfileId);
 		boolean hasLastLand = this.lastLandPos != null;
 		view.putBoolean(HAS_LAST_LAND_KEY, hasLastLand);
 		if (hasLastLand) {
@@ -1465,11 +1505,11 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 		this.patrolRadius = MathHelper.clamp(view.getInt(PATROL_RADIUS_KEY, 0), 0, 128);
 		// Read new keys first, fall back to legacy keys for migration
-		int readGroupIndex = view.getInt(GROUP_INDEX_KEY, -1);
-		if (readGroupIndex < 0) {
+		int readGroupIndex = view.getInt(GROUP_INDEX_KEY, Integer.MIN_VALUE);
+		if (readGroupIndex == Integer.MIN_VALUE) {
 			readGroupIndex = view.getInt(LEGACY_HIERARCHY_ROW_KEY, 0);
 		}
-		this.groupIndex = MathHelper.clamp(readGroupIndex, 0, 31);
+		this.groupIndex = MathHelper.clamp(readGroupIndex, MIN_GROUP_INDEX, MAX_GROUP_INDEX);
 		int readGroupColumn = view.getInt(GROUP_COLUMN_KEY, -1);
 		if (readGroupColumn < 0) {
 			readGroupColumn = view.getInt(LEGACY_HIERARCHY_COLUMN_KEY, 1);
@@ -1480,6 +1520,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			readGroupName = view.getString(LEGACY_HIERARCHY_ROLE_KEY, "Alpha");
 		}
 		this.setGroupName(readGroupName);
+		this.setSkinProfileId(view.getString(SKIN_PROFILE_KEY, ""));
 		if (view.getBoolean(HAS_LAST_LAND_KEY, false)) {
 			this.lastLandPos = new BlockPos(
 				view.getInt(LAST_LAND_X_KEY, 0),

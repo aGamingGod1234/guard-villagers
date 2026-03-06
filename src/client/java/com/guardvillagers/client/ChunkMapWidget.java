@@ -13,6 +13,7 @@ public final class ChunkMapWidget {
 	private static final int MAP_BACKGROUND = 0xFF10161D;
 	private static final int SELECTION_OVERLAY = 0x446FD3FF;
 	private static final int HOVER_OVERLAY = 0x33FFFFFF;
+	private static final int ZONE_OUTLINE_ALPHA_MASK = 0xCC000000;
 	private static final int TERRAIN_TILE_RESOLUTION = 16;
 	private static final int MAX_CHUNKS_PER_FRAME = 2000;
 
@@ -100,6 +101,7 @@ public final class ChunkMapWidget {
 				RegionColor regionColor = this.dataStore.getRegionColor(worldContext, chunkX, chunkZ);
 				if (regionColor != RegionColor.NONE) {
 					context.fill(left, top, right, bottom, regionColor.overlayArgb());
+					this.drawZoneOutline(context, left, top, right, bottom, regionColor);
 				}
 
 				if (this.isChunkSelected(chunkX, chunkZ)) {
@@ -319,6 +321,17 @@ public final class ChunkMapWidget {
 				context.fill(columnLeft, rowTop, columnRight, rowBottom, color);
 			}
 		}
+	}
+
+	private void drawZoneOutline(DrawContext context, int left, int top, int right, int bottom, RegionColor regionColor) {
+		if (right - left < 1 || bottom - top < 1) {
+			return;
+		}
+		int outlineColor = (regionColor.swatchArgb() & 0x00FFFFFF) | ZONE_OUTLINE_ALPHA_MASK;
+		context.fill(left, top, right, top + 1, outlineColor);
+		context.fill(left, bottom - 1, right, bottom, outlineColor);
+		context.fill(left, top, left + 1, bottom, outlineColor);
+		context.fill(right - 1, top, right, bottom, outlineColor);
 	}
 
 	private boolean isChunkSelected(int chunkX, int chunkZ) {

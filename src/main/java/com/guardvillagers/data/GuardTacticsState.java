@@ -67,7 +67,7 @@ public final class GuardTacticsState extends PersistentState {
 		private static final int MAX_COLUMN_INDEX = 2;
 		private static final int MAX_GROUP_NAME_LENGTH = 24;
 		private static final int MAX_GROUP_COUNT = MAX_ROW_INDEX + 1;
-		private static final List<String> DEFAULT_GROUPS = List.of("Alpha", "Beta", "Gamma");
+		private static final List<String> DEFAULT_GROUPS = List.of();
 		private static final List<String> GROUP_NAME_CYCLE = List.of(
 			"Alpha",
 			"Beta",
@@ -99,9 +99,10 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		private PlayerTactics(Map<String, Integer> zoneColors, Map<String, Integer> rowColumnZones, List<String> groupNames, int preferredFormationId, List<String> legacyRoles) {
-			// Migration: if groups is empty but legacy roles exist, use roles
+			// Migration: if groups is empty but legacy roles exist, use roles.
 			List<String> effectiveNames = (groupNames == null || groupNames.isEmpty()) && legacyRoles != null && !legacyRoles.isEmpty()
-					? legacyRoles : (groupNames != null && !groupNames.isEmpty() ? groupNames : DEFAULT_GROUPS);
+				? legacyRoles
+				: (groupNames == null ? DEFAULT_GROUPS : groupNames);
 			this.zoneColors = new HashMap<>();
 			for (Map.Entry<String, Integer> entry : zoneColors.entrySet()) {
 				Integer colorId = entry.getValue();
@@ -138,9 +139,6 @@ public final class GuardTacticsState extends PersistentState {
 						break;
 					}
 				}
-			}
-			if (this.groupNames.isEmpty()) {
-				this.groupNames.addAll(DEFAULT_GROUPS);
 			}
 			this.preferredFormationId = normalizeFormationId(preferredFormationId);
 		}

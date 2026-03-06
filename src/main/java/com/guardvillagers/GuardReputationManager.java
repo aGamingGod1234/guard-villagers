@@ -2,27 +2,32 @@ package com.guardvillagers;
 
 import com.guardvillagers.data.GuardReputationState;
 import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.passive.VillagerEntity;
 import net.minecraft.entity.raid.RaiderEntity;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.village.VillagerGossipType;
 
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class GuardReputationManager {
-	private static final int TRUST_THRESHOLD = -10;
-	private static final int HOSTILE_THRESHOLD = -35;
-	private static final int MAX_GOSSIP_VILLAGERS = 24;
+	private static final double TRUST_THRESHOLD = 0.50D;
+	private static final double HOSTILE_THRESHOLD = 0.50D;
+	private static final int LEGACY_RANGE_SPAN = 400;
 	private static final int TRADE_COOLDOWN_TICKS = 200;
 	private static final int COOLDOWN_RETENTION_TICKS = 20 * 60 * 10;
 	private static final int COOLDOWN_CLEANUP_INTERVAL_TICKS = 20 * 60;
+	public static final int DECAY_INTERVAL_TICKS = 20 * 36;
+	public static final double DECAY_STEP = 0.01D;
+	private static final double TRADE_DELTA = legacyDeltaToNormalized(1);
+	private static final double VILLAGER_HARM_DELTA = legacyDeltaToNormalized(-8);
+	private static final double GUARD_HARM_DELTA = legacyDeltaToNormalized(-6);
+	private static final double RAID_DEFENSE_DELTA = legacyDeltaToNormalized(4);
+	private static final double HOSTILE_KILL_DELTA = legacyDeltaToNormalized(2);
+	private static final double RAIDER_KILL_DELTA = legacyDeltaToNormalized(4);
 	private static final Map<UUID, Long> TRADE_REPUTATION_COOLDOWN = new ConcurrentHashMap<>();
 	private static volatile long lastCooldownCleanupTick = Long.MIN_VALUE;
 
@@ -33,18 +38,12 @@ public final class GuardReputationManager {
 		return server.getOverworld().getPersistentStateManager().getOrCreate(GuardReputationState.TYPE);
 	}
 
-	public static int getEffectiveReputation(ServerWorld world, UUID playerUuid, BlockPos reference, int radius) {
-		int manual = getState(world.getServer()).get(playerUuid);
-		int gossip = getGossipScore(world, playerUuid, reference, radius);
-		return manual + gossip;
+	public static double getEffectiveReputation(ServerWorld world, UUID playerUuid, BlockPos reference, int radius) {
+		return getState(world.getServer()).ensureTracked(playerUuid);
 	}
 
-	public static int getEffectiveReputation(ServerPlayerEntity player) {
-		int reputation = getEffectiveReputation(player.getEntityWorld(), player.getUuid(), player.getBlockPos(), 64);
-		if (player.hasStatusEffect(StatusEffects.HERO_OF_THE_VILLAGE)) {
-			reputation += 10;
-		}
-		return reputation;
+	public static double getEffectiveReputation(ServerPlayerEntity player) {
+		return getEffectiveReputation(player.getEntityWorld(), player.getUuid(), player.getBlockPos(), 64);
 	}
 
 	public static boolean isTrustedByGuards(ServerWorld world, UUID playerUuid, BlockPos reference) {
@@ -52,20 +51,31 @@ public final class GuardReputationManager {
 	}
 
 	public static boolean shouldGuardsTurnHostile(ServerWorld world, UUID playerUuid, BlockPos reference) {
-		return getEffectiveReputation(world, playerUuid, reference, 64) <= HOSTILE_THRESHOLD;
+		return getEffectiveReputation(world, playerUuid, reference, 64) < HOSTILE_THRESHOLD;
 	}
 
-	public static int applyReputationDelta(ServerWorld world, UUID playerUuid, int delta) {
+	public static double getStoredReputation(ServerWorld world, UUID playerUuid) {
+		return getState(world.getServer()).ensureTracked(playerUuid);
+	}
+
+	public static void setReputation(ServerWorld world, UUID playerUuid, double value) {
+		getState(world.getServer()).set(playerUuid, value);
+	}
+
+	public static void resetReputation(ServerWorld world, UUID playerUuid) {
+		setReputation(world, playerUuid, 0.0D);
+	}
+
+	public static double applyReputationDelta(ServerWorld world, UUID playerUuid, int legacyDelta) {
+		return applyNormalizedReputationDelta(world, playerUuid, legacyDeltaToNormalized(legacyDelta));
+	}
+
+	public static double applyNormalizedReputationDelta(ServerWorld world, UUID playerUuid, double delta) {
 		return getState(world.getServer()).add(playerUuid, delta);
 	}
 
 	public static int getAdjustedGuardCost(ServerPlayerEntity player, int baseCost) {
-		int rep = getEffectiveReputation(player);
-		double discountFactor = rep >= 0
-			? 1.0D - Math.min(0.45D, rep / 200.0D)
-			: 1.0D + Math.min(0.75D, Math.abs(rep) / 120.0D);
-		int adjusted = (int) Math.round(baseCost * discountFactor);
-		return Math.max(1, adjusted);
+		return Math.max(1, baseCost);
 	}
 
 	public static void recordTradeInteraction(ServerPlayerEntity player, VillagerEntity villager) {
@@ -78,28 +88,34 @@ public final class GuardReputationManager {
 		}
 
 		TRADE_REPUTATION_COOLDOWN.put(key, now);
-		villager.getGossip().startGossip(player.getUuid(), VillagerGossipType.TRADING, 2);
-		applyReputationDelta(player.getEntityWorld(), player.getUuid(), 1);
+		applyNormalizedReputationDelta(player.getEntityWorld(), player.getUuid(), TRADE_DELTA);
 	}
 
 	public static void recordVillagerHarm(ServerWorld world, UUID playerUuid) {
-		applyReputationDelta(world, playerUuid, -8);
+		applyNormalizedReputationDelta(world, playerUuid, VILLAGER_HARM_DELTA);
 	}
 
 	public static void recordGuardHarm(ServerWorld world, UUID playerUuid) {
-		applyReputationDelta(world, playerUuid, -6);
+		applyNormalizedReputationDelta(world, playerUuid, GUARD_HARM_DELTA);
 	}
 
 	public static void recordRaidDefense(ServerWorld world, UUID playerUuid) {
-		applyReputationDelta(world, playerUuid, 4);
+		applyNormalizedReputationDelta(world, playerUuid, RAID_DEFENSE_DELTA);
 	}
 
 	public static void recordHostileKill(ServerWorld world, UUID playerUuid, LivingEntity target) {
 		if (target == null) {
 			return;
 		}
-		int delta = target instanceof RaiderEntity ? 4 : 2;
-		applyReputationDelta(world, playerUuid, delta);
+		double delta = target instanceof RaiderEntity ? RAIDER_KILL_DELTA : HOSTILE_KILL_DELTA;
+		applyNormalizedReputationDelta(world, playerUuid, delta);
+	}
+
+	public static void tickDecay(ServerWorld world) {
+		if (world.getTime() % DECAY_INTERVAL_TICKS != 0) {
+			return;
+		}
+		getState(world.getServer()).decayAll(DECAY_STEP);
 	}
 
 	private static void cleanupTradeCooldown(long worldTime) {
@@ -111,28 +127,13 @@ public final class GuardReputationManager {
 		TRADE_REPUTATION_COOLDOWN.entrySet().removeIf(entry -> entry.getValue() < cutoff);
 	}
 
-	private static int getGossipScore(ServerWorld world, UUID playerUuid, BlockPos reference, int radius) {
-		Box box = new Box(reference).expand(radius);
-		int score = 0;
-		int counted = 0;
-		ServerPlayerEntity resolvedPlayer = world.getServer().getPlayerManager().getPlayer(playerUuid);
-		for (VillagerEntity villager : world.getEntitiesByClass(VillagerEntity.class, box, VillagerEntity::isAlive)) {
-			if (resolvedPlayer != null) {
-				score += villager.getReputation(resolvedPlayer);
-			} else {
-				score += villager.getGossip().getReputationFor(playerUuid, type -> true);
-			}
-			counted++;
-			if (counted >= MAX_GOSSIP_VILLAGERS) {
-				break;
-			}
-		}
-		return score / Math.max(1, counted);
-	}
-
 	private static UUID mix(UUID a, UUID b) {
 		long msb = a.getMostSignificantBits() ^ b.getMostSignificantBits();
 		long lsb = a.getLeastSignificantBits() ^ b.getLeastSignificantBits();
 		return new UUID(msb, lsb);
+	}
+
+	private static double legacyDeltaToNormalized(int legacyDelta) {
+		return legacyDelta / (double) LEGACY_RANGE_SPAN;
 	}
 }

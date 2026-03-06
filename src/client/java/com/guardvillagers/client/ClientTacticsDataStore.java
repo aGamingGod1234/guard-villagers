@@ -37,7 +37,7 @@ public final class ClientTacticsDataStore {
 	private static final long SAVE_DEBOUNCE_MILLIS = 1_200L;
 	private static final int MAX_ROLE_NAME_LENGTH = 24;
 	private static final Path SAVE_PATH = FabricLoader.getInstance().getConfigDir().resolve("guardvillagers_client_tactics.json");
-	private static final List<String> DEFAULT_GROUP_NAMES = List.of("Alpha", "Beta", "Gamma");
+	private static final List<String> DEFAULT_GROUP_NAMES = List.of();
 	private static final ClientTacticsDataStore INSTANCE = new ClientTacticsDataStore();
 
 	private final Map<String, WorldData> worlds = new HashMap<>();
@@ -243,10 +243,6 @@ public final class ClientTacticsDataStore {
 						}
 					}
 				}
-				if (worldData.groupNames.isEmpty()) {
-					worldData.groupNames.addAll(DEFAULT_GROUP_NAMES);
-				}
-
 				JsonObject rowColorsObject = asObject(worldObject.get("rowColors"));
 				if (rowColorsObject != null) {
 					for (Map.Entry<String, JsonElement> colorEntry : rowColorsObject.entrySet()) {

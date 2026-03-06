@@ -64,6 +64,11 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private static final int DIALOG_HEIGHT = 90;
 	private static final int DIALOG_BUTTON_WIDTH = 70;
 	private static final int DIALOG_BUTTON_HEIGHT = 18;
+	private static final int VISIBLE_SWATCHES = 4;
+	private static final int PALETTE_SCROLL_ANIMATION_MILLIS = 140;
+	private static final double PANE_SCROLL_LERP_FACTOR = 0.35D;
+	private static final int LEFT_PANE_SCROLL_STEP = GROUP_BOX_HEIGHT + GROUP_BOX_GAP;
+	private static final int RIGHT_PANE_SCROLL_STEP = UNASSIGNED_CARD_HEIGHT + UNASSIGNED_CARD_GAP;
 
 	private static final ItemStack GUARD_HEAD_ICON = new ItemStack(Items.PLAYER_HEAD);
 
@@ -91,7 +96,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private TextFieldWidget groupRenameField;
 	private int editingRow = -1;
 	private int paletteScrollOffset = 0;
-	private static final int VISIBLE_SWATCHES = 4;
+	private double paletteScrollAnimatedOffset;
+	private double paletteScrollAnimationFrom;
+	private double paletteScrollAnimationTo;
+	private long paletteScrollAnimationStartedAt;
 
 	// Groups two-pane layout
 	private int leftPaneX;
@@ -106,6 +114,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private int rightPaneScroll;
 	private int leftPaneMaxScroll;
 	private int rightPaneMaxScroll;
+	private int leftPaneScrollTarget;
+	private int rightPaneScrollTarget;
+	private double leftPaneScrollAnimated;
+	private double rightPaneScrollAnimated;
 
 	// Dirty tracking for group assignments
 	private final Map<UUID, Integer> pendingAssignments = new HashMap<>();
@@ -135,6 +147,11 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		this.groupRenameField.setVisible(false);
 		this.groupRenameField.setMaxLength(24);
 		this.addDrawableChild(this.groupRenameField);
+		this.paletteScrollAnimatedOffset = this.paletteScrollOffset;
+		this.paletteScrollAnimationFrom = this.paletteScrollOffset;
+		this.paletteScrollAnimationTo = this.paletteScrollOffset;
+		this.leftPaneScrollAnimated = this.leftPaneScroll;
+		this.rightPaneScrollAnimated = this.rightPaneScroll;
 
 		if (this.client != null && this.client.player != null) {
 			this.chunkMapWidget.ensureCameraCentered(this.client.player.getChunkPos());
@@ -249,7 +266,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			if (this.isPaletteHovered(mouseX, mouseY)) {
 				int direction = verticalAmount < 0 ? 1 : -1;
 				int maxOffset = Math.max(0, RegionColor.paletteCount() - VISIBLE_SWATCHES);
-				this.paletteScrollOffset = MathHelper.clamp(this.paletteScrollOffset + direction, 0, maxOffset);
+				int nextOffset = MathHelper.clamp(this.paletteScrollOffset + direction, 0, maxOffset);
+				this.startPaletteWheelAnimation(nextOffset);
 				return true;
 			}
 			if (this.chunkMapWidget.mouseScrolled(mouseX, mouseY, verticalAmount)) {
@@ -258,13 +276,15 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
 		}
 
-		int scrollDelta = verticalAmount < 0 ? 12 : -12;
+		int direction = verticalAmount < 0 ? 1 : -1;
 		if (this.contains(this.leftPaneX, this.leftPaneY, this.leftPaneW, this.leftPaneH, mouseX, mouseY)) {
-			this.leftPaneScroll = MathHelper.clamp(this.leftPaneScroll + scrollDelta, 0, this.leftPaneMaxScroll);
+			int next = this.leftPaneScrollTarget + (direction * LEFT_PANE_SCROLL_STEP);
+			this.leftPaneScrollTarget = MathHelper.clamp(next, 0, this.leftPaneMaxScroll);
 			return true;
 		}
 		if (this.contains(this.rightPaneX, this.rightPaneY, this.rightPaneW, this.rightPaneH, mouseX, mouseY)) {
-			this.rightPaneScroll = MathHelper.clamp(this.rightPaneScroll + scrollDelta, 0, this.rightPaneMaxScroll);
+			int next = this.rightPaneScrollTarget + (direction * RIGHT_PANE_SCROLL_STEP);
+			this.rightPaneScrollTarget = MathHelper.clamp(next, 0, this.rightPaneMaxScroll);
 			return true;
 		}
 		return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
@@ -372,7 +392,13 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		this.paletteSwatches.clear();
 		RegionColor[] allColors = RegionColor.paletteColors();
 		int maxOffset = Math.max(0, allColors.length - VISIBLE_SWATCHES);
-		this.paletteScrollOffset = Math.min(this.paletteScrollOffset, maxOffset);
+		if (this.paletteScrollOffset > maxOffset) {
+			this.paletteScrollOffset = maxOffset;
+			this.paletteScrollAnimatedOffset = maxOffset;
+			this.paletteScrollAnimationFrom = maxOffset;
+			this.paletteScrollAnimationTo = maxOffset;
+		}
+		double renderedOffset = this.currentPaletteScrollOffset();
 
 		// Toggle button (rightmost position)
 		int toggleSize = SWATCH_SIZE;
@@ -392,20 +418,17 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		int swatchAreaWidth = VISIBLE_SWATCHES * SWATCH_SIZE + (VISIBLE_SWATCHES - 1) * SWATCH_GAP;
 		int startX = sepX - 5 - swatchAreaWidth;
 		int y = toggleY;
-
-		for (int i = 0; i < VISIBLE_SWATCHES && (i + this.paletteScrollOffset) < allColors.length; i++) {
-			int colorIndex = i + this.paletteScrollOffset;
-			RegionColor color = allColors[colorIndex];
-			int x = startX + i * (SWATCH_SIZE + SWATCH_GAP);
-
-			// Fade last swatch if more colors exist beyond view
-			boolean isLast = (i == VISIBLE_SWATCHES - 1) && (colorIndex < allColors.length - 1);
-			int fillColor = color.swatchArgb();
-			if (isLast) {
-				// Reduce alpha for fade effect
-				fillColor = (fillColor & 0x00FFFFFF) | 0xAA000000;
+		int swatchStride = SWATCH_SIZE + SWATCH_GAP;
+		int visibleMinX = startX - swatchStride;
+		int visibleMaxX = startX + swatchAreaWidth + swatchStride;
+		for (int colorIndex = 0; colorIndex < allColors.length; colorIndex++) {
+			double slot = colorIndex - renderedOffset;
+			int x = startX + (int) Math.round(slot * swatchStride);
+			if (x + SWATCH_SIZE < visibleMinX || x > visibleMaxX) {
+				continue;
 			}
-			context.fill(x, y, x + SWATCH_SIZE, y + SWATCH_SIZE, fillColor);
+			RegionColor color = allColors[colorIndex];
+			context.fill(x, y, x + SWATCH_SIZE, y + SWATCH_SIZE, color.swatchArgb());
 			int border = this.chunkMapWidget.activeColor() == color ? 0xFFDCEBFF : 0xFF3B4A5E;
 			this.drawBorder(context, x, y, SWATCH_SIZE, SWATCH_SIZE, border);
 			this.paletteSwatches.add(new PaletteSwatch(color, x, y, SWATCH_SIZE, SWATCH_SIZE));
@@ -428,6 +451,40 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			}
 		}
 		return false;
+	}
+
+	private void startPaletteWheelAnimation(int targetOffset) {
+		if (targetOffset == this.paletteScrollOffset) {
+			return;
+		}
+		double currentOffset = this.currentPaletteScrollOffset();
+		this.paletteScrollOffset = targetOffset;
+		this.paletteScrollAnimationFrom = currentOffset;
+		this.paletteScrollAnimationTo = targetOffset;
+		this.paletteScrollAnimationStartedAt = System.currentTimeMillis();
+	}
+
+	private double currentPaletteScrollOffset() {
+		if (this.paletteScrollAnimationStartedAt <= 0L) {
+			return this.paletteScrollOffset;
+		}
+		long elapsed = System.currentTimeMillis() - this.paletteScrollAnimationStartedAt;
+		if (elapsed >= PALETTE_SCROLL_ANIMATION_MILLIS) {
+			this.paletteScrollAnimationStartedAt = 0L;
+			this.paletteScrollAnimatedOffset = this.paletteScrollOffset;
+			return this.paletteScrollOffset;
+		}
+		double progress = elapsed / (double) PALETTE_SCROLL_ANIMATION_MILLIS;
+		double eased = progress * progress * (3.0D - 2.0D * progress);
+		this.paletteScrollAnimatedOffset = this.paletteScrollAnimationFrom + ((this.paletteScrollAnimationTo - this.paletteScrollAnimationFrom) * eased);
+		return this.paletteScrollAnimatedOffset;
+	}
+
+	private double lerpPaneScroll(double current, int target) {
+		if (Math.abs(target - current) <= 0.5D) {
+			return target;
+		}
+		return current + ((target - current) * PANE_SCROLL_LERP_FACTOR);
 	}
 
 	private void renderGroups(DrawContext context, int mouseX, int mouseY) {
@@ -454,7 +511,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		List<GuardEntity> allGuards = this.collectOwnedGuards(this.client.player.getUuid());
 		Map<Integer, List<GuardEntity>> guardsByGroup = new HashMap<>();
 		List<GuardEntity> unassigned = new ArrayList<>();
-		int maxGroupRow = 0;
+		int maxGroupRow = -1;
 
 		for (GuardEntity guard : allGuards) {
 			int assignedGroup = this.getEffectiveGroup(guard);
@@ -475,7 +532,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		}
 		unassigned.sort(guardSorter);
 
-		int groupCount = Math.max(3, Math.max(maxGroupRow + 1, this.dataStore.groupCount(worldContext)));
+		int groupCount = Math.max(0, Math.max(maxGroupRow + 1, this.dataStore.groupCount(worldContext)));
 		this.dataStore.ensureGroupCount(worldContext, groupCount);
 
 		// Two-pane layout
@@ -502,7 +559,9 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		int leftContentH = this.leftPaneH - 16;
 		int totalLeftContent = (groupCount + 1) * (GROUP_BOX_HEIGHT + GROUP_BOX_GAP);
 		this.leftPaneMaxScroll = Math.max(0, totalLeftContent - leftContentH);
-		this.leftPaneScroll = MathHelper.clamp(this.leftPaneScroll, 0, this.leftPaneMaxScroll);
+		this.leftPaneScrollTarget = MathHelper.clamp(this.leftPaneScrollTarget, 0, this.leftPaneMaxScroll);
+		this.leftPaneScrollAnimated = this.lerpPaneScroll(this.leftPaneScrollAnimated, this.leftPaneScrollTarget);
+		this.leftPaneScroll = MathHelper.clamp((int) Math.round(this.leftPaneScrollAnimated), 0, this.leftPaneMaxScroll);
 
 		context.enableScissor(this.leftPaneX + 1, leftContentY, this.leftPaneX + this.leftPaneW - 1, leftContentY + leftContentH);
 		for (int row = 0; row < groupCount; row++) {
@@ -588,7 +647,9 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		int rightContentH = this.rightPaneH - 16;
 		int totalRightContent = unassigned.size() * (UNASSIGNED_CARD_HEIGHT + UNASSIGNED_CARD_GAP);
 		this.rightPaneMaxScroll = Math.max(0, totalRightContent - rightContentH);
-		this.rightPaneScroll = MathHelper.clamp(this.rightPaneScroll, 0, this.rightPaneMaxScroll);
+		this.rightPaneScrollTarget = MathHelper.clamp(this.rightPaneScrollTarget, 0, this.rightPaneMaxScroll);
+		this.rightPaneScrollAnimated = this.lerpPaneScroll(this.rightPaneScrollAnimated, this.rightPaneScrollTarget);
+		this.rightPaneScroll = MathHelper.clamp((int) Math.round(this.rightPaneScrollAnimated), 0, this.rightPaneMaxScroll);
 
 		context.enableScissor(this.rightPaneX + 1, rightContentY, this.rightPaneX + this.rightPaneW - 1, rightContentY + rightContentH);
 		for (int i = 0; i < unassigned.size(); i++) {
