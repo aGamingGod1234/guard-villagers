@@ -21,6 +21,10 @@ public class GuardVillagersClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_LAYER, GuardEntityModel::getTexturedModelData);
+		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_ARMOR_HELMET_LAYER, GuardEntityModel::getHelmetArmorModelData);
+		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_ARMOR_CHESTPLATE_LAYER, GuardEntityModel::getChestplateArmorModelData);
+		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_ARMOR_LEGGINGS_LAYER, GuardEntityModel::getLeggingsArmorModelData);
+		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_ARMOR_BOOTS_LAYER, GuardEntityModel::getBootsArmorModelData);
 		EntityRendererRegistry.register(GuardVillagersMod.GUARD_ENTITY_TYPE, GuardEntityRenderer::new);
 		HandledScreens.register(GuardVillagersMod.GUARD_TACTICS_SCREEN_HANDLER, GuardTacticsScreen::new);
 		GuardDebugRenderer.register();
