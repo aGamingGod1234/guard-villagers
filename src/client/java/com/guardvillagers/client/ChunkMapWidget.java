@@ -15,6 +15,7 @@ public final class ChunkMapWidget {
 	private static final int HOVER_OVERLAY = 0x33FFFFFF;
 	private static final int ZONE_OUTLINE_ALPHA_MASK = 0xCC000000;
 	private static final int TERRAIN_TILE_RESOLUTION = 16;
+	private static final int MAX_CHUNKS_PER_FRAME = 2000;
 
 	private final ClientTacticsDataStore dataStore;
 	private final ChunkTerrainCache terrainCache;
@@ -77,24 +78,25 @@ public final class ChunkMapWidget {
 		int maxChunkZ = (int) Math.ceil(this.screenToChunkZ(this.y + this.height)) + 1;
 
 		context.enableScissor(this.x, this.y, this.x + this.width, this.y + this.height);
+		int chunksRendered = 0;
 		for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
 			for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+				if (chunksRendered >= MAX_CHUNKS_PER_FRAME) {
+					break;
+				}
 				if (!this.dataStore.isDiscovered(worldContext, chunkX, chunkZ)) {
 					continue;
 				}
 
 				int left = (int) Math.floor(viewportCenterX + (chunkX - this.centerChunkX) * chunkScale);
-				int right = (int) Math.ceil(viewportCenterX + ((chunkX + 1) - this.centerChunkX) * chunkScale);
+				int right = (int) Math.floor(viewportCenterX + ((chunkX + 1) - this.centerChunkX) * chunkScale);
 				int top = (int) Math.floor(viewportCenterY + (chunkZ - this.centerChunkZ) * chunkScale);
-				int bottom = (int) Math.ceil(viewportCenterY + ((chunkZ + 1) - this.centerChunkZ) * chunkScale);
+				int bottom = (int) Math.floor(viewportCenterY + ((chunkZ + 1) - this.centerChunkZ) * chunkScale);
 				if (right <= left || bottom <= top) {
-					right = Math.max(right, left + 1);
-					bottom = Math.max(bottom, top + 1);
-				}
-				if (right < this.x || left > this.x + this.width || bottom < this.y || top > this.y + this.height) {
 					continue;
 				}
 				this.renderChunkTerrain(context, world, worldContext, chunkX, chunkZ, left, top, right, bottom);
+				chunksRendered++;
 
 				RegionColor regionColor = this.dataStore.getRegionColor(worldContext, chunkX, chunkZ);
 				if (regionColor != RegionColor.NONE) {
@@ -115,13 +117,9 @@ public final class ChunkMapWidget {
 			if (this.dataStore.isDiscovered(worldContext, hoveredChunkX, hoveredChunkZ)) {
 				this.hoveredChunk = new ChunkPos(hoveredChunkX, hoveredChunkZ);
 				int left = (int) Math.floor(viewportCenterX + (hoveredChunkX - this.centerChunkX) * chunkScale);
-				int right = (int) Math.ceil(viewportCenterX + ((hoveredChunkX + 1) - this.centerChunkX) * chunkScale);
+				int right = (int) Math.floor(viewportCenterX + ((hoveredChunkX + 1) - this.centerChunkX) * chunkScale);
 				int top = (int) Math.floor(viewportCenterY + (hoveredChunkZ - this.centerChunkZ) * chunkScale);
-				int bottom = (int) Math.ceil(viewportCenterY + ((hoveredChunkZ + 1) - this.centerChunkZ) * chunkScale);
-				if (right <= left || bottom <= top) {
-					right = Math.max(right, left + 1);
-					bottom = Math.max(bottom, top + 1);
-				}
+				int bottom = (int) Math.floor(viewportCenterY + ((hoveredChunkZ + 1) - this.centerChunkZ) * chunkScale);
 				context.fill(left, top, right, bottom, HOVER_OVERLAY);
 			}
 		}

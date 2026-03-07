@@ -5,12 +5,15 @@ import net.minecraft.entity.ai.goal.Goal;
 import net.minecraft.entity.ai.pathing.PathNodeType;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Direction;
 
 import java.util.EnumSet;
 
 public final class FormationFollowOwnerGoal extends Goal {
 	private static final int REPATH_INTERVAL_TICKS = 10;
-	private static final double RESUME_RANGE_SQ = 128.0D * 128.0D;
+	private static final int TELEPORT_DISTANCE_SQ = 144;
 
 	private final GuardEntity guard;
 	private final double speed;
@@ -44,9 +47,6 @@ public final class FormationFollowOwnerGoal extends Goal {
 		if (!this.guard.canFollowOwnerFormation()) {
 			return false;
 		}
-		if (this.guard.squaredDistanceTo(resolvedOwner) > RESUME_RANGE_SQ) {
-			return false;
-		}
 		if (this.guard.squaredDistanceTo(resolvedOwner) < this.startDistanceSq) {
 			return false;
 		}
@@ -59,10 +59,10 @@ public final class FormationFollowOwnerGoal extends Goal {
 		if (this.owner == null || !this.owner.isAlive()) {
 			return false;
 		}
-		if (!this.guard.canFollowOwnerFormation()) {
+		if (this.guard.getNavigation().isIdle()) {
 			return false;
 		}
-		if (this.guard.squaredDistanceTo(this.owner) > RESUME_RANGE_SQ) {
+		if (!this.guard.canFollowOwnerFormation()) {
 			return false;
 		}
 		return this.guard.squaredDistanceTo(this.owner) > this.stopDistanceSq;
@@ -99,6 +99,66 @@ public final class FormationFollowOwnerGoal extends Goal {
 			return;
 		}
 
+		if (this.guard.squaredDistanceTo(this.owner) >= TELEPORT_DISTANCE_SQ && this.tryTeleportToOwner()) {
+			return;
+		}
 		this.guard.getNavigation().startMovingTo(this.owner, this.speed);
+	}
+
+	private boolean tryTeleportToOwner() {
+		if (!(this.guard.getEntityWorld() instanceof ServerWorld world) || this.owner == null) {
+			return false;
+		}
+
+		BlockPos ownerPos = this.owner.getBlockPos();
+		for (int attempt = 0; attempt < 10; attempt++) {
+			int x = ownerPos.getX() + this.randomInt(-3, 3);
+			int y = ownerPos.getY() + this.randomInt(-1, 1);
+			int z = ownerPos.getZ() + this.randomInt(-3, 3);
+			if (Math.abs(x - ownerPos.getX()) < 2 && Math.abs(z - ownerPos.getZ()) < 2) {
+				continue;
+			}
+			if (!this.canTeleportTo(world, x, y, z)) {
+				continue;
+			}
+			this.guard.refreshPositionAndAngles(x + 0.5D, y, z + 0.5D, this.guard.getYaw(), this.guard.getPitch());
+			this.guard.getNavigation().stop();
+			return true;
+		}
+		return false;
+	}
+
+	private boolean canTeleportTo(ServerWorld world, int x, int y, int z) {
+		if (y <= world.getBottomY() || y >= world.getTopYInclusive() - 1) {
+			return false;
+		}
+
+		BlockPos feet = new BlockPos(x, y, z);
+		BlockPos below = feet.down();
+		BlockPos head = feet.up();
+
+		if (!world.getBlockState(below).isSideSolidFullSquare(world, below, Direction.UP)) {
+			return false;
+		}
+		if (!world.getBlockState(feet).getCollisionShape(world, feet).isEmpty()) {
+			return false;
+		}
+		if (!world.getBlockState(head).getCollisionShape(world, head).isEmpty()) {
+			return false;
+		}
+		if (!world.getFluidState(feet).isEmpty() || !world.getFluidState(head).isEmpty()) {
+			return false;
+		}
+
+		Box destination = this.guard.getBoundingBox().offset(
+			x + 0.5D - this.guard.getX(),
+			y - this.guard.getY(),
+			z + 0.5D - this.guard.getZ()
+		);
+		return world.isSpaceEmpty(this.guard, destination);
+	}
+
+	private int randomInt(int min, int max) {
+		return min + this.guard.getRandom().nextInt(max - min + 1);
 	}
 }

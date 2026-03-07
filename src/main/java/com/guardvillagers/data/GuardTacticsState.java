@@ -19,7 +19,7 @@ import java.util.Set;
 import java.util.UUID;
 
 public final class GuardTacticsState extends PersistentState {
-	private static final Codec<Map<String, Integer>> STRING_INT_MAP_CODEC = Codec.unboundedMap(Codec.STRING, Codec.intRange(0, 10));
+	private static final Codec<Map<String, Integer>> STRING_INT_MAP_CODEC = Codec.unboundedMap(Codec.STRING, Codec.intRange(0, 4));
 	private static final Codec<List<String>> GROUP_LIST_CODEC = Codec.STRING.listOf();
 	private static final Codec<Map<UUID, PlayerTactics>> TACTICS_MAP_CODEC = Codec.unboundedMap(Uuids.STRING_CODEC, PlayerTactics.CODEC);
 
@@ -62,9 +62,11 @@ public final class GuardTacticsState extends PersistentState {
 		private static final int MAX_COLOR_ID = 10;
 		private static final int DEFAULT_FORMATION_ID = FormationType.FOLLOW.getId();
 		private static final int MIN_ROW_INDEX = 0;
+		private static final int MAX_ROW_INDEX = 31;
 		private static final int MIN_COLUMN_INDEX = 0;
 		private static final int MAX_COLUMN_INDEX = 2;
 		private static final int MAX_GROUP_NAME_LENGTH = 24;
+		private static final int MAX_GROUP_COUNT = MAX_ROW_INDEX + 1;
 		private static final List<String> DEFAULT_GROUPS = List.of();
 		private static final List<String> GROUP_NAME_CYCLE = List.of(
 			"Alpha",
@@ -133,6 +135,9 @@ public final class GuardTacticsState extends PersistentState {
 				String sanitized = sanitizeGroupName(name);
 				if (!sanitized.isEmpty()) {
 					this.groupNames.add(sanitized);
+					if (this.groupNames.size() >= MAX_GROUP_COUNT) {
+						break;
+					}
 				}
 			}
 			this.preferredFormationId = normalizeFormationId(preferredFormationId);
@@ -189,13 +194,13 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		public int getRowColumnZone(int row, int column) {
-			int normalizedRow = Math.max(MIN_ROW_INDEX, row);
+			int normalizedRow = normalizeRow(row);
 			int normalizedColumn = normalizeColumn(column);
 			return this.rowColumnZones.getOrDefault(toRowColumnKey(normalizedRow, normalizedColumn), defaultZoneForColumn(normalizedColumn));
 		}
 
 		public void setRowColumnZone(int row, int column, int colorId) {
-			int normalizedRow = Math.max(MIN_ROW_INDEX, row);
+			int normalizedRow = normalizeRow(row);
 			int normalizedColumn = normalizeColumn(column);
 			String key = toRowColumnKey(normalizedRow, normalizedColumn);
 			int normalizedColor = normalizeColorId(colorId);
@@ -211,7 +216,7 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		public String getGroupName(int row) {
-			int normalizedRow = Math.max(MIN_ROW_INDEX, row);
+			int normalizedRow = normalizeRow(row);
 			this.ensureGroupCount(normalizedRow + 1);
 			return this.groupNames.get(normalizedRow);
 		}
@@ -220,12 +225,15 @@ public final class GuardTacticsState extends PersistentState {
 			if (row < 0) {
 				return;
 			}
-			int normalizedRow = Math.max(MIN_ROW_INDEX, row);
+			int normalizedRow = normalizeRow(row);
 			this.ensureGroupCount(normalizedRow + 1);
 			this.groupNames.set(normalizedRow, sanitizeGroupName(name));
 		}
 
 		public int addGroup() {
+			if (this.groupNames.size() >= MAX_GROUP_COUNT) {
+				return MAX_GROUP_COUNT - 1;
+			}
 			int index = this.groupNames.size();
 			String name = index < GROUP_NAME_CYCLE.size() ? GROUP_NAME_CYCLE.get(index) : "Group " + (index + 1);
 			this.groupNames.add(name);
@@ -236,7 +244,7 @@ public final class GuardTacticsState extends PersistentState {
 			if (row < 0) {
 				return -1;
 			}
-			int normalizedRow = Math.max(MIN_ROW_INDEX, row);
+			int normalizedRow = normalizeRow(row);
 			this.ensureGroupCount(normalizedRow + 1);
 			String current = this.groupNames.get(normalizedRow);
 			int index = GROUP_NAME_CYCLE.indexOf(current);
@@ -249,7 +257,7 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		public void ensureGroupCount(int count) {
-			int normalizedCount = Math.max(0, count);
+			int normalizedCount = Math.max(0, Math.min(MAX_GROUP_COUNT, count));
 			if (normalizedCount <= this.groupNames.size()) {
 				return;
 			}
@@ -338,11 +346,15 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		private static boolean isValidRow(int row) {
-			return row >= MIN_ROW_INDEX;
+			return row >= MIN_ROW_INDEX && row <= MAX_ROW_INDEX;
 		}
 
 		private static boolean isValidColumn(int column) {
 			return column >= MIN_COLUMN_INDEX && column <= MAX_COLUMN_INDEX;
+		}
+
+		private static int normalizeRow(int row) {
+			return Math.max(MIN_ROW_INDEX, Math.min(MAX_ROW_INDEX, row));
 		}
 
 		private static int normalizeColumn(int column) {

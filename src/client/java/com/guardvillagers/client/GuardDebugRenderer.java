@@ -1,39 +1,39 @@
 package com.guardvillagers.client;
 
+import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.font.TextRenderer;
+import net.minecraft.client.network.PlayerListEntry;
+import net.minecraft.client.render.LightmapTextureManager;
 import net.minecraft.client.render.RenderLayers;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
-import net.minecraft.util.hit.HitResult;
+import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.RaycastContext;
 import org.joml.Matrix4f;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.UUID;
 
 public final class GuardDebugRenderer {
 	private static final int CACHE_REFRESH_TICKS = 10;
+	private static final int CIRCLE_SEGMENTS = 64;
+	private static final double DETECTION_RANGE = 32.0D;
+	private static final double CIRCLE_Y_OFFSET = 0.01D;
+	private static final float LABEL_SCALE = 0.020F;
 	private static final float LINE_HALF_WIDTH = 0.015F;
-	private static final float PATH_GREEN_R = 0.28F;
-	private static final float PATH_GREEN_G = 0.70F;
-	private static final float PATH_GREEN_B = 0.42F;
-	private static final float PATH_CARPET_ALPHA = 0.40F;
-	private static final float DESTINATION_ALPHA = 0.40F;
-	private static final float LOOK_LINE_R = 1.0F;
-	private static final float LOOK_LINE_G = 0.94F;
-	private static final float LOOK_LINE_B = 0.30F;
-	private static final float LOOK_LINE_A = 1.0F;
-	private static final double LOOK_TRACE_DISTANCE = 20.0D;
-
+	private static final float[][] CIRCLE_POINTS = buildCirclePoints();
 	private static final List<GuardEntity> CACHED_GUARDS = new ArrayList<>();
 	private static long lastCacheTick = Long.MIN_VALUE;
 	private static double lastCacheRange = -1.0D;
@@ -65,6 +65,7 @@ public final class GuardDebugRenderer {
 		VertexConsumerProvider vertexConsumers = context.consumers();
 		Vec3d cameraPos = context.worldState().cameraRenderState.pos;
 		double maxDistanceSq = range * range;
+		ClientTacticsDataStore.WorldContext worldContext = ClientTacticsDataStore.resolveContext(client, client.world);
 
 		matrices.push();
 		matrices.translate(-cameraPos.x, -cameraPos.y, -cameraPos.z);
@@ -74,8 +75,15 @@ public final class GuardDebugRenderer {
 				continue;
 			}
 			ClientGuardDebugData.GuardDebugSnapshot snapshot = ClientGuardDebugData.get(guard.getId());
+			renderDetectionCircle(matrices, vertexConsumers, guard, cameraPos);
 			renderPathHighlights(matrices, vertexConsumers, guard, snapshot);
-			renderLookIndicator(matrices, vertexConsumers, guard, snapshot, client, cameraPos);
+			renderTargetLine(matrices, vertexConsumers, guard, snapshot, client, cameraPos);
+		}
+		for (GuardEntity guard : CACHED_GUARDS) {
+			if (!guard.isAlive() || guard.squaredDistanceTo(client.player) > maxDistanceSq) {
+				continue;
+			}
+			renderLabels(matrices, vertexConsumers, guard, client, worldContext);
 		}
 
 		matrices.pop();
@@ -104,6 +112,42 @@ public final class GuardDebugRenderer {
 		));
 	}
 
+	private static void renderDetectionCircle(
+		MatrixStack matrices,
+		VertexConsumerProvider vertexConsumers,
+		GuardEntity guard,
+		Vec3d cameraPos
+	) {
+		VertexConsumer consumer = vertexConsumers.getBuffer(RenderLayers.debugFilledBox());
+		Matrix4f matrix = matrices.peek().getPositionMatrix();
+		double centerX = guard.getX();
+		double centerY = guard.getY() + CIRCLE_Y_OFFSET;
+		double centerZ = guard.getZ();
+
+		for (int i = 0; i < CIRCLE_SEGMENTS; i++) {
+			double x1 = centerX + DETECTION_RANGE * CIRCLE_POINTS[i][0];
+			double z1 = centerZ + DETECTION_RANGE * CIRCLE_POINTS[i][1];
+			double x2 = centerX + DETECTION_RANGE * CIRCLE_POINTS[i + 1][0];
+			double z2 = centerZ + DETECTION_RANGE * CIRCLE_POINTS[i + 1][1];
+
+			renderLineSegment(
+				consumer,
+				matrix,
+				cameraPos,
+				x1,
+				centerY,
+				z1,
+				x2,
+				centerY,
+				z2,
+				0.0F,
+				0.9F,
+				0.25F,
+				1.0F
+			);
+		}
+	}
+
 	private static void renderPathHighlights(
 		MatrixStack matrices,
 		VertexConsumerProvider vertexConsumers,
@@ -114,46 +158,22 @@ public final class GuardDebugRenderer {
 			return;
 		}
 
-		List<BlockPos> nodes = snapshot.pathNodes();
 		int currentIndex = snapshot.currentPathIndex();
+		List<BlockPos> nodes = snapshot.pathNodes();
 		if (currentIndex < 0 || currentIndex >= nodes.size()) {
 			return;
 		}
 
 		VertexConsumer filled = vertexConsumers.getBuffer(RenderLayers.debugFilledBox());
-		for (int i = currentIndex; i < nodes.size(); i++) {
+		int startIndex = Math.max(0, currentIndex - 2);
+		for (int i = startIndex; i < nodes.size(); i++) {
 			BlockPos node = nodes.get(i);
-			drawTopFace(
-				matrices,
-				filled,
-				node,
-				PATH_GREEN_R,
-				PATH_GREEN_G,
-				PATH_GREEN_B,
-				PATH_CARPET_ALPHA
-			);
+			drawFilledBlock(matrices, filled, node, 0.0F, 0.39F, 1.0F, 0.30F);
 		}
-
-		BlockPos destination = nodes.get(nodes.size() - 1);
-		if (!destination.equals(guard.getBlockPos())) {
-			drawFilledBox(
-				matrices,
-				filled,
-				destination.getX(),
-				destination.getY(),
-				destination.getZ(),
-				destination.getX() + 1.0D,
-				destination.getY() + 1.0D,
-				destination.getZ() + 1.0D,
-				PATH_GREEN_R,
-				PATH_GREEN_G,
-				PATH_GREEN_B,
-				DESTINATION_ALPHA
-			);
-		}
+		drawFilledBlock(matrices, filled, guard.getBlockPos(), 1.0F, 0.0F, 0.0F, 0.30F);
 	}
 
-	private static void renderLookIndicator(
+	private static void renderTargetLine(
 		MatrixStack matrices,
 		VertexConsumerProvider vertexConsumers,
 		GuardEntity guard,
@@ -161,12 +181,13 @@ public final class GuardDebugRenderer {
 		MinecraftClient client,
 		Vec3d cameraPos
 	) {
-		Vec3d origin = guard.getEyePos();
-		Vec3d destination = resolveLookDestination(guard, snapshot, client, origin);
-		if (destination == null) {
+		LivingEntity target = resolveTarget(guard, snapshot, client);
+		if (target == null || !target.isAlive()) {
 			return;
 		}
 
+		Vec3d origin = guard.getEyePos();
+		Vec3d destination = closestPointOnBox(target.getBoundingBox(), origin);
 		VertexConsumer consumer = vertexConsumers.getBuffer(RenderLayers.debugFilledBox());
 		Matrix4f matrix = matrices.peek().getPositionMatrix();
 		renderLineSegment(
@@ -179,36 +200,11 @@ public final class GuardDebugRenderer {
 			destination.x,
 			destination.y,
 			destination.z,
-			LOOK_LINE_R,
-			LOOK_LINE_G,
-			LOOK_LINE_B,
-			LOOK_LINE_A
+			1.0F,
+			1.0F,
+			0.0F,
+			1.0F
 		);
-	}
-
-	private static Vec3d resolveLookDestination(
-		GuardEntity guard,
-		ClientGuardDebugData.GuardDebugSnapshot snapshot,
-		MinecraftClient client,
-		Vec3d origin
-	) {
-		LivingEntity target = resolveTarget(guard, snapshot, client);
-		if (target != null && target.isAlive()) {
-			return closestPointOnBox(target.getBoundingBox(), origin);
-		}
-
-		Vec3d fallback = origin.add(guard.getRotationVec(1.0F).multiply(LOOK_TRACE_DISTANCE));
-		HitResult hitResult = guard.getEntityWorld().raycast(new RaycastContext(
-			origin,
-			fallback,
-			RaycastContext.ShapeType.COLLIDER,
-			RaycastContext.FluidHandling.NONE,
-			guard
-		));
-		if (hitResult.getType() == HitResult.Type.MISS) {
-			return fallback;
-		}
-		return hitResult.getPos();
 	}
 
 	private static LivingEntity resolveTarget(
@@ -225,36 +221,132 @@ public final class GuardDebugRenderer {
 		return guard.getTarget();
 	}
 
-	private static void drawTopFace(
+	private static void renderLabels(
 		MatrixStack matrices,
-		VertexConsumer consumer,
-		BlockPos pos,
-		float r,
-		float g,
-		float b,
-		float a
+		VertexConsumerProvider vertexConsumers,
+		GuardEntity guard,
+		MinecraftClient client,
+		ClientTacticsDataStore.WorldContext worldContext
 	) {
-		double minX = pos.getX();
-		double minY = pos.getY() + 0.01D;
-		double minZ = pos.getZ();
-		double maxX = pos.getX() + 1.0D;
-		double maxZ = pos.getZ() + 1.0D;
+		TextRenderer textRenderer = client.textRenderer;
+		List<DebugLabelLine> lines = buildLabelLines(guard, client, worldContext);
+		if (lines.isEmpty()) {
+			return;
+		}
+
+		matrices.push();
+		matrices.translate(guard.getX(), guard.getY() + guard.getHeight() + 0.75D, guard.getZ());
+		matrices.multiply(client.gameRenderer.getCamera().getRotation());
+		matrices.scale(-LABEL_SCALE, -LABEL_SCALE, LABEL_SCALE);
 		Matrix4f matrix = matrices.peek().getPositionMatrix();
-		quad(
+		int background = (int) (client.options.getTextBackgroundOpacity(0.25F) * 255.0F) << 24;
+		float lineY = -(lines.size() - 1) * (textRenderer.fontHeight + 2);
+		for (DebugLabelLine line : lines) {
+			float lineX = -textRenderer.getWidth(line.text()) / 2.0F;
+			textRenderer.draw(
+				line.text(),
+				lineX,
+				lineY,
+				line.color(),
+				false,
+				matrix,
+				vertexConsumers,
+				TextRenderer.TextLayerType.SEE_THROUGH,
+				background,
+				LightmapTextureManager.MAX_LIGHT_COORDINATE
+			);
+			lineY += textRenderer.fontHeight + 2;
+		}
+		matrices.pop();
+	}
+
+	private static List<DebugLabelLine> buildLabelLines(GuardEntity guard, MinecraftClient client, ClientTacticsDataStore.WorldContext worldContext) {
+		List<DebugLabelLine> lines = new ArrayList<>();
+		int hp = Math.max(0, MathHelper.floor(guard.getHealth()));
+		int maxHp = Math.max(1, MathHelper.floor(guard.getMaxHealth()));
+		lines.add(line("HP: " + hp + "/" + maxHp, 0xFF5555));
+
+		int level = guard.getLevel();
+		lines.add(line("Lvl: " + level, 0x55FF55));
+
+		int xp = guard.getExperience();
+		String xpLine = level >= 10 ? "XP: " + xp + "/MAX" : "XP: " + xp + "/" + (level * 120);
+		lines.add(line(xpLine, 0x55FFFF));
+
+		lines.add(line("Role: " + titleCase(guard.getRole().name()), 0xFFFF55));
+
+		GuardBehavior behavior = guard.getBehavior();
+		String behaviorValue = behavior == null ? "Nil" : titleCase(behavior.name());
+		lines.add(line("Behavior: " + behaviorValue, 0xFF55FF));
+
+		UUID ownerUuid = guard.getOwnerUuid();
+		String ownerValue = ownerUuid == null ? "Nil" : resolveOwnerName(ownerUuid, client);
+		lines.add(line("Owner: " + ownerValue, 0xFFFFFF));
+
+		String groupValue = guard.getGroupIndex() < 0 ? "Nil" : guard.getGroupName();
+		lines.add(line("Group: " + groupValue, 0xFFAA00));
+
+		RegionColor regionColor = ClientTacticsDataStore.getInstance().getRegionColor(worldContext, guard.getBlockX() >> 4, guard.getBlockZ() >> 4);
+		String zoneValue = regionColor == RegionColor.NONE ? "Nil" : regionColor.label();
+		lines.add(line("Zone: " + zoneValue, 0x5555FF));
+		return lines;
+	}
+
+	private static DebugLabelLine line(String text, int color) {
+		if (text.endsWith("Nil")) {
+			return new DebugLabelLine(text, 0xAAAAAA);
+		}
+		return new DebugLabelLine(text, color);
+	}
+
+	private static String resolveOwnerName(UUID ownerUuid, MinecraftClient client) {
+		if (client.getNetworkHandler() == null) {
+			return shortUuid(ownerUuid);
+		}
+		PlayerListEntry entry = client.getNetworkHandler().getPlayerListEntry(ownerUuid);
+		if (entry != null && entry.getProfile() != null) {
+			return entry.getProfile().name();
+		}
+		return shortUuid(ownerUuid);
+	}
+
+	private static String shortUuid(UUID uuid) {
+		String raw = uuid.toString();
+		return raw.substring(0, Math.min(8, raw.length())) + "...";
+	}
+
+	private static String titleCase(String value) {
+		if (value == null || value.isBlank()) {
+			return "Nil";
+		}
+		String[] parts = value.toLowerCase(Locale.ROOT).split("_");
+		StringBuilder builder = new StringBuilder();
+		for (int i = 0; i < parts.length; i++) {
+			String part = parts[i];
+			if (part.isEmpty()) {
+				continue;
+			}
+			if (builder.length() > 0) {
+				builder.append(' ');
+			}
+			builder.append(Character.toUpperCase(part.charAt(0)));
+			if (part.length() > 1) {
+				builder.append(part.substring(1));
+			}
+		}
+		return builder.length() == 0 ? "Nil" : builder.toString();
+	}
+
+	private static void drawFilledBlock(MatrixStack matrices, VertexConsumer consumer, BlockPos pos, float r, float g, float b, float a) {
+		drawFilledBox(
+			matrices,
 			consumer,
-			matrix,
-			minX,
-			minY,
-			minZ,
-			maxX,
-			minY,
-			minZ,
-			maxX,
-			minY,
-			maxZ,
-			minX,
-			minY,
-			maxZ,
+			pos.getX(),
+			pos.getY(),
+			pos.getZ(),
+			pos.getX() + 1.0D,
+			pos.getY() + 1.0D,
+			pos.getZ() + 1.0D,
 			r,
 			g,
 			b,
@@ -316,6 +408,9 @@ public final class GuardDebugRenderer {
 		consumer.vertex(matrix, (float) x, (float) y, (float) z).color(r, g, b, a);
 	}
 
+	/**
+	 * Renders a line segment between two world-space points as a thin camera-facing quad.
+	 */
 	private static void renderLineSegment(
 		VertexConsumer consumer,
 		Matrix4f matrix,
@@ -393,5 +488,18 @@ public final class GuardDebugRenderer {
 			Math.max(box.minY, Math.min(point.y, box.maxY)),
 			Math.max(box.minZ, Math.min(point.z, box.maxZ))
 		);
+	}
+
+	private static float[][] buildCirclePoints() {
+		float[][] points = new float[CIRCLE_SEGMENTS + 1][2];
+		for (int i = 0; i <= CIRCLE_SEGMENTS; i++) {
+			double angle = (2.0D * Math.PI * i) / CIRCLE_SEGMENTS;
+			points[i][0] = (float) Math.cos(angle);
+			points[i][1] = (float) Math.sin(angle);
+		}
+		return points;
+	}
+
+	private record DebugLabelLine(String text, int color) {
 	}
 }

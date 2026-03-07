@@ -41,8 +41,6 @@ import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.entity.data.DataTracker;
 import net.minecraft.entity.data.TrackedData;
 import net.minecraft.entity.data.TrackedDataHandlerRegistry;
-import net.minecraft.entity.effect.StatusEffectInstance;
-import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.mob.PathAwareEntity;
@@ -60,7 +58,6 @@ import net.minecraft.registry.RegistryKeys;
 import net.minecraft.registry.entry.RegistryEntry;
 import net.minecraft.command.permission.LeveledPermissionPredicate;
 import net.minecraft.command.permission.PermissionLevel;
-import net.minecraft.component.DataComponentTypes;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundEvent;
@@ -69,13 +66,13 @@ import net.minecraft.storage.ReadView;
 import net.minecraft.storage.WriteView;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
+import net.minecraft.util.Formatting;
 import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.util.math.random.Random;
 import net.minecraft.village.VillagerProfession;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.LocalDifficulty;
@@ -85,12 +82,9 @@ import net.minecraft.world.poi.PointOfInterestTypes;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 
 import com.guardvillagers.entity.projectile.GuardArrowEntity;
@@ -131,10 +125,6 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private static final String GROUP_COLUMN_KEY = "GroupColumn";
 	private static final String GROUP_NAME_KEY = "GroupName";
 	private static final String SKIN_PROFILE_KEY = "GuardSkinProfile";
-	private static final String GENERATED_NAME_KEY = "GeneratedName";
-	private static final String DISPLAY_NAME_KEY = "DisplayName";
-	private static final String SPECIAL_PROFILE_KEY = "SpecialProfile";
-	private static final String NEXT_NOTCH_APPLE_TICK_KEY = "NextNotchAppleTick";
 	// Legacy keys for migration
 	private static final String LEGACY_HIERARCHY_ROW_KEY = "HierarchyRow";
 	private static final String LEGACY_HIERARCHY_COLUMN_KEY = "HierarchyColumn";
@@ -144,18 +134,11 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private static final String LAST_LAND_Z_KEY = "LastLandZ";
 	private static final String HAS_LAST_LAND_KEY = "HasLastLand";
 	private static final int MIN_GROUP_INDEX = -1;
-	private static final int MAX_GROUP_INDEX = Integer.MAX_VALUE;
+	private static final int MAX_GROUP_INDEX = 31;
 	private static final String DEFAULT_UNASSIGNED_GROUP_NAME = "Unassigned";
 	private static final int MAX_SKIN_PROFILE_LENGTH = 64;
+	private static final String GROUP_NAME_PREFIX = "[G] ";
 	private static final String DEBUG_NAME_PREFIX = "[DBG] ";
-	private static final int NOTCH_ROLL_CHANCE = 500;
-	private static final int JACK_BLACK_ROLL_CHANCE = 400;
-	private static final int JASON_MOMOA_ROLL_CHANCE = 400;
-	private static final long NOTCH_APPLE_COOLDOWN_TICKS = 18_000L;
-	private static final int NAME_MAX_LENGTH = 32;
-	private static final String SPECIAL_NOTCH_NAME = "Notch";
-	private static final String SPECIAL_JACK_BLACK_NAME = "Jack Black";
-	private static final String SPECIAL_JASON_MOMOA_NAME = "Jason Momoa";
 
 	private static final Map<Item, Integer> SWORD_SCORE = Map.ofEntries(
 		Map.entry(Items.WOODEN_SWORD, 1),
@@ -217,11 +200,6 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private String skinProfileId = "";
 	private boolean playerMainHand;
 	private final EnumMap<EquipmentSlot, Boolean> playerArmor = new EnumMap<>(EquipmentSlot.class);
-	private String generatedName = "";
-	private String displayName = "";
-	private SpecialProfile specialProfile = SpecialProfile.NONE;
-	private long nextNotchAppleTick = 0L;
-	private long lastAlertTick = Long.MIN_VALUE;
 
 	public GuardEntity(EntityType<? extends PathAwareEntity> entityType, net.minecraft.world.World world) {
 		super(entityType, world);
@@ -359,20 +337,10 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	public void setOwnerUuid(UUID ownerUuid) {
-		UUID previousOwner = this.ownerUuid;
 		this.ownerUuid = ownerUuid;
 		if (ownerUuid != null && this.squadId == null) {
 			this.squadId = ownerUuid;
 		}
-		if (ownerUuid == null) {
-			this.generatedName = "";
-			this.displayName = "";
-			this.specialProfile = SpecialProfile.NONE;
-			this.nextNotchAppleTick = 0L;
-		} else if (!ownerUuid.equals(previousOwner) || this.generatedName.isBlank()) {
-			this.ensureIdentityForOwner();
-		}
-		this.updateGroupNameplate();
 		if (this.getEntityWorld() instanceof ServerWorld) {
 			GuardOwnershipIndex.track(this);
 		} else if (ownerUuid == null) {
@@ -689,7 +657,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private void equipArmorPieces(ServerWorld world, GuardPlayerUpgrades upgrades) {
 		int armorLevel = upgrades.getArmorLevel();
 		int protectionLevel = Math.min(4, Math.max(0, armorLevel / 2));
-		GuardPlayerUpgrades.ArmorTier helmetTier = this.rollArmorTierForCurrentProfile(upgrades);
+		GuardPlayerUpgrades.ArmorTier helmetTier = upgrades.rollArmorTier(this.getRandom());
 		this.equipArmorPiece(world, EquipmentSlot.HEAD, getArmorItemForSlot(helmetTier, EquipmentSlot.HEAD), protectionLevel);
 
 		for (EquipmentSlot slot : List.of(EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET)) {
@@ -704,48 +672,11 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	private GuardPlayerUpgrades.ArmorTier rollConstrainedArmorTier(GuardPlayerUpgrades upgrades, GuardPlayerUpgrades.ArmorTier helmetTier) {
-		GuardPlayerUpgrades.ArmorTier roll = this.rollArmorTierForCurrentProfile(upgrades);
+		GuardPlayerUpgrades.ArmorTier roll = upgrades.rollArmorTier(this.getRandom());
 		int helmetIndex = helmetTier.ordinal();
 		int minAllowed = Math.max(0, helmetIndex - 1);
 		int clamped = Math.max(minAllowed, Math.min(helmetIndex, roll.ordinal()));
 		return GuardPlayerUpgrades.ArmorTier.values()[clamped];
-	}
-
-	private GuardPlayerUpgrades.ArmorTier rollArmorTierForCurrentProfile(GuardPlayerUpgrades upgrades) {
-		GuardPlayerUpgrades.ArmorTier base = upgrades.rollArmorTier(this.getRandom());
-		if (!this.specialProfile.hasDiamondArmorBonus()) {
-			return base;
-		}
-		return this.applyDiamondArmorBonus(upgrades, base);
-	}
-
-	private GuardPlayerUpgrades.ArmorTier applyDiamondArmorBonus(GuardPlayerUpgrades upgrades, GuardPlayerUpgrades.ArmorTier baseTier) {
-		if (baseTier == GuardPlayerUpgrades.ArmorTier.DIAMOND || baseTier == GuardPlayerUpgrades.ArmorTier.NETHERITE) {
-			return baseTier;
-		}
-		int baseDiamondChance = upgrades.getArmorDistribution().diamond();
-		if (baseDiamondChance <= 0) {
-			return baseTier;
-		}
-		int boostedDiamondChance = Math.min(100, baseDiamondChance * 3);
-		double bonusChance = (boostedDiamondChance - baseDiamondChance) / (double) (100 - baseDiamondChance);
-		if (this.getRandom().nextDouble() > bonusChance) {
-			return baseTier;
-		}
-		if (this.rollNetheriteUpgrade(upgrades.getArmorLevel())) {
-			return GuardPlayerUpgrades.ArmorTier.NETHERITE;
-		}
-		return GuardPlayerUpgrades.ArmorTier.DIAMOND;
-	}
-
-	private boolean rollNetheriteUpgrade(int armorLevel) {
-		int netheriteChance = switch (armorLevel) {
-			case 6 -> 2;
-			case 7 -> 5;
-			case 8 -> 10;
-			default -> 0;
-		};
-		return netheriteChance > 0 && this.getRandom().nextInt(100) < netheriteChance;
 	}
 
 	private Item getArmorItemForSlot(GuardPlayerUpgrades.ArmorTier tier, EquipmentSlot slot) {
@@ -818,7 +749,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 		if (this.ownerUuid != null && !this.ownerUuid.equals(player.getUuid())) {
 			if (this.getEntityWorld() instanceof ServerWorld) {
-				player.sendMessage(Text.literal(this.getCallsign() + " is not your guard."), true);
+				player.sendMessage(Text.literal("I'm not your guard!"), true);
 			}
 			return ActionResult.SUCCESS;
 		}
@@ -842,7 +773,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 				if (!player.getAbilities().creativeMode) {
 					stack.decrement(hirePrice);
 				}
-				player.sendMessage(Text.literal(this.getCallsign() + " is now loyal to you."), true);
+				player.sendMessage(Text.literal("Guard is now loyal to you."), true);
 			}
 			return ActionResult.SUCCESS;
 		}
@@ -850,22 +781,19 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		if (this.ownerUuid != null && this.ownerUuid.equals(player.getUuid()) && stack.isEmpty()) {
 			if (player.isSneaking()) {
 				this.cycleBehavior();
-				player.sendMessage(Text.literal(this.getCallsign() + " behavior set to " + this.getBehavior().name().toLowerCase(Locale.ROOT) + "."), true);
+				player.sendMessage(Text.literal("Behavior set to " + this.getBehavior().name().toLowerCase()), true);
 			} else {
 				this.setStaying(!this.staying);
-				player.sendMessage(Text.literal(this.staying ? this.getCallsign() + " staying." : this.getCallsign() + " following."), true);
+				player.sendMessage(Text.literal(this.staying ? "Guard staying." : "Guard following."), true);
 			}
 			return ActionResult.SUCCESS;
 		}
 
 		if (this.ownerUuid != null && this.ownerUuid.equals(player.getUuid()) && !stack.isEmpty()) {
-			if (this.tryApplyNameTag(player, hand, stack)) {
-				return ActionResult.SUCCESS;
-			}
 			if (this.tryApplyPlayerUpgrade(player, hand, stack)) {
 				return ActionResult.SUCCESS;
 			}
-			player.sendMessage(Text.literal("That item is not an upgrade for " + this.getCallsign() + "."), true);
+			player.sendMessage(Text.literal("That item is not an upgrade for this guard."), true);
 			return ActionResult.SUCCESS;
 		}
 
@@ -876,26 +804,6 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		GuardBehavior[] behaviors = GuardBehavior.values();
 		int next = (this.getBehavior().ordinal() + 1) % behaviors.length;
 		this.setBehavior(behaviors[next]);
-	}
-
-	private boolean tryApplyNameTag(PlayerEntity player, Hand hand, ItemStack offered) {
-		if (!offered.isOf(Items.NAME_TAG) || !offered.contains(DataComponentTypes.CUSTOM_NAME)) {
-			return false;
-		}
-		String requestedName = offered.getName().getString();
-		String sanitized = sanitizeName(requestedName);
-		if (sanitized.isBlank()) {
-			return false;
-		}
-		this.displayName = sanitized;
-		this.updateGroupNameplate();
-		if (!player.getAbilities().creativeMode) {
-			player.getStackInHand(hand).decrement(1);
-		}
-		if (this.getEntityWorld() instanceof ServerWorld) {
-			player.sendMessage(Text.literal("Renamed guard to " + this.getCallsign() + "."), true);
-		}
-		return true;
 	}
 
 	private boolean tryApplyPlayerUpgrade(PlayerEntity player, Hand hand, ItemStack offered) {
@@ -1032,17 +940,15 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	public void setPriorityTarget(LivingEntity target) {
-		if (!this.canUseAsCombatTarget(target) || !this.canSee(target)) {
+		if (target == null || !target.isAlive() || this.isAlly(target) || !this.canTargetWithinZone(target.getBlockPos()) || !this.canSee(target)) {
 			return;
 		}
 
-		boolean acquiredNewTarget = this.priorityTarget == null || !this.priorityTarget.equals(target.getUuid());
 		this.priorityTarget = target.getUuid();
 		this.setTarget(target);
 		this.combatCooldown = 100;
-		if (acquiredNewTarget && this.getEntityWorld() instanceof ServerWorld world) {
-			this.broadcastAlertTarget(world, target);
-			this.shareTargetWithNearbyGolems(world, target);
+		if (this.getEntityWorld() instanceof ServerWorld world) {
+			this.shareTargetWithSquad(world, target);
 		}
 	}
 
@@ -1078,9 +984,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.applyRallyBehavior();
 		this.enforceZoneTethering();
 		this.handleOwnerTrust(world);
+		this.handleSquadTargetSharing(world);
 		this.syncSupportEquipment(world);
 		this.updateShieldUsage();
-		this.maybeConsumeNotchApple(world);
 		this.updateGroupNameplate();
 
 		int healInterval = GuardVillagersMod.getHealingIntervalTicks(world, this.ownerUuid);
@@ -1139,25 +1045,10 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 	}
 
-	private void maybeConsumeNotchApple(ServerWorld world) {
-		if (this.specialProfile != SpecialProfile.NOTCH) {
-			return;
-		}
-		if (this.getHealth() > this.getMaxHealth() * 0.30F) {
-			return;
-		}
-		if (world.getTime() < this.nextNotchAppleTick) {
-			return;
-		}
-		this.nextNotchAppleTick = world.getTime() + NOTCH_APPLE_COOLDOWN_TICKS;
-		this.heal(8.0F);
-		this.addStatusEffect(new StatusEffectInstance(StatusEffects.REGENERATION, 400, 1));
-		this.addStatusEffect(new StatusEffectInstance(StatusEffects.ABSORPTION, 2400, 3));
-		this.addStatusEffect(new StatusEffectInstance(StatusEffects.RESISTANCE, 6000, 0));
-		this.addStatusEffect(new StatusEffectInstance(StatusEffects.FIRE_RESISTANCE, 6000, 0));
-	}
-
 	public void updateGroupNameplate() {
+		if (this.age % 10 != 0) {
+			return;
+		}
 		Text current = this.getCustomName();
 		String currentText = current == null ? "" : current.getString();
 		if (currentText.startsWith(DEBUG_NAME_PREFIX)) {
@@ -1165,16 +1056,16 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 
 		if (!this.hasOwner()) {
-			if (current != null || this.isCustomNameVisible()) {
+			if (currentText.startsWith(GROUP_NAME_PREFIX)) {
 				this.setCustomName(null);
 				this.setCustomNameVisible(false);
 			}
 			return;
 		}
 
-		String name = this.getCallsign();
-		if (!name.equals(currentText)) {
-			this.setCustomName(Text.literal(name));
+		String badge = GROUP_NAME_PREFIX + this.getGroupName() + "  Lv " + this.getLevel();
+		if (!badge.equals(currentText)) {
+			this.setCustomName(Text.literal(badge).formatted(Formatting.AQUA));
 		}
 		if (!this.isCustomNameVisible()) {
 			this.setCustomNameVisible(true);
@@ -1209,7 +1100,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 
 		Entity entity = world.getEntity(this.priorityTarget);
-		if (entity instanceof LivingEntity living && this.canUseAsCombatTarget(living) && this.canSee(living)) {
+		if (entity instanceof LivingEntity living && living.isAlive() && !this.isAlly(living) && this.canTargetWithinZone(living.getBlockPos()) && this.canSee(living)) {
 			this.setTarget(living);
 			this.combatCooldown = 80;
 		} else {
@@ -1228,10 +1119,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			}
 		}
 
-		LivingEntity best = null;
-		double bestScore = Double.NEGATIVE_INFINITY;
-
 		List<HostileEntity> hostiles = world.getEntitiesByClass(HostileEntity.class, this.getBoundingBox().expand(20.0D), this::canTargetHostile);
+		HostileEntity best = null;
+		double bestScore = Double.NEGATIVE_INFINITY;
 		for (HostileEntity hostile : hostiles) {
 			double distance = Math.sqrt(this.squaredDistanceTo(hostile));
 			double distanceWeight = Math.max(0.0D, 24.0D - distance);
@@ -1241,19 +1131,6 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			if (score > bestScore) {
 				bestScore = score;
 				best = hostile;
-			}
-		}
-
-		List<GuardEntity> enemyGuards = world.getEntitiesByClass(GuardEntity.class, this.getBoundingBox().expand(20.0D), this::canTargetEnemyGuard);
-		for (GuardEntity enemyGuard : enemyGuards) {
-			double distance = Math.sqrt(this.squaredDistanceTo(enemyGuard));
-			double distanceWeight = Math.max(0.0D, 24.0D - distance);
-			double score = enemyGuard.getHealth() * 0.8D
-				+ distanceWeight * 0.6D
-				+ this.getRandom().nextDouble() * 3.0D;
-			if (score > bestScore) {
-				bestScore = score;
-				best = enemyGuard;
 			}
 		}
 		if (best != null) {
@@ -1275,57 +1152,47 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 	}
 
-	private void broadcastAlertTarget(ServerWorld world, LivingEntity target) {
-		if (!this.canUseAsCombatTarget(target) || this.ownerUuid == null) {
+	private void handleSquadTargetSharing(ServerWorld world) {
+		LivingEntity target = this.getTarget();
+		if (target == null || !target.isAlive() || this.age % 20 != 0) {
 			return;
 		}
-		double detectionRange = Math.max(8.0D, this.getAttributeValue(EntityAttributes.FOLLOW_RANGE));
-		double detectionRangeSq = detectionRange * detectionRange;
-		long alertTick = world.getTime();
-		for (GuardEntity guard : world.getEntitiesByClass(
-			GuardEntity.class,
-			this.getBoundingBox().expand(detectionRange),
-			entity -> entity != this
-				&& entity.isAlive()
-				&& entity.isOwnedBy(this.ownerUuid)
-				&& entity.squaredDistanceTo(this) <= detectionRangeSq)
-		) {
-			guard.receiveAlertTarget(target, alertTick);
-		}
+		this.shareTargetWithSquad(world, target);
 	}
 
-	private void receiveAlertTarget(LivingEntity target, long alertTick) {
-		if (!this.canUseAsCombatTarget(target) || !this.canSee(target) || this.shouldIgnoreAlertBroadcasts()) {
+	private void shareTargetWithSquad(ServerWorld world, LivingEntity target) {
+		if (target == null || !target.isAlive() || this.isAlly(target)) {
 			return;
 		}
-		LivingEntity current = this.getTarget();
-		if (current != null && current.isAlive()) {
-			return;
-		}
-		if (alertTick < this.lastAlertTick) {
-			return;
-		}
-		this.lastAlertTick = alertTick;
-		this.priorityTarget = target.getUuid();
-		this.setTarget(target);
-		this.combatCooldown = Math.max(this.combatCooldown, 80);
-	}
 
-	private boolean shouldIgnoreAlertBroadcasts() {
-		return this.staying || this.retreating;
-	}
-
-	private void shareTargetWithNearbyGolems(ServerWorld world, LivingEntity target) {
-		if (!(target instanceof HostileEntity || target instanceof RaiderEntity)) {
-			return;
+		if (this.squadId != null) {
+			for (GuardEntity guard : world.getEntitiesByClass(
+				GuardEntity.class,
+				this.getBoundingBox().expand(64.0D),
+				entity -> entity != this && entity.isAlive() && this.squadId.equals(entity.squadId))
+			) {
+				guard.receiveSquadTarget(target);
+			}
 		}
+
 		for (IronGolemEntity golem : world.getEntitiesByClass(
 			IronGolemEntity.class,
 			this.getBoundingBox().expand(24.0D),
 			LivingEntity::isAlive
 		)) {
-			golem.setTarget(target);
+			if (target instanceof HostileEntity || target instanceof RaiderEntity) {
+				golem.setTarget(target);
+			}
 		}
+	}
+
+	private void receiveSquadTarget(LivingEntity target) {
+		if (target == null || !target.isAlive() || this.isAlly(target) || !this.canTargetWithinZone(target.getBlockPos()) || !this.canSee(target)) {
+			return;
+		}
+		this.priorityTarget = target.getUuid();
+		this.setTarget(target);
+		this.combatCooldown = Math.max(this.combatCooldown, 80);
 	}
 
 	private boolean canTargetHostile(HostileEntity hostile) {
@@ -1334,33 +1201,6 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			&& !this.isAlly(hostile)
 			&& this.canSee(hostile)
 			&& this.canTargetWithinZone(hostile.getBlockPos());
-	}
-
-	private boolean canTargetEnemyGuard(GuardEntity other) {
-		return other != null
-			&& other != this
-			&& other.isAlive()
-			&& this.ownerUuid != null
-			&& other.ownerUuid != null
-			&& !this.ownerUuid.equals(other.ownerUuid)
-			&& this.canSee(other)
-			&& this.canTargetWithinZone(other.getBlockPos());
-	}
-
-	private boolean canUseAsCombatTarget(LivingEntity target) {
-		return target != null
-			&& target.isAlive()
-			&& !this.isAlly(target)
-			&& this.canTargetWithinZone(target.getBlockPos());
-	}
-
-	@Override
-	public void setTarget(LivingEntity target) {
-		if (!this.canUseAsCombatTarget(target)) {
-			super.setTarget(null);
-			return;
-		}
-		super.setTarget(target);
 	}
 
 	private void enforceTargetLineOfSight() {
@@ -1414,11 +1254,8 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			return true;
 		}
 		if (entity instanceof GuardEntity otherGuard) {
-			if (this.ownerUuid != null && otherGuard.ownerUuid != null) {
-				return this.ownerUuid.equals(otherGuard.ownerUuid);
-			}
-			if (this.ownerUuid != null || otherGuard.ownerUuid != null) {
-				return false;
+			if (this.ownerUuid != null && this.ownerUuid.equals(otherGuard.ownerUuid)) {
+				return true;
 			}
 			return this.squadId != null && this.squadId.equals(otherGuard.squadId);
 		}
@@ -1502,11 +1339,6 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	@Override
 	public boolean damage(ServerWorld world, DamageSource source, float amount) {
-		if (source.getAttacker() instanceof GuardEntity attackerGuard
-			&& this.ownerUuid != null
-			&& attackerGuard.isOwnedBy(this.ownerUuid)) {
-			return false;
-		}
 		boolean activelyBlockingWithShield = this.getEquippedStack(EquipmentSlot.OFFHAND).isOf(Items.SHIELD)
 			&& this.isUsingItem()
 			&& this.getActiveHand() == Hand.OFF_HAND;
@@ -1575,20 +1407,18 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	private void rallyNearbyGuards(ServerWorld world, LivingEntity attacker) {
 		UUID owner = this.ownerUuid;
-		double detectionRange = Math.max(8.0D, this.getAttributeValue(EntityAttributes.FOLLOW_RANGE));
-		double detectionRangeSq = detectionRange * detectionRange;
-		List<GuardEntity> nearby = world.getEntitiesByClass(GuardEntity.class, this.getBoundingBox().expand(detectionRange), guard -> {
+		UUID squad = this.squadId;
+		List<GuardEntity> nearby = world.getEntitiesByClass(GuardEntity.class, this.getBoundingBox().expand(32.0D), guard -> {
 			if (!guard.isAlive()) {
 				return false;
 			}
-			return owner != null
-				&& owner.equals(guard.ownerUuid)
-				&& guard != this
-				&& guard.squaredDistanceTo(this) <= detectionRangeSq;
+			boolean sameOwner = owner != null && owner.equals(guard.ownerUuid);
+			boolean sameSquad = squad != null && squad.equals(guard.squadId);
+			return sameOwner || sameSquad;
 		});
 
 		for (GuardEntity guard : nearby) {
-			guard.receiveAlertTarget(attacker, world.getTime());
+			guard.setPriorityTarget(attacker);
 		}
 	}
 
@@ -1665,10 +1495,6 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		view.putInt(GROUP_COLUMN_KEY, this.groupColumn);
 		view.putString(GROUP_NAME_KEY, this.getGroupName());
 		view.putString(SKIN_PROFILE_KEY, this.skinProfileId);
-		view.putString(GENERATED_NAME_KEY, this.generatedName);
-		view.putString(DISPLAY_NAME_KEY, this.displayName);
-		view.putString(SPECIAL_PROFILE_KEY, this.specialProfile.id());
-		view.putLong(NEXT_NOTCH_APPLE_TICK_KEY, this.nextNotchAppleTick);
 		boolean hasLastLand = this.lastLandPos != null;
 		view.putBoolean(HAS_LAST_LAND_KEY, hasLastLand);
 		if (hasLastLand) {
@@ -1722,13 +1548,6 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 		this.setGroupName(readGroupName);
 		this.setSkinProfileId(view.getString(SKIN_PROFILE_KEY, ""));
-		this.generatedName = sanitizeName(view.getString(GENERATED_NAME_KEY, ""));
-		this.displayName = sanitizeName(view.getString(DISPLAY_NAME_KEY, ""));
-		if (this.displayName.isBlank()) {
-			this.displayName = this.generatedName;
-		}
-		this.specialProfile = SpecialProfile.fromId(view.getString(SPECIAL_PROFILE_KEY, ""));
-		this.nextNotchAppleTick = Math.max(0L, view.getLong(NEXT_NOTCH_APPLE_TICK_KEY, 0L));
 		if (view.getBoolean(HAS_LAST_LAND_KEY, false)) {
 			this.lastLandPos = new BlockPos(
 				view.getInt(LAST_LAND_X_KEY, 0),
@@ -1738,8 +1557,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 		this.applyLevelModifiers();
 		this.updateCombatGoals();
-		if (this.getEntityWorld() instanceof ServerWorld world) {
-			this.ensureIdentityForOwner();
+		if (this.getEntityWorld() instanceof ServerWorld) {
 			GuardOwnershipIndex.track(this);
 		}
 	}
@@ -1761,102 +1579,6 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		} catch (IllegalArgumentException ignored) {
 			return null;
 		}
-	}
-
-	private void ensureIdentityForOwner() {
-		if (this.ownerUuid == null || !(this.getEntityWorld() instanceof ServerWorld world)) {
-			return;
-		}
-		if (!this.generatedName.isBlank()) {
-			if (this.displayName.isBlank()) {
-				this.displayName = this.generatedName;
-			}
-			return;
-		}
-		Set<String> usedNames = this.collectUsedOwnerNames(world, this.ownerUuid);
-		NameAssignment generated = this.rollUniqueName(world.getRandom(), usedNames);
-		this.generatedName = generated.name();
-		this.displayName = generated.name();
-		this.specialProfile = generated.profile();
-		this.nextNotchAppleTick = 0L;
-	}
-
-	private Set<String> collectUsedOwnerNames(ServerWorld world, UUID ownerId) {
-		Set<String> used = new HashSet<>();
-		for (GuardEntity guard : GuardOwnershipIndex.getOwnedGuards(world.getServer(), ownerId)) {
-			if (guard == this) {
-				continue;
-			}
-			String taken = sanitizeName(guard.displayName.isBlank() ? guard.generatedName : guard.displayName);
-			if (!taken.isBlank()) {
-				used.add(taken.toLowerCase(Locale.ROOT));
-			}
-		}
-		return used;
-	}
-
-	private NameAssignment rollUniqueName(Random random, Set<String> usedNames) {
-		for (int attempt = 0; attempt < 2048; attempt++) {
-			NameAssignment candidate = this.rollWeightedName(random);
-			String normalized = candidate.name().toLowerCase(Locale.ROOT);
-			if (usedNames.add(normalized)) {
-				return candidate;
-			}
-		}
-		for (String fallback : GuardNamePool.REGULAR_NAMES) {
-			String normalized = fallback.toLowerCase(Locale.ROOT);
-			if (usedNames.add(normalized)) {
-				return new NameAssignment(fallback, SpecialProfile.NONE);
-			}
-		}
-		int index = 2;
-		String fallback = "Guard";
-		while (usedNames.contains((fallback + index).toLowerCase(Locale.ROOT))) {
-			index++;
-		}
-		return new NameAssignment(fallback + index, SpecialProfile.NONE);
-	}
-
-	private NameAssignment rollWeightedName(Random random) {
-		if (random.nextInt(NOTCH_ROLL_CHANCE) == 0) {
-			return new NameAssignment(SPECIAL_NOTCH_NAME, SpecialProfile.NOTCH);
-		}
-		boolean jackBlack = random.nextInt(JACK_BLACK_ROLL_CHANCE) == 0;
-		boolean jasonMomoa = random.nextInt(JASON_MOMOA_ROLL_CHANCE) == 0;
-		if (jackBlack || jasonMomoa) {
-			if (jackBlack && jasonMomoa) {
-				return random.nextBoolean()
-					? new NameAssignment(SPECIAL_JACK_BLACK_NAME, SpecialProfile.JACK_BLACK)
-					: new NameAssignment(SPECIAL_JASON_MOMOA_NAME, SpecialProfile.JASON_MOMOA);
-			}
-			return jackBlack
-				? new NameAssignment(SPECIAL_JACK_BLACK_NAME, SpecialProfile.JACK_BLACK)
-				: new NameAssignment(SPECIAL_JASON_MOMOA_NAME, SpecialProfile.JASON_MOMOA);
-		}
-		return new NameAssignment(GuardNamePool.randomRegularName(random), SpecialProfile.NONE);
-	}
-
-	private String getCallsign() {
-		String resolvedDisplayName = sanitizeName(this.displayName);
-		if (!resolvedDisplayName.isBlank()) {
-			return resolvedDisplayName;
-		}
-		String resolvedGeneratedName = sanitizeName(this.generatedName);
-		if (!resolvedGeneratedName.isBlank()) {
-			return resolvedGeneratedName;
-		}
-		return "Guard";
-	}
-
-	private static String sanitizeName(String name) {
-		if (name == null || name.isBlank()) {
-			return "";
-		}
-		String trimmed = name.trim();
-		if (trimmed.length() <= NAME_MAX_LENGTH) {
-			return trimmed;
-		}
-		return trimmed.substring(0, NAME_MAX_LENGTH);
 	}
 
 	private void updateCombatGoals() {
@@ -1891,42 +1613,6 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	@Override
 	public boolean canImmediatelyDespawn(double distanceSquared) {
 		return false;
-	}
-
-	private record NameAssignment(String name, SpecialProfile profile) {
-	}
-
-	private enum SpecialProfile {
-		NONE(""),
-		NOTCH("notch"),
-		JACK_BLACK("jack_black"),
-		JASON_MOMOA("jason_momoa");
-
-		private final String id;
-
-		SpecialProfile(String id) {
-			this.id = id;
-		}
-
-		public String id() {
-			return this.id;
-		}
-
-		public boolean hasDiamondArmorBonus() {
-			return this == JACK_BLACK || this == JASON_MOMOA;
-		}
-
-		public static SpecialProfile fromId(String id) {
-			if (id == null || id.isBlank()) {
-				return NONE;
-			}
-			for (SpecialProfile value : values()) {
-				if (value.id.equalsIgnoreCase(id.trim())) {
-					return value;
-				}
-			}
-			return NONE;
-		}
 	}
 
 	private record ArmorDefinition(EquipmentSlot slot, int score) {
