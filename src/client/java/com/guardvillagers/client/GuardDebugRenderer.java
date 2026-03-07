@@ -32,7 +32,7 @@ public final class GuardDebugRenderer {
 	private static final double DETECTION_RANGE = 32.0D;
 	private static final double CIRCLE_Y_OFFSET = 0.01D;
 	private static final float LABEL_SCALE = 0.020F;
-	private static final float LINE_WIDTH = 2.0F;
+	private static final float LINE_HALF_WIDTH = 0.015F;
 	private static final float[][] CIRCLE_POINTS = buildCirclePoints();
 	private static final List<GuardEntity> CACHED_GUARDS = new ArrayList<>();
 	private static long lastCacheTick = Long.MIN_VALUE;
@@ -75,9 +75,9 @@ public final class GuardDebugRenderer {
 				continue;
 			}
 			ClientGuardDebugData.GuardDebugSnapshot snapshot = ClientGuardDebugData.get(guard.getId());
-			renderDetectionCircle(matrices, vertexConsumers, guard);
+			renderDetectionCircle(matrices, vertexConsumers, guard, cameraPos);
 			renderPathHighlights(matrices, vertexConsumers, guard, snapshot);
-			renderTargetLine(matrices, vertexConsumers, guard, snapshot, client);
+			renderTargetLine(matrices, vertexConsumers, guard, snapshot, client, cameraPos);
 		}
 		for (GuardEntity guard : CACHED_GUARDS) {
 			if (!guard.isAlive() || guard.squaredDistanceTo(client.player) > maxDistanceSq) {
@@ -112,20 +112,39 @@ public final class GuardDebugRenderer {
 		));
 	}
 
-	private static void renderDetectionCircle(MatrixStack matrices, VertexConsumerProvider vertexConsumers, GuardEntity guard) {
-		VertexConsumer lines = vertexConsumers.getBuffer(RenderLayers.lines());
-		lines.lineWidth(LINE_WIDTH);
+	private static void renderDetectionCircle(
+		MatrixStack matrices,
+		VertexConsumerProvider vertexConsumers,
+		GuardEntity guard,
+		Vec3d cameraPos
+	) {
+		VertexConsumer consumer = vertexConsumers.getBuffer(RenderLayers.debugFilledBox());
 		Matrix4f matrix = matrices.peek().getPositionMatrix();
 		double centerX = guard.getX();
 		double centerY = guard.getY() + CIRCLE_Y_OFFSET;
 		double centerZ = guard.getZ();
+
 		for (int i = 0; i < CIRCLE_SEGMENTS; i++) {
 			double x1 = centerX + DETECTION_RANGE * CIRCLE_POINTS[i][0];
 			double z1 = centerZ + DETECTION_RANGE * CIRCLE_POINTS[i][1];
 			double x2 = centerX + DETECTION_RANGE * CIRCLE_POINTS[i + 1][0];
 			double z2 = centerZ + DETECTION_RANGE * CIRCLE_POINTS[i + 1][1];
-			lineVertex(lines, matrix, x1, centerY, z1, 0.0F, 0.9F, 0.25F, 1.0F);
-			lineVertex(lines, matrix, x2, centerY, z2, 0.0F, 0.9F, 0.25F, 1.0F);
+
+			renderLineSegment(
+				consumer,
+				matrix,
+				cameraPos,
+				x1,
+				centerY,
+				z1,
+				x2,
+				centerY,
+				z2,
+				0.0F,
+				0.9F,
+				0.25F,
+				1.0F
+			);
 		}
 	}
 
@@ -159,7 +178,8 @@ public final class GuardDebugRenderer {
 		VertexConsumerProvider vertexConsumers,
 		GuardEntity guard,
 		ClientGuardDebugData.GuardDebugSnapshot snapshot,
-		MinecraftClient client
+		MinecraftClient client,
+		Vec3d cameraPos
 	) {
 		LivingEntity target = resolveTarget(guard, snapshot, client);
 		if (target == null || !target.isAlive()) {
@@ -168,11 +188,23 @@ public final class GuardDebugRenderer {
 
 		Vec3d origin = guard.getEyePos();
 		Vec3d destination = closestPointOnBox(target.getBoundingBox(), origin);
-		VertexConsumer lines = vertexConsumers.getBuffer(RenderLayers.lines());
-		lines.lineWidth(LINE_WIDTH);
+		VertexConsumer consumer = vertexConsumers.getBuffer(RenderLayers.debugFilledBox());
 		Matrix4f matrix = matrices.peek().getPositionMatrix();
-		lineVertex(lines, matrix, origin.x, origin.y, origin.z, 1.0F, 1.0F, 0.0F, 1.0F);
-		lineVertex(lines, matrix, destination.x, destination.y, destination.z, 1.0F, 1.0F, 0.0F, 1.0F);
+		renderLineSegment(
+			consumer,
+			matrix,
+			cameraPos,
+			origin.x,
+			origin.y,
+			origin.z,
+			destination.x,
+			destination.y,
+			destination.z,
+			1.0F,
+			1.0F,
+			0.0F,
+			1.0F
+		);
 	}
 
 	private static LivingEntity resolveTarget(
@@ -376,8 +408,78 @@ public final class GuardDebugRenderer {
 		consumer.vertex(matrix, (float) x, (float) y, (float) z).color(r, g, b, a);
 	}
 
-	private static void lineVertex(VertexConsumer consumer, Matrix4f matrix, double x, double y, double z, float r, float g, float b, float a) {
-		consumer.vertex(matrix, (float) x, (float) y, (float) z).color(r, g, b, a).normal(0.0F, 1.0F, 0.0F);
+	/**
+	 * Renders a line segment between two world-space points as a thin camera-facing quad.
+	 */
+	private static void renderLineSegment(
+		VertexConsumer consumer,
+		Matrix4f matrix,
+		Vec3d cameraPos,
+		double x1,
+		double y1,
+		double z1,
+		double x2,
+		double y2,
+		double z2,
+		float r,
+		float g,
+		float b,
+		float a
+	) {
+		double dx = x2 - x1;
+		double dy = y2 - y1;
+		double dz = z2 - z1;
+		double length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+		if (length < 1.0E-6D) {
+			return;
+		}
+
+		double midX = (x1 + x2) * 0.5D;
+		double midY = (y1 + y2) * 0.5D;
+		double midZ = (z1 + z2) * 0.5D;
+		double camDx = midX - cameraPos.x;
+		double camDy = midY - cameraPos.y;
+		double camDz = midZ - cameraPos.z;
+
+		double crossX = dy * camDz - dz * camDy;
+		double crossY = dz * camDx - dx * camDz;
+		double crossZ = dx * camDy - dy * camDx;
+		double crossLen = Math.sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ);
+		if (crossLen < 1.0E-6D) {
+			crossX = -dz;
+			crossY = 0.0D;
+			crossZ = dx;
+			crossLen = Math.sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ);
+			if (crossLen < 1.0E-6D) {
+				return;
+			}
+		}
+
+		double scale = LINE_HALF_WIDTH / crossLen;
+		double offX = crossX * scale;
+		double offY = crossY * scale;
+		double offZ = crossZ * scale;
+
+		float ax = (float) (x1 + offX);
+		float ay = (float) (y1 + offY);
+		float az = (float) (z1 + offZ);
+
+		float bx = (float) (x1 - offX);
+		float by = (float) (y1 - offY);
+		float bz = (float) (z1 - offZ);
+
+		float cx = (float) (x2 - offX);
+		float cy = (float) (y2 - offY);
+		float cz = (float) (z2 - offZ);
+
+		float ex = (float) (x2 + offX);
+		float ey = (float) (y2 + offY);
+		float ez = (float) (z2 + offZ);
+
+		consumer.vertex(matrix, ax, ay, az).color(r, g, b, a);
+		consumer.vertex(matrix, bx, by, bz).color(r, g, b, a);
+		consumer.vertex(matrix, cx, cy, cz).color(r, g, b, a);
+		consumer.vertex(matrix, ex, ey, ez).color(r, g, b, a);
 	}
 
 	private static Vec3d closestPointOnBox(Box box, Vec3d point) {

@@ -9,7 +9,6 @@ import net.minecraft.client.render.entity.MobEntityRenderer;
 import net.minecraft.client.render.entity.feature.ArmorFeatureRenderer;
 import net.minecraft.client.render.entity.feature.HeldItemFeatureRenderer;
 import net.minecraft.client.render.entity.model.BipedEntityModel;
-import net.minecraft.client.render.entity.model.EntityModelLayers;
 import net.minecraft.client.render.entity.model.EquipmentModelData;
 import net.minecraft.client.render.entity.state.BipedEntityRenderState;
 import net.minecraft.item.Items;
@@ -24,7 +23,12 @@ public class GuardEntityRenderer extends MobEntityRenderer<GuardEntity, GuardEnt
 		super(context, new GuardEntityModel(context.getPart(GuardEntityModel.GUARD_LAYER)), 0.5F);
 		this.itemModelManager = context.getItemModelManager();
 		EquipmentModelData<GuardEntityModel> armorModels = EquipmentModelData.mapToEntityModel(
-			EntityModelLayers.PLAYER_EQUIPMENT,
+			new EquipmentModelData<>(
+				GuardEntityModel.GUARD_ARMOR_LAYER,
+				GuardEntityModel.GUARD_ARMOR_LAYER,
+				GuardEntityModel.GUARD_ARMOR_LAYER,
+				GuardEntityModel.GUARD_ARMOR_LAYER
+			),
 			context.getEntityModels(),
 			GuardEntityModel::new
 		);

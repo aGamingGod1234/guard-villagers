@@ -36,6 +36,7 @@ public class GuardVillagersClient implements ClientModInitializer {
 		);
 
 		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_LAYER, GuardEntityModel::getTexturedModelData);
+		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_ARMOR_LAYER, GuardEntityModel::getArmorModelData);
 		EntityRendererRegistry.register(GuardVillagersMod.GUARD_ENTITY_TYPE, GuardEntityRenderer::new);
 		HandledScreens.register(GuardVillagersMod.GUARD_TACTICS_SCREEN_HANDLER, GuardTacticsScreen::new);
 		GuardDebugRenderer.register();

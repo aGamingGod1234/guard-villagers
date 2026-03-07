@@ -103,3 +103,37 @@
 ### Next Steps / Open Items
 - Execute in-game manual checklist validation for all Section A and Section B scenarios.
 - Run runtime/performance checks with high guard counts to tune debug rendering cost if needed.
+
+## [2026-03-07] — Codex 5.3 Hotfix: Crash Fix + Model/Armor Geometry
+
+### What Was Done
+- **Crash fix:** Replaced `RenderLayers.lines()` GL line rendering with camera-facing billboard quads
+  - Deleted broken `lineVertex()` helper that was missing the `lineWidth` vertex element
+  - New `renderLineSegment()` method renders lines as thin quads using `RenderLayers.debugFilledBox()`
+  - Detection circle and target line both use the new quad-based approach
+  - Guarantees consistent line width across all GPU drivers (GL_LINES width > 1.0 is unreliable)
+- **Arm fix:** Changed guard arm height from 8px to 12px — hands are now fully visible
+- **Armor fix:** Created custom `GUARD_ARMOR_LAYER` with villager-matching proportions
+  - Head: 10px tall (matches villager), uses standard armor UV for correct texture mapping
+  - Body: 6px deep (matches villager)
+  - Arms: 12px tall (matches fixed guard arms)
+  - Dilation: 1.0F standard armor offset
+  - Texture size: 64×32 (standard armor texture format)
+- **Renderer fix:** Switched `GuardEntityRenderer` from `EntityModelLayers.PLAYER_EQUIPMENT` to `GUARD_ARMOR_LAYER`
+- **Registration:** Added `GUARD_ARMOR_LAYER` to `EntityModelLayerRegistry` in client initializer
+
+### Decisions Made
+- Billboard quads chosen over fixing `lineWidth` vertex element because GL line width > 1.0px is not guaranteed by OpenGL spec and is ignored by many NVIDIA/AMD drivers
+- Armor model uses standard player/armor UV layout (64×32) so vanilla armor textures render correctly, with villager cuboid dimensions for geometry matching
+- Minor armor texture stretching on the 10px head (vs standard 8px) is accepted — pixel-perfect would require custom armor textures (deferred)
+
+### Files Modified
+- `src/client/java/com/guardvillagers/client/GuardDebugRenderer.java` — billboard quad line rendering
+- `src/client/java/com/guardvillagers/client/GuardEntityModel.java` — arm height fix, armor layer
+- `src/client/java/com/guardvillagers/client/GuardEntityRenderer.java` — custom armor layer usage
+- `src/client/java/com/guardvillagers/client/GuardVillagersClient.java` — armor layer registration
+
+### Next Steps
+- In-game verification of all checklist items
+- Consider custom armor textures for pixel-perfect villager-proportioned armor (future)
+- Verify held item (sword/bow/shield) positioning hasn't shifted with arm length change
