@@ -48,3 +48,58 @@
 ### Suggested Next Steps
 - Run the provided test plan in-game (permissions, command validation, decay timing, creative-op exemption, rendering checks, groups/UI behavior).
 - If desired, add automated command parsing tests for reputation input edge cases and assignment `0` (unassigned) coverage.
+
+## [2026-03-07] - Codex 5.3: Shop/Economy Fixes + Debug System Overhaul
+
+### What Was Done
+
+#### Section A - Shop & Economy
+- Creative mode bypass: all shop purchases show "Cost: Free" and succeed without emerald blocks.
+- Creative mode bulk purchase now caps at 64 guards when shift-clicking.
+- Armor upgrade pricing updated: starts at 4, doubles per level, caps at 64 emerald blocks.
+- Weapon upgrade pricing updated: starts at 4, quadruples per level, caps at 64 emerald blocks.
+- Hiring price reduced to base 4 + 2 per hire level.
+- Reintroduced reputation-based hire cost scaling (0.75x to 1.5x modifier) in `GuardVillagersMod.getAdjustedGuardCost`.
+- Fixed lore typo: "Shifh-click" -> "Shift-click".
+- Weapon display now shows both sword and bow progression in upgrade cards.
+- Shop info book simplified to armor odds, sword level, bow level, healing status, and shield status only.
+
+#### Section B - Debug System
+- Added `GuardDebugState` (`PersistentState`) for per-player debug toggle and range persistence.
+- Added `GuardDebugManager` utility for state access and effective-range calculation.
+- Reworked `/guards debug [range]` command:
+- OP-gated via existing operator permission check.
+- `/guards debug` toggles on/off.
+- `/guards debug <range>` enables (if needed) and updates range.
+- Range is capped to half of player view distance in blocks.
+- Added S2C payloads:
+- `GuardDebugSyncPayload` for local debug enabled/range state.
+- `GuardDebugDataPayload` for batched per-guard path nodes/current index/target ID.
+- Added server-side periodic debug sync every 5 ticks with per-player scoping and hash-based path change detection.
+- Added client-side state holders:
+- `ClientDebugState` for local toggle/range.
+- `ClientGuardDebugData` for per-guard path/target cache.
+- Replaced debug renderer stub with a full `GuardDebugRenderer` wired to `WorldRenderEvents.AFTER_ENTITIES`:
+- Head labels: HP, Lvl, XP, Role, Behavior, Owner, Group, Zone.
+- Green 32-block detection ring.
+- Blue path block highlights + red current-position block.
+- Yellow line from guard eye to closest point on target AABB.
+- Range-based visibility filtering and local-player-only rendering.
+- Updated `GuardEntity` with a path/target debug snapshot accessor for packet sync.
+- Updated `GuardVillagersClient` to register packet handlers and clear debug caches on disconnect/stop.
+
+### Decisions Made
+- Debug persistence is server-side `PersistentState`, which also covers integrated singleplayer worlds.
+- Debug data sync is throttled to every 5 ticks and only sends changed guard snapshots per player.
+- Max synced path length is capped at 64 nodes.
+- Client guard-in-range list is cached and refreshed every 10 ticks.
+- Reputation pricing uses linear scaling from 1.5x (rep 0.0) to 0.75x (rep 1.0), clamped.
+
+### Current State
+- Section A and Section B code changes are implemented and compiling.
+- Full project build passes after Section A and again after Section B.
+- Rendering uses vanilla/Fabric rendering APIs only.
+
+### Next Steps / Open Items
+- Execute in-game manual checklist validation for all Section A and Section B scenarios.
+- Run runtime/performance checks with high guard counts to tune debug rendering cost if needed.

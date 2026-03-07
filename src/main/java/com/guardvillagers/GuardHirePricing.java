@@ -1,8 +1,8 @@
 package com.guardvillagers;
 
 public final class GuardHirePricing {
-	public static final int BASE_PRICE = 8;
-	public static final int PRICE_PER_LEVEL = 4;
+	public static final int BASE_PRICE = 4;
+	public static final int PRICE_PER_LEVEL = 2;
 
 	private GuardHirePricing() {
 	}

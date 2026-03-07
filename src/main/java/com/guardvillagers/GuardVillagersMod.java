@@ -3,12 +3,15 @@ package com.guardvillagers;
 import com.guardvillagers.data.GuardUpgradeState;
 import com.guardvillagers.data.GuardVillageState;
 import com.guardvillagers.data.GuardReputationState;
+import com.guardvillagers.data.GuardDebugState;
 import com.guardvillagers.data.GuardDiplomacyState;
 import com.guardvillagers.data.GuardTacticsState;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.GuardRole;
 import com.guardvillagers.item.GuardSpawnEggItem;
+import com.guardvillagers.network.GuardDebugDataPayload;
+import com.guardvillagers.network.GuardDebugSyncPayload;
 import com.guardvillagers.item.GuardWhistleItem;
 import com.guardvillagers.shop.GuardShopScreenHandler;
 import com.guardvillagers.tactics.GuardTacticsScreenHandler;
@@ -19,6 +22,8 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
 import net.fabricmc.fabric.api.itemgroup.v1.FabricItemGroup;
@@ -65,14 +70,13 @@ import net.minecraft.world.World;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.regex.Pattern;
@@ -82,14 +86,10 @@ public class GuardVillagersMod implements ModInitializer {
 	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
 	private static final int FOLLOW_DISTANCE = 64;
-	private static final int DEBUG_ALL_RANGE = -1;
-	private static final int DEBUG_TEXT_UPDATE_INTERVAL = 10;
-	// Debug visuals now rendered client-side via GuardDebugRenderer
-	private static final String DEBUG_PREFIX = "[DBG] ";
+	private static final int DEBUG_SYNC_INTERVAL_TICKS = 5;
+	private static final int DEBUG_MAX_PATH_NODES = 64;
 	private static final Pattern REPUTATION_INPUT_PATTERN = Pattern.compile("^(?:0(?:\\.\\d{1,2})?|1(?:\\.0{1,2})?)$");
-	private static final int WORLD_SEARCH_LIMIT = 30_000_000;
-	private static final Map<UUID, Integer> DEBUG_PLAYERS = new ConcurrentHashMap<>();
-	private static final Map<RegistryKey<World>, Set<UUID>> DEBUG_VISIBLE_GUARDS = new ConcurrentHashMap<>();
+	private static final Map<UUID, Map<Integer, Integer>> DEBUG_PATH_HASH_CACHE = new HashMap<>();
 
 	public enum GuardPurchaseResult {
 		SUCCESS,
@@ -147,6 +147,7 @@ public class GuardVillagersMod implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		warmupPersistentStateClasses();
+		registerPayloads();
 		FabricDefaultAttributeRegistry.register(GUARD_ENTITY_TYPE, GuardEntity.createAttributes());
 		registerDispenserBehavior();
 		registerCommands();
@@ -154,10 +155,16 @@ public class GuardVillagersMod implements ModInitializer {
 		LOGGER.info("Guard Villagers initialized");
 	}
 
+	private static void registerPayloads() {
+		PayloadTypeRegistry.playS2C().register(GuardDebugSyncPayload.ID, GuardDebugSyncPayload.CODEC);
+		PayloadTypeRegistry.playS2C().register(GuardDebugDataPayload.ID, GuardDebugDataPayload.CODEC);
+	}
+
 	private static void warmupPersistentStateClasses() {
 		Class<?>[] stateClasses = {
 			GuardReputationState.class,
 			GuardUpgradeState.class,
+			GuardDebugState.class,
 			GuardDiplomacyState.class,
 			GuardVillageState.class,
 			GuardTacticsState.class
@@ -362,23 +369,12 @@ public class GuardVillagersMod implements ModInitializer {
 					})))
 			.then(CommandManager.literal("debug")
 				.requires(GuardVillagersMod::hasOperatorPermission)
-				.executes(context -> toggleDebug(context.getSource().getPlayerOrThrow()))
-				.then(CommandManager.argument("radius", IntegerArgumentType.integer(1, 256))
-					.executes(context -> setDebug(
+				.executes(context -> toggleDebug(context.getSource().getPlayerOrThrow(), -1))
+				.then(CommandManager.argument("range", IntegerArgumentType.integer(1))
+					.executes(context -> toggleDebug(
 						context.getSource().getPlayerOrThrow(),
-						true,
-						IntegerArgumentType.getInteger(context, "radius")
-					)))
-				.then(CommandManager.literal("on")
-					.executes(context -> setDebug(context.getSource().getPlayerOrThrow(), true))
-					.then(CommandManager.argument("radius", IntegerArgumentType.integer(1, 256))
-						.executes(context -> setDebug(
-							context.getSource().getPlayerOrThrow(),
-							true,
-							IntegerArgumentType.getInteger(context, "radius")
-						))))
-				.then(CommandManager.literal("off")
-					.executes(context -> setDebug(context.getSource().getPlayerOrThrow(), false))))
+						IntegerArgumentType.getInteger(context, "range")
+					))))
 		;
 	}
 
@@ -420,7 +416,15 @@ public class GuardVillagersMod implements ModInitializer {
 
 	public static int getAdjustedGuardCost(ServerPlayerEntity player) {
 		GuardPlayerUpgrades upgrades = getUpgrades(player);
-		return GuardHirePricing.getHirePrice(upgrades.getHireLevel());
+		int basePrice = upgrades.getGuardCost();
+		double reputation = getReputation(player);
+		double modifier = 1.5D - (reputation * 0.75D);
+		modifier = Math.max(0.75D, Math.min(1.5D, modifier));
+		return Math.max(1, (int) Math.round(basePrice * modifier));
+	}
+
+	public static double getReputation(ServerPlayerEntity player) {
+		return GuardReputationManager.getEffectiveReputation(player);
 	}
 
 	public static GuardPurchaseResult purchaseGuard(ServerPlayerEntity player) {
@@ -434,10 +438,14 @@ public class GuardVillagersMod implements ModInitializer {
 
 		int normalizedCount = Math.max(1, requestedCount);
 		GuardPlayerUpgrades upgrades = getUpgrades(player);
-		int costPerGuard = GuardHirePricing.getHirePrice(upgrades.getHireLevel());
-		int affordable = costPerGuard <= 0 ? 0 : GuardEconomy.countEmeraldBlocks(player.getInventory()) / costPerGuard;
-		int toSpawn = Math.min(normalizedCount, affordable);
-		if (toSpawn <= 0) {
+		int costPerGuard = getAdjustedGuardCost(player);
+		boolean creativeMode = player.getAbilities().creativeMode;
+		int toSpawn = normalizedCount;
+		if (!creativeMode) {
+			int affordable = costPerGuard <= 0 ? 0 : GuardEconomy.countEmeraldBlocks(player.getInventory()) / costPerGuard;
+			toSpawn = Math.min(normalizedCount, affordable);
+		}
+		if (toSpawn <= 0 && !creativeMode) {
 			return new PurchaseBatchResult(GuardPurchaseResult.INSUFFICIENT_FUNDS, 0);
 		}
 
@@ -795,58 +803,62 @@ public class GuardVillagersMod implements ModInitializer {
 		return world.isSpaceEmpty(null, spawnBox);
 	}
 
-	private static int toggleDebug(ServerPlayerEntity player) {
-		boolean enable = !DEBUG_PLAYERS.containsKey(player.getUuid());
-		return setDebug(player, enable, null);
-	}
+	private static int toggleDebug(ServerPlayerEntity player, int requestedRange) {
+		MinecraftServer server = player.getCommandSource().getServer();
+		if (server == null) {
+			return 0;
+		}
 
-	private static int setDebug(ServerPlayerEntity player, boolean enable) {
-		return setDebug(player, enable, null);
-	}
-
-	private static int setDebug(ServerPlayerEntity player, boolean enable, Integer radius) {
 		UUID playerId = player.getUuid();
-		if (enable) {
-			int effectiveRadius = radius == null ? DEBUG_ALL_RANGE : radius;
-			DEBUG_PLAYERS.put(playerId, effectiveRadius);
-			if (effectiveRadius == DEBUG_ALL_RANGE) {
-				player.sendMessage(Text.literal("Guard debug enabled for all guards."), false);
-			} else {
-				player.sendMessage(Text.literal("Guard debug enabled within " + effectiveRadius + " blocks."), false);
+		boolean currentlyEnabled = GuardDebugManager.isEnabled(server, playerId);
+		if (requestedRange < 0) {
+			if (currentlyEnabled) {
+				GuardDebugManager.setEnabled(server, playerId, false);
+				DEBUG_PATH_HASH_CACHE.remove(playerId);
+				sendDebugSync(player, false, 0.0D);
+				clearDebugData(player);
+				player.sendMessage(Text.literal("Debug disabled."), false);
+				return Command.SINGLE_SUCCESS;
 			}
+
+			GuardDebugManager.setEnabled(server, playerId, true);
+			GuardDebugManager.setRange(server, playerId, -1.0D);
+			double effectiveRange = GuardDebugManager.getEffectiveRange(player);
+			sendDebugSync(player, true, effectiveRange);
+			player.sendMessage(Text.literal("Debug enabled. Range: " + formatDebugRange(effectiveRange) + " blocks."), false);
+			return Command.SINGLE_SUCCESS;
+		}
+
+		double clampedRange = clampRequestedDebugRange(player, requestedRange);
+		GuardDebugManager.setRange(server, playerId, clampedRange);
+		if (!currentlyEnabled) {
+			GuardDebugManager.setEnabled(server, playerId, true);
+			double effectiveRange = GuardDebugManager.getEffectiveRange(player);
+			sendDebugSync(player, true, effectiveRange);
+			player.sendMessage(Text.literal("Debug enabled. Range: " + formatDebugRange(effectiveRange) + " blocks."), false);
 		} else {
-			DEBUG_PLAYERS.remove(playerId);
-			if (DEBUG_PLAYERS.isEmpty()) {
-				clearDebugOverlays(player.getCommandSource().getServer());
-			}
-			player.sendMessage(Text.literal("Guard debug disabled."), false);
+			double effectiveRange = GuardDebugManager.getEffectiveRange(player);
+			sendDebugSync(player, true, effectiveRange);
+			player.sendMessage(Text.literal("Debug range updated to " + formatDebugRange(effectiveRange) + " blocks."), false);
 		}
 		return Command.SINGLE_SUCCESS;
 	}
 
-	private static void clearDebugOverlays(MinecraftServer server) {
-		for (ServerWorld world : server.getWorlds()) {
-			Set<UUID> tracked = DEBUG_VISIBLE_GUARDS.remove(world.getRegistryKey());
-			if (tracked == null || tracked.isEmpty()) {
-				for (GuardEntity guard : world.getEntitiesByClass(
-					GuardEntity.class,
-					fullWorldBox(world),
-					GuardVillagersMod::isDebugName)
-				) {
-					guard.setCustomNameVisible(false);
-					guard.setCustomName(null);
-				}
-				continue;
-			}
-			for (UUID guardId : tracked) {
-				Entity entity = world.getEntity(guardId);
-				if (!(entity instanceof GuardEntity guard) || !isDebugName(guard)) {
-					continue;
-				}
-				guard.setCustomNameVisible(false);
-				guard.setCustomName(null);
-			}
-		}
+	private static double clampRequestedDebugRange(ServerPlayerEntity player, int requestedRange) {
+		int maxRange = GuardDebugManager.getRangeCapBlocks(player);
+		return Math.max(1.0D, Math.min(requestedRange, maxRange));
+	}
+
+	private static String formatDebugRange(double range) {
+		return Integer.toString((int) Math.round(range));
+	}
+
+	private static void sendDebugSync(ServerPlayerEntity player, boolean enabled, double range) {
+		ServerPlayNetworking.send(player, new GuardDebugSyncPayload(enabled, range));
+	}
+
+	private static void clearDebugData(ServerPlayerEntity player) {
+		ServerPlayNetworking.send(player, new GuardDebugDataPayload(List.of()));
 	}
 
 	private void registerEvents() {
@@ -893,7 +905,7 @@ public class GuardVillagersMod implements ModInitializer {
 
 		ServerTickEvents.END_WORLD_TICK.register(world -> {
 			try {
-				updateGuardDebug(world);
+				syncGuardDebug(world);
 				VillageManagerHandler.maintainVillageGuards(world);
 				if (world.getRegistryKey() == World.OVERWORLD) {
 					GuardReputationManager.tickDecay(world);
@@ -916,107 +928,70 @@ public class GuardVillagersMod implements ModInitializer {
 		});
 	}
 
-	private static void updateGuardDebug(ServerWorld world) {
-		if (DEBUG_PLAYERS.isEmpty()) {
+	private static void syncGuardDebug(ServerWorld world) {
+		if (world.getTime() % DEBUG_SYNC_INTERVAL_TICKS != 0) {
 			return;
 		}
 
-		long gameTime = world.getTime();
-		boolean updateText = gameTime % DEBUG_TEXT_UPDATE_INTERVAL == 0;
-		if (!updateText) {
-			return;
-		}
-
-		Map<UUID, GuardEntity> visibleGuards = collectVisibleDebugGuards(world);
-
-		for (GuardEntity guard : visibleGuards.values()) {
-			Text debugName = buildDebugName(guard);
-			Text current = guard.getCustomName();
-			if (current == null || !current.getString().equals(debugName.getString())) {
-				guard.setCustomName(debugName);
-			}
-			if (!guard.isCustomNameVisible()) {
-				guard.setCustomNameVisible(true);
-			}
-			if (!guard.isDebugActive()) {
-				guard.setDebugActive(true);
-			}
-		}
-
-		clearOutOfRangeDebug(world, visibleGuards.keySet());
-	}
-
-	private static Map<UUID, GuardEntity> collectVisibleDebugGuards(ServerWorld world) {
-		Map<UUID, GuardEntity> visibleGuards = new HashMap<>();
+		MinecraftServer server = world.getServer();
 		for (ServerPlayerEntity player : world.getPlayers()) {
-			Integer debugRange = DEBUG_PLAYERS.get(player.getUuid());
-			if (debugRange == null) {
+			UUID playerId = player.getUuid();
+			if (!GuardDebugManager.isEnabled(server, playerId)) {
 				continue;
 			}
-			if (debugRange <= 0) {
-				for (GuardEntity guard : world.getEntitiesByClass(
-					GuardEntity.class,
-					fullWorldBox(world),
-					entity -> true
-				)) {
-					visibleGuards.putIfAbsent(guard.getUuid(), guard);
-				}
-				return visibleGuards;
-			}
+
+			double effectiveRange = GuardDebugManager.getEffectiveRange(player);
+			sendDebugSync(player, true, effectiveRange);
+			double maxDistanceSq = effectiveRange * effectiveRange;
+			Map<Integer, Integer> previousHashes = DEBUG_PATH_HASH_CACHE.getOrDefault(playerId, Map.of());
+			Map<Integer, Integer> nextHashes = new HashMap<>();
+			List<GuardDebugDataPayload.GuardDebugEntry> changedEntries = new ArrayList<>();
+
 			for (GuardEntity guard : world.getEntitiesByClass(
 				GuardEntity.class,
-				player.getBoundingBox().expand(debugRange),
-				entity -> true
+				player.getBoundingBox().expand(effectiveRange),
+				entity -> entity.squaredDistanceTo(player) <= maxDistanceSq
 			)) {
-				visibleGuards.putIfAbsent(guard.getUuid(), guard);
+				int guardId = guard.getId();
+				GuardEntity.GuardDebugSnapshot snapshot = guard.getDebugSnapshot(DEBUG_MAX_PATH_NODES);
+				int hash = hashDebugSnapshot(snapshot);
+				nextHashes.put(guardId, hash);
+				Integer previousHash = previousHashes.get(guardId);
+				if (previousHash == null || previousHash != hash) {
+					changedEntries.add(new GuardDebugDataPayload.GuardDebugEntry(
+						guardId,
+						snapshot.pathNodes(),
+						snapshot.currentPathIndex(),
+						snapshot.targetEntityId()
+					));
+				}
+			}
+
+			for (Integer previousGuardId : previousHashes.keySet()) {
+				if (!nextHashes.containsKey(previousGuardId)) {
+					changedEntries.add(new GuardDebugDataPayload.GuardDebugEntry(previousGuardId, List.of(), -1, -1));
+				}
+			}
+
+			DEBUG_PATH_HASH_CACHE.put(playerId, nextHashes);
+			if (!changedEntries.isEmpty()) {
+				ServerPlayNetworking.send(player, new GuardDebugDataPayload(changedEntries));
 			}
 		}
-		return visibleGuards;
-	}
 
-	private static void clearOutOfRangeDebug(ServerWorld world, Set<UUID> seen) {
-		RegistryKey<World> worldKey = world.getRegistryKey();
-		Set<UUID> previouslySeen = DEBUG_VISIBLE_GUARDS.getOrDefault(worldKey, Set.of());
-		if (previouslySeen.isEmpty()) {
-			DEBUG_VISIBLE_GUARDS.put(worldKey, new HashSet<>(seen));
-			return;
+		if (world.getRegistryKey() == World.OVERWORLD) {
+			DEBUG_PATH_HASH_CACHE.keySet().removeIf(playerId ->
+				server.getPlayerManager().getPlayer(playerId) == null || !GuardDebugManager.isEnabled(server, playerId)
+			);
 		}
+	}
 
-		for (UUID guardId : previouslySeen) {
-			if (seen.contains(guardId)) {
-				continue;
-			}
-			Entity entity = world.getEntity(guardId);
-			if (!(entity instanceof GuardEntity guard) || !isDebugName(guard)) {
-				continue;
-			}
-			guard.setCustomNameVisible(false);
-			guard.setCustomName(null);
-			guard.setDebugActive(false);
+	private static int hashDebugSnapshot(GuardEntity.GuardDebugSnapshot snapshot) {
+		int hash = Objects.hash(snapshot.currentPathIndex(), snapshot.targetEntityId());
+		for (BlockPos node : snapshot.pathNodes()) {
+			hash = 31 * hash + node.hashCode();
 		}
-		DEBUG_VISIBLE_GUARDS.put(worldKey, new HashSet<>(seen));
-	}
-
-	private static boolean isDebugName(GuardEntity guard) {
-		Text customName = guard.getCustomName();
-		return customName != null && customName.getString().startsWith(DEBUG_PREFIX);
-	}
-
-	private static Text buildDebugName(GuardEntity guard) {
-		return Text.literal(DEBUG_PREFIX).formatted(Formatting.AQUA, Formatting.BOLD)
-			.append(Text.literal("Guard ").formatted(Formatting.GRAY))
-			.append(Text.literal(guard.getUuid().toString().substring(0, 8)).formatted(Formatting.AQUA));
-	}
-
-	private static Box fullWorldBox(ServerWorld world) {
-		return new Box(
-			-WORLD_SEARCH_LIMIT,
-			world.getBottomY(),
-			-WORLD_SEARCH_LIMIT,
-			WORLD_SEARCH_LIMIT,
-			world.getTopYInclusive(),
-			WORLD_SEARCH_LIMIT
-		);
+		return hash;
 	}
 
 }

@@ -116,8 +116,8 @@ public final class GuardPlayerUpgrades {
 	}
 
 	public int getArmorUpgradeCostForLevel(int level) {
-		int normalized = Math.max(0, Math.min(MAX_ARMOR_LEVEL, level));
-		return 2 << normalized;
+		int normalized = Math.max(0, Math.min(MAX_ARMOR_LEVEL - 1, level));
+		return Math.min(64, 4 << normalized);
 	}
 
 	public int getWeaponUpgradeCost() {
@@ -125,8 +125,8 @@ public final class GuardPlayerUpgrades {
 	}
 
 	public int getWeaponUpgradeCostForLevel(int level) {
-		int normalized = Math.max(0, Math.min(MAX_WEAPON_LEVEL, level));
-		return 2 << normalized;
+		int normalized = Math.max(0, Math.min(MAX_WEAPON_LEVEL - 1, level));
+		return Math.min(64, 4 * (int) Math.pow(4, normalized));
 	}
 
 	public int getHealingUpgradeCost() {

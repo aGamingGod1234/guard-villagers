@@ -31,6 +31,8 @@ import net.minecraft.entity.ai.goal.MeleeAttackGoal;
 import net.minecraft.entity.ai.goal.RevengeGoal;
 import net.minecraft.entity.ai.goal.SwimGoal;
 import net.minecraft.entity.ai.goal.WanderAroundFarGoal;
+import net.minecraft.entity.ai.pathing.Path;
+import net.minecraft.entity.ai.pathing.PathNode;
 import net.minecraft.entity.attribute.DefaultAttributeContainer;
 import net.minecraft.entity.attribute.EntityAttributeInstance;
 import net.minecraft.entity.attribute.EntityAttributeModifier;
@@ -78,6 +80,7 @@ import net.minecraft.world.ServerWorldAccess;
 import net.minecraft.world.poi.PointOfInterestStorage;
 import net.minecraft.world.poi.PointOfInterestTypes;
 
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -857,6 +860,30 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	public int getCombatCooldown() {
 		return this.combatCooldown;
+	}
+
+	public GuardDebugSnapshot getDebugSnapshot(int maxNodes) {
+		int nodeCap = Math.max(0, maxNodes);
+		Path path = this.getNavigation().getCurrentPath();
+		List<BlockPos> nodes = new ArrayList<>();
+		int currentNodeIndex = -1;
+		if (path != null && !path.isFinished() && nodeCap > 0) {
+			int length = Math.min(path.getLength(), nodeCap);
+			for (int i = 0; i < length; i++) {
+				PathNode node = path.getNode(i);
+				nodes.add(new BlockPos(node.x, node.y, node.z));
+			}
+			currentNodeIndex = Math.min(path.getCurrentNodeIndex(), Math.max(0, length - 1));
+		}
+		LivingEntity target = this.getTarget();
+		int targetEntityId = target == null ? -1 : target.getId();
+		return new GuardDebugSnapshot(nodes, currentNodeIndex, targetEntityId);
+	}
+
+	public record GuardDebugSnapshot(List<BlockPos> pathNodes, int currentPathIndex, int targetEntityId) {
+		public GuardDebugSnapshot {
+			pathNodes = List.copyOf(pathNodes);
+		}
 	}
 
 	private boolean tryApplyWeaponUpgrade(PlayerEntity player, Hand hand, ItemStack offered) {

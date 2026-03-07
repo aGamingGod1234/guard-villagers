@@ -11,7 +11,6 @@ import net.minecraft.inventory.SimpleInventory;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
-import net.minecraft.registry.Registries;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
@@ -60,7 +59,16 @@ public class GuardShopInventory extends SimpleInventory {
 
 	private void buyGuard(boolean bulkPurchase) {
 		int cost = GuardVillagersMod.getAdjustedGuardCost(this.player);
-		int requested = bulkPurchase ? Math.max(1, GuardEconomy.countEmeraldBlocks(this.player.getInventory()) / Math.max(1, cost)) : 1;
+		int requested;
+		if (bulkPurchase) {
+			if (this.player.getAbilities().creativeMode) {
+				requested = 64;
+			} else {
+				requested = Math.max(1, GuardEconomy.countEmeraldBlocks(this.player.getInventory()) / Math.max(1, cost));
+			}
+		} else {
+			requested = 1;
+		}
 		PurchaseBatchResult result = GuardVillagersMod.purchaseGuards(this.player, requested);
 		switch (result.result()) {
 			case SUCCESS -> this.player.sendMessage(Text.literal("Guard hired: " + result.spawnedCount() + "."), true);
@@ -141,17 +149,19 @@ public class GuardShopInventory extends SimpleInventory {
 		}
 
 		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgrades(this.player);
+		boolean creativeMode = this.player.getAbilities().creativeMode;
 
 		List<String> bookStats = this.buildCurrentGuardStats(upgrades);
 		this.setStack(SLOT_INFO, this.card(Items.BOOK, "Guard Villagers", Formatting.GOLD, bookStats.toArray(String[]::new)));
 
 		int guardCost = GuardVillagersMod.getAdjustedGuardCost(this.player);
+		String guardCostText = creativeMode ? "Cost: Free" : "Cost: " + guardCost + " emerald block(s)";
 		this.setStack(SLOT_BUY_GUARD, this.card(
 			Items.EMERALD_BLOCK,
 			"Hire Guard",
 			Formatting.GREEN,
-			"Cost: " + guardCost + " emerald block(s)",
-			"Shifh-click to buy max."
+			guardCostText,
+			"Shift-click to buy max."
 		));
 
 		int armorLevel = upgrades.getArmorLevel();
@@ -166,6 +176,7 @@ public class GuardShopInventory extends SimpleInventory {
 			));
 		} else {
 			int armorCost = upgrades.getArmorUpgradeCostForLevel(armorLevel);
+			String armorCostText = creativeMode ? "Cost: Free" : "Cost: " + armorCost + " emerald block(s)";
 			GuardPlayerUpgrades.ArmorDistribution currentDist = upgrades.getArmorDistribution();
 			GuardPlayerUpgrades nextArmor = upgrades.copy();
 			nextArmor.upgradeArmor();
@@ -174,7 +185,7 @@ public class GuardShopInventory extends SimpleInventory {
 				Items.IRON_CHESTPLATE,
 				"Upgrade Armor",
 				Formatting.AQUA,
-				"Cost: " + armorCost + " emerald block(s)",
+				armorCostText,
 				"Current: L:" + currentDist.leather() + "% I:" + currentDist.iron() + "% G:" + currentDist.gold() + "% D:" + currentDist.diamond() + "%",
 				"Upgraded: L:" + nextDist.leather() + "% I:" + nextDist.iron() + "% G:" + nextDist.gold() + "% D:" + nextDist.diamond() + "%"
 			));
@@ -187,17 +198,18 @@ public class GuardShopInventory extends SimpleInventory {
 				"Upgrade Weapons",
 				Formatting.RED,
 				"Maxed",
-				"Current: " + describeWeaponLevel(weaponLevel)
+				"Current: " + describeWeaponSummary(weaponLevel)
 			));
 		} else {
-			int weaponCost = upgrades.getWeaponUpgradeCost();
+			int weaponCost = upgrades.getWeaponUpgradeCostForLevel(weaponLevel);
+			String weaponCostText = creativeMode ? "Cost: Free" : "Cost: " + weaponCost + " emerald block(s)";
 			this.setStack(SLOT_UPGRADE_WEAPON, this.card(
 				Items.IRON_SWORD,
 				"Upgrade Weapons",
 				Formatting.RED,
-				"Cost: " + weaponCost + " emerald block(s)",
-				"Current: " + describeWeaponLevel(weaponLevel),
-				"Upgraded: " + describeWeaponLevel(weaponLevel + 1)
+				weaponCostText,
+				"Current: " + describeWeaponSummary(weaponLevel),
+				"Upgraded: " + describeWeaponSummary(weaponLevel + 1)
 			));
 		}
 
@@ -212,6 +224,7 @@ public class GuardShopInventory extends SimpleInventory {
 			));
 		} else {
 			int supportCost = upgrades.getHealingUpgradeCost();
+			String supportCostText = creativeMode ? "Cost: Free" : "Cost: " + supportCost + " emerald block(s)";
 			String nextLabel = switch (upgrades.getSupportLevel()) {
 				case 0 -> "Next: Heal 1 heart / 2.5s";
 				case 1 -> "Next: Shield";
@@ -221,7 +234,7 @@ public class GuardShopInventory extends SimpleInventory {
 				Items.GOLDEN_APPLE,
 				"Support Upgrade",
 				Formatting.LIGHT_PURPLE,
-				"Cost: " + supportCost + " emerald block(s)",
+				supportCostText,
 				nextLabel,
 				"Upgrades in 3 stages."
 			));
@@ -239,154 +252,43 @@ public class GuardShopInventory extends SimpleInventory {
 
 	private List<String> buildCurrentGuardStats(GuardPlayerUpgrades upgrades) {
 		List<String> lines = new ArrayList<>();
-		int level = upgrades.getHireLevel();
-		ItemStack weapon = this.weaponForLevel(upgrades.getWeaponLevel());
-		ItemStack helmet = this.armorForSlot("helmet", upgrades);
-		ItemStack chest = this.armorForSlot("chestplate", upgrades);
-		ItemStack legs = this.armorForSlot("leggings", upgrades);
-		ItemStack boots = this.armorForSlot("boots", upgrades);
-		int helmetArmor = this.armorPoints(helmet);
-		int chestArmor = this.armorPoints(chest);
-		int legsArmor = this.armorPoints(legs);
-		int bootsArmor = this.armorPoints(boots);
-		int totalArmor = helmetArmor + chestArmor + legsArmor + bootsArmor;
-		double health = 20.0D + Math.max(0, level - 1) * 2.0D;
-		double attackSpeed = 1.6D;
-		int cooldownTicks = Math.max(1, (int) Math.round(20.0D / attackSpeed));
-
-		lines.add("\u00A77Weapon: \u00A7f" + weapon.getName().getString() + " (" + this.weaponDamage(weapon) + " dmg)");
-		lines.add("\u00A77Helmet: \u00A7f" + helmet.getName().getString() + " (" + helmetArmor + ")");
-		lines.add("\u00A77Chestplate: \u00A7f" + chest.getName().getString() + " (" + chestArmor + ")");
-		lines.add("\u00A77Leggings: \u00A7f" + legs.getName().getString() + " (" + legsArmor + ")");
-		lines.add("\u00A77Boots: \u00A7f" + boots.getName().getString() + " (" + bootsArmor + ")");
-		lines.add("\u00A77Total armour: \u00A7f" + totalArmor);
-		lines.add("\u00A77Health: \u00A7f" + (int) health + " HP");
-		lines.add("\u00A77Attack speed: \u00A7f" + String.format("%.2f", attackSpeed) + " (" + cooldownTicks + "t cd)");
-		lines.add("\u00A77Hire price: \u00A7f" + GuardVillagersMod.getAdjustedGuardCost(this.player) + " emerald block(s)");
 		GuardPlayerUpgrades.ArmorDistribution dist = upgrades.getArmorDistribution();
 		lines.add("\u00A77Armor odds: \u00A7fL:" + dist.leather() + "% I:" + dist.iron() + "% G:" + dist.gold() + "% D:" + dist.diamond() + "%");
-		if (upgrades.getArmorLevel() < GuardPlayerUpgrades.MAX_ARMOR_LEVEL) {
-			GuardPlayerUpgrades nextArmor = upgrades.copy();
-			nextArmor.upgradeArmor();
-			GuardPlayerUpgrades.ArmorDistribution nextDist = nextArmor.getArmorDistribution();
-			lines.add("\u00A77Next armor: \u00A7fL:" + nextDist.leather() + "% I:" + nextDist.iron() + "% G:" + nextDist.gold() + "% D:" + nextDist.diamond() + "%");
-		}
-		lines.add("\u00A77Weapon: \u00A7f" + describeWeaponLevel(upgrades.getWeaponLevel()));
-		if (upgrades.getWeaponLevel() < GuardPlayerUpgrades.MAX_WEAPON_LEVEL) {
-			lines.add("\u00A77Next weapon: \u00A7f" + describeWeaponLevel(upgrades.getWeaponLevel() + 1));
-		}
+		lines.add("\u00A77Sword: \u00A7f" + describeSwordLevel(upgrades.getWeaponLevel()));
+		lines.add("\u00A77Bow: \u00A7f" + describeBowLevel(upgrades.getWeaponLevel()));
+		lines.add("\u00A77Healing: \u00A7f" + (upgrades.hasHealingUpgrade() ? "Enabled" : "Disabled"));
+		lines.add("\u00A77Shield: \u00A7f" + (upgrades.hasShieldUpgrade() ? "Enabled" : "Disabled"));
 		return lines;
 	}
 
-	private ItemStack weaponForLevel(int weaponLevel) {
-		Item item = switch (Math.max(0, weaponLevel)) {
-			case 1 -> Items.IRON_SWORD;
-			case 2, 3, 4, 5 -> Items.DIAMOND_SWORD;
-			default -> Items.STONE_SWORD;
-		};
-		return new ItemStack(item);
+	private String describeWeaponSummary(int level) {
+		return "Sword: " + describeSwordLevel(level) + " | Bow: " + describeBowLevel(level);
 	}
 
-	private ItemStack armorForSlot(String type, GuardPlayerUpgrades upgrades) {
-		GuardPlayerUpgrades.ArmorDistribution dist = upgrades.getArmorDistribution();
-		GuardPlayerUpgrades.ArmorTier tier;
-		if (dist.diamond() >= dist.iron() && dist.diamond() >= dist.gold() && dist.diamond() >= dist.leather()) {
-			tier = GuardPlayerUpgrades.ArmorTier.DIAMOND;
-		} else if (dist.iron() >= dist.gold() && dist.iron() >= dist.leather()) {
-			tier = GuardPlayerUpgrades.ArmorTier.IRON;
-		} else if (dist.gold() >= dist.leather()) {
-			tier = GuardPlayerUpgrades.ArmorTier.GOLD;
-		} else {
-			tier = GuardPlayerUpgrades.ArmorTier.LEATHER;
-		}
-
-		Item item = switch (tier) {
-			case IRON -> switch (type) {
-				case "helmet" -> Items.IRON_HELMET;
-				case "chestplate" -> Items.IRON_CHESTPLATE;
-				case "leggings" -> Items.IRON_LEGGINGS;
-				case "boots" -> Items.IRON_BOOTS;
-				default -> Items.IRON_BOOTS;
-			};
-			case GOLD -> switch (type) {
-				case "helmet" -> Items.GOLDEN_HELMET;
-				case "chestplate" -> Items.GOLDEN_CHESTPLATE;
-				case "leggings" -> Items.GOLDEN_LEGGINGS;
-				case "boots" -> Items.GOLDEN_BOOTS;
-				default -> Items.GOLDEN_BOOTS;
-			};
-			case DIAMOND, NETHERITE -> switch (type) {
-				case "helmet" -> Items.DIAMOND_HELMET;
-				case "chestplate" -> Items.DIAMOND_CHESTPLATE;
-				case "leggings" -> Items.DIAMOND_LEGGINGS;
-				case "boots" -> Items.DIAMOND_BOOTS;
-				default -> Items.DIAMOND_BOOTS;
-			};
-			default -> switch (type) {
-				case "helmet" -> Items.LEATHER_HELMET;
-				case "chestplate" -> Items.LEATHER_CHESTPLATE;
-				case "leggings" -> Items.LEATHER_LEGGINGS;
-				case "boots" -> Items.LEATHER_BOOTS;
-				default -> Items.LEATHER_BOOTS;
-			};
-		};
-		return new ItemStack(item);
-	}
-
-	private int armorPoints(ItemStack stack) {
-		if (stack.isEmpty()) {
-			return 0;
-		}
-		String path = Registries.ITEM.getId(stack.getItem()).getPath();
-		if (path.contains("helmet")) {
-			if (path.contains("netherite") || path.contains("diamond")) return 3;
-			if (path.contains("iron")) return 2;
-			if (path.contains("chainmail") || path.contains("golden")) return 2;
-			if (path.contains("leather")) return 1;
-		}
-		if (path.contains("chestplate")) {
-			if (path.contains("netherite") || path.contains("diamond")) return 8;
-			if (path.contains("iron")) return 6;
-			if (path.contains("chainmail") || path.contains("golden")) return 5;
-			if (path.contains("leather")) return 3;
-		}
-		if (path.contains("leggings")) {
-			if (path.contains("netherite") || path.contains("diamond")) return 6;
-			if (path.contains("iron")) return 5;
-			if (path.contains("chainmail") || path.contains("golden")) return 3;
-			if (path.contains("leather")) return 2;
-		}
-		if (path.contains("boots")) {
-			if (path.contains("netherite") || path.contains("diamond")) return 3;
-			if (path.contains("iron")) return 2;
-			if (path.contains("chainmail") || path.contains("golden")) return 1;
-			if (path.contains("leather")) return 1;
-		}
-		return 0;
-	}
-
-	private double weaponDamage(ItemStack stack) {
-		if (stack.isOf(Items.STONE_SWORD)) {
-			return 5.0D;
-		}
-		if (stack.isOf(Items.IRON_SWORD)) {
-			return 6.0D;
-		}
-		if (stack.isOf(Items.DIAMOND_SWORD)) {
-			return 7.0D;
-		}
-		return 1.0D;
-	}
-
-	private String describeWeaponLevel(int level) {
+	private String describeSwordLevel(int level) {
 		return switch (Math.max(0, level)) {
-			case 0 -> "Stone Sword / Basic Bow";
-			case 1 -> "Iron Sword / Sharpness I";
-			case 2 -> "Diamond Sword / Sharpness II";
-			case 3 -> "Diamond Sword / Sharpness III";
-			case 4 -> "Diamond Sword / Sharpness IV";
-			case 5 -> "Diamond Sword / Sharpness V";
-			default -> "Diamond Sword / Sharpness V";
+			case 0 -> "Stone";
+			case 1 -> "Iron";
+			case 2 -> "Diamond";
+			case 3 -> "Diamond (Sharp III)";
+			case 4 -> "Diamond (Sharp IV)";
+			case 5 -> "Diamond (Sharp V)";
+			default -> "Diamond (Sharp V)";
+		};
+	}
+
+	private String describeBowLevel(int level) {
+		int powerLevel = Math.min(5, Math.max(1, level + 1));
+		return "Power " + toRoman(powerLevel);
+	}
+
+	private String toRoman(int value) {
+		return switch (value) {
+			case 1 -> "I";
+			case 2 -> "II";
+			case 3 -> "III";
+			case 4 -> "IV";
+			default -> "V";
 		};
 	}
 

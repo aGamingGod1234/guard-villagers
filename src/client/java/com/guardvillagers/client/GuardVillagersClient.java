@@ -1,9 +1,12 @@
 package com.guardvillagers.client;
 
 import com.guardvillagers.GuardVillagersMod;
+import com.guardvillagers.network.GuardDebugDataPayload;
+import com.guardvillagers.network.GuardDebugSyncPayload;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityModelLayerRegistry;
@@ -20,11 +23,19 @@ public class GuardVillagersClient implements ClientModInitializer {
 
 	@Override
 	public void onInitializeClient() {
+		ClientPlayNetworking.registerGlobalReceiver(GuardDebugSyncPayload.ID, (payload, context) ->
+			context.client().execute(() -> {
+				ClientDebugState.update(payload.enabled(), payload.range());
+				if (!payload.enabled()) {
+					ClientGuardDebugData.clear();
+				}
+			})
+		);
+		ClientPlayNetworking.registerGlobalReceiver(GuardDebugDataPayload.ID, (payload, context) ->
+			context.client().execute(() -> ClientGuardDebugData.applyPayload(payload))
+		);
+
 		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_LAYER, GuardEntityModel::getTexturedModelData);
-		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_ARMOR_HELMET_LAYER, GuardEntityModel::getHelmetArmorModelData);
-		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_ARMOR_CHESTPLATE_LAYER, GuardEntityModel::getChestplateArmorModelData);
-		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_ARMOR_LEGGINGS_LAYER, GuardEntityModel::getLeggingsArmorModelData);
-		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_ARMOR_BOOTS_LAYER, GuardEntityModel::getBootsArmorModelData);
 		EntityRendererRegistry.register(GuardVillagersMod.GUARD_ENTITY_TYPE, GuardEntityRenderer::new);
 		HandledScreens.register(GuardVillagersMod.GUARD_TACTICS_SCREEN_HANDLER, GuardTacticsScreen::new);
 		GuardDebugRenderer.register();
@@ -40,7 +51,13 @@ public class GuardVillagersClient implements ClientModInitializer {
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			ClientTacticsDataStore.getInstance().flush();
 			TERRAIN_CACHE.clearAll();
+			ClientDebugState.reset();
+			ClientGuardDebugData.clear();
 		});
-		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> ClientTacticsDataStore.getInstance().flush());
+		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
+			ClientTacticsDataStore.getInstance().flush();
+			ClientDebugState.reset();
+			ClientGuardDebugData.clear();
+		});
 	}
 }
