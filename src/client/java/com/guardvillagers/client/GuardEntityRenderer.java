@@ -11,9 +11,7 @@ import net.minecraft.client.render.entity.feature.HeldItemFeatureRenderer;
 import net.minecraft.client.render.entity.model.BipedEntityModel;
 import net.minecraft.client.render.entity.model.EquipmentModelData;
 import net.minecraft.client.render.entity.state.BipedEntityRenderState;
-import net.minecraft.item.Items;
 import net.minecraft.text.Text;
-import net.minecraft.util.Arm;
 import net.minecraft.util.Identifier;
 
 public class GuardEntityRenderer extends MobEntityRenderer<GuardEntity, GuardEntityRenderer.GuardRenderState, GuardEntityModel> {
@@ -24,10 +22,10 @@ public class GuardEntityRenderer extends MobEntityRenderer<GuardEntity, GuardEnt
 		this.itemModelManager = context.getItemModelManager();
 		EquipmentModelData<GuardEntityModel> armorModels = EquipmentModelData.mapToEntityModel(
 			new EquipmentModelData<>(
-				GuardEntityModel.GUARD_ARMOR_LAYER,
-				GuardEntityModel.GUARD_ARMOR_LAYER,
-				GuardEntityModel.GUARD_ARMOR_LAYER,
-				GuardEntityModel.GUARD_ARMOR_LAYER
+				GuardEntityModel.GUARD_OUTER_ARMOR_LAYER,
+				GuardEntityModel.GUARD_OUTER_ARMOR_LAYER,
+				GuardEntityModel.GUARD_INNER_ARMOR_LAYER,
+				GuardEntityModel.GUARD_OUTER_ARMOR_LAYER
 			),
 			context.getEntityModels(),
 			GuardEntityModel::new
@@ -54,20 +52,13 @@ public class GuardEntityRenderer extends MobEntityRenderer<GuardEntity, GuardEnt
 	public void updateRenderState(GuardEntity entity, GuardRenderState state, float tickDelta) {
 		super.updateRenderState(entity, state, tickDelta);
 		BipedEntityRenderer.updateBipedRenderState(entity, state, tickDelta, this.itemModelManager);
-		state.leftArmPose = getArmPose(entity, Arm.LEFT);
-		state.rightArmPose = getArmPose(entity, Arm.RIGHT);
+		state.leftArmPose = BipedEntityModel.ArmPose.EMPTY;
+		state.rightArmPose = BipedEntityModel.ArmPose.EMPTY;
 		state.skinProfileId = entity.getSkinProfileId();
 		MinecraftClient client = MinecraftClient.getInstance();
 		if (client.player != null && client.targetedEntity == entity && state.displayName == null) {
 			state.displayName = Text.literal("Lv " + entity.getLevel() + " | " + entity.getRole().name() + " | " + entity.getBehavior().name());
 		}
-	}
-
-	private static BipedEntityModel.ArmPose getArmPose(GuardEntity entity, Arm arm) {
-		if (entity.getMainArm() == arm && entity.isAttacking() && entity.getMainHandStack().isOf(Items.BOW)) {
-			return BipedEntityModel.ArmPose.BOW_AND_ARROW;
-		}
-		return BipedEntityModel.ArmPose.EMPTY;
 	}
 
 	public static class GuardRenderState extends BipedEntityRenderState {

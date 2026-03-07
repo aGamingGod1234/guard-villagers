@@ -11,7 +11,7 @@ import java.util.List;
 
 public record GuardDebugDataPayload(List<GuardDebugEntry> entries) implements CustomPayload {
 	private static final int MAX_GUARDS_PER_PACKET = 256;
-	private static final int MAX_PATH_NODES = 64;
+	private static final int MAX_PATH_NODES = 2048;
 	public static final Id<GuardDebugDataPayload> ID = new Id<>(GuardVillagersMod.id("debug_data"));
 	public static final PacketCodec<RegistryByteBuf, GuardDebugDataPayload> CODEC = CustomPayload.codecOf(
 		GuardDebugDataPayload::write,

@@ -100,6 +100,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private double paletteScrollAnimationFrom;
 	private double paletteScrollAnimationTo;
 	private long paletteScrollAnimationStartedAt;
+	private int paletteClipX;
+	private int paletteClipY;
+	private int paletteClipW;
+	private int paletteClipH;
 
 	// Groups two-pane layout
 	private int leftPaneX;
@@ -127,6 +131,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 	// Drop targets
 	private final List<DropTarget> dropTargets = new ArrayList<>();
+	private int addGroupButtonX;
+	private int addGroupButtonY;
+	private int addGroupButtonW;
+	private int addGroupButtonH;
 
 	public GuardTacticsScreen(GuardTacticsScreenHandler handler, PlayerInventory inventory, Text title) {
 		super(handler, inventory, title);
@@ -419,12 +427,15 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		int startX = sepX - 5 - swatchAreaWidth;
 		int y = toggleY;
 		int swatchStride = SWATCH_SIZE + SWATCH_GAP;
-		int visibleMinX = startX - swatchStride;
-		int visibleMaxX = startX + swatchAreaWidth + swatchStride;
+		this.paletteClipX = startX;
+		this.paletteClipY = y;
+		this.paletteClipW = swatchAreaWidth;
+		this.paletteClipH = SWATCH_SIZE;
+		context.enableScissor(this.paletteClipX, this.paletteClipY, this.paletteClipX + this.paletteClipW, this.paletteClipY + this.paletteClipH);
 		for (int colorIndex = 0; colorIndex < allColors.length; colorIndex++) {
 			double slot = colorIndex - renderedOffset;
 			int x = startX + (int) Math.round(slot * swatchStride);
-			if (x + SWATCH_SIZE < visibleMinX || x > visibleMaxX) {
+			if (x + SWATCH_SIZE <= this.paletteClipX || x >= this.paletteClipX + this.paletteClipW) {
 				continue;
 			}
 			RegionColor color = allColors[colorIndex];
@@ -433,6 +444,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			this.drawBorder(context, x, y, SWATCH_SIZE, SWATCH_SIZE, border);
 			this.paletteSwatches.add(new PaletteSwatch(color, x, y, SWATCH_SIZE, SWATCH_SIZE));
 		}
+		context.disableScissor();
 
 		// Separator before palette area
 		int sepX2 = startX - 5;
@@ -549,6 +561,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		this.groupRows.clear();
 		this.guardCards.clear();
 		this.dropTargets.clear();
+		this.addGroupButtonW = 0;
+		this.addGroupButtonH = 0;
 
 		// === LEFT PANE: Groups ===
 		context.fill(this.leftPaneX, this.leftPaneY, this.leftPaneX + this.leftPaneW, this.leftPaneY + this.leftPaneH, 0xCC131B25);
@@ -625,7 +639,21 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		int createBg = createHighlighted ? 0xCC253545 : 0x66131B25;
 		context.fill(createX, createY, createX + createW, createY + GROUP_BOX_HEIGHT, createBg);
 		this.drawBorder(context, createX, createY, createW, GROUP_BOX_HEIGHT, createHighlighted ? 0xFF5A8ABF : 0xFF2A3548);
-		context.drawText(this.textRenderer, Text.literal("+ Drag guards here to create group"), createX + 10, createY + 24, TEXT_SECONDARY, false);
+		this.addGroupButtonW = 86;
+		this.addGroupButtonH = 18;
+		this.addGroupButtonX = createX + 8;
+		this.addGroupButtonY = createY + 8;
+		boolean addHovered = this.contains(this.addGroupButtonX, this.addGroupButtonY, this.addGroupButtonW, this.addGroupButtonH, mouseX, mouseY);
+		context.fill(
+			this.addGroupButtonX,
+			this.addGroupButtonY,
+			this.addGroupButtonX + this.addGroupButtonW,
+			this.addGroupButtonY + this.addGroupButtonH,
+			addHovered ? 0xFF2A7A4A : 0xFF1E5A3A
+		);
+		this.drawBorder(context, this.addGroupButtonX, this.addGroupButtonY, this.addGroupButtonW, this.addGroupButtonH, 0xFF3EAA6A);
+		context.drawText(this.textRenderer, Text.literal("Add Group"), this.addGroupButtonX + 15, this.addGroupButtonY + 5, TEXT_PRIMARY, false);
+		context.drawText(this.textRenderer, Text.literal("+ Drag guards here to create group"), createX + 10, createY + 33, TEXT_SECONDARY, false);
 		this.dropTargets.add(new DropTarget(groupCount, createX, createY, createW, GROUP_BOX_HEIGHT, true));
 
 		context.disableScissor();
@@ -718,6 +746,13 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		if (worldContext == null) {
 			return false;
 		}
+		if (button == 0 && this.addGroupButtonW > 0 && this.contains(this.addGroupButtonX, this.addGroupButtonY, this.addGroupButtonW, this.addGroupButtonH, mouseX, mouseY)) {
+			this.dataStore.ensureGroupCount(worldContext, this.dataStore.groupCount(worldContext) + 1);
+			if (this.client != null && this.client.getNetworkHandler() != null) {
+				this.client.getNetworkHandler().sendChatCommand("guards groups add");
+			}
+			return true;
+		}
 
 		// Check group header interactions (rename, color cycle)
 		for (GroupRowHitbox row : this.groupRows) {
@@ -804,13 +839,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		if (this.client == null || this.client.world == null || this.client.player == null) {
 			return List.of();
 		}
-		// Use player-centered bounding box matching server view distance instead of world-spanning box
-		double range = 256.0;
-		double px = this.client.player.getX();
-		double pz = this.client.player.getZ();
+		double range = 30_000_000.0D;
 		Box searchBox = new Box(
-			px - range, this.client.world.getBottomY(), pz - range,
-			px + range, this.client.world.getTopYInclusive(), pz + range
+			-range, this.client.world.getBottomY(), -range,
+			range, this.client.world.getTopYInclusive(), range
 		);
 		return this.client.world.getEntitiesByClass(GuardEntity.class, searchBox, guard -> guard.isOwnedBy(owner));
 	}
@@ -953,30 +985,11 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	}
 
 	private boolean isPaletteHovered(double mouseX, double mouseY) {
-		for (PaletteSwatch swatch : this.paletteSwatches) {
-			if (swatch.color() != null && swatch.contains(mouseX, mouseY)) {
-				return true;
-			}
-		}
-		// Also check the area between swatches (the full palette row)
-		if (!this.paletteSwatches.isEmpty()) {
-			int minX = Integer.MAX_VALUE;
-			int maxX = Integer.MIN_VALUE;
-			int minY = Integer.MAX_VALUE;
-			int maxY = Integer.MIN_VALUE;
-			for (PaletteSwatch swatch : this.paletteSwatches) {
-				if (swatch.color() != null) {
-					minX = Math.min(minX, swatch.x());
-					maxX = Math.max(maxX, swatch.x() + swatch.width());
-					minY = Math.min(minY, swatch.y());
-					maxY = Math.max(maxY, swatch.y() + swatch.height());
-				}
-			}
-			if (minX != Integer.MAX_VALUE && mouseX >= minX && mouseX < maxX && mouseY >= minY && mouseY < maxY) {
-				return true;
-			}
-		}
-		return false;
+		return this.paletteClipW > 0
+			&& mouseX >= this.paletteClipX
+			&& mouseX < this.paletteClipX + this.paletteClipW
+			&& mouseY >= this.paletteClipY
+			&& mouseY < this.paletteClipY + this.paletteClipH;
 	}
 
 	private void renderGuardMiniCard(DrawContext context, GuardEntity guard, int x, int y) {

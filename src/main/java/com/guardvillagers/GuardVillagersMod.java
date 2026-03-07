@@ -87,7 +87,7 @@ public class GuardVillagersMod implements ModInitializer {
 
 	private static final int FOLLOW_DISTANCE = 64;
 	private static final int DEBUG_SYNC_INTERVAL_TICKS = 5;
-	private static final int DEBUG_MAX_PATH_NODES = 64;
+	private static final int DEBUG_MAX_PATH_NODES = 2048;
 	private static final Pattern REPUTATION_INPUT_PATTERN = Pattern.compile("^(?:0(?:\\.\\d{1,2})?|1(?:\\.0{1,2})?)$");
 	private static final Map<UUID, Map<Integer, Integer>> DEBUG_PATH_HASH_CACHE = new HashMap<>();
 
@@ -310,7 +310,7 @@ public class GuardVillagersMod implements ModInitializer {
 						return row + 1;
 					}))
 				.then(CommandManager.literal("rename")
-					.then(CommandManager.argument("row", IntegerArgumentType.integer(1, 32))
+					.then(CommandManager.argument("row", IntegerArgumentType.integer(1))
 						.then(CommandManager.argument("name", StringArgumentType.greedyString())
 							.executes(context -> {
 								ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
@@ -327,7 +327,7 @@ public class GuardVillagersMod implements ModInitializer {
 							}))))
 				.then(CommandManager.literal("assign")
 					.then(CommandManager.argument("guardUuid", StringArgumentType.string())
-						.then(CommandManager.argument("groupRow", IntegerArgumentType.integer(0, 32))
+						.then(CommandManager.argument("groupRow", IntegerArgumentType.integer(0))
 							.executes(context -> {
 								ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
 								String uuidStr = StringArgumentType.getString(context, "guardUuid");
@@ -368,7 +368,6 @@ public class GuardVillagersMod implements ModInitializer {
 						return setReputationValue(admin, admin, input);
 					})))
 			.then(CommandManager.literal("debug")
-				.requires(GuardVillagersMod::hasOperatorPermission)
 				.executes(context -> toggleDebug(context.getSource().getPlayerOrThrow(), -1))
 				.then(CommandManager.argument("range", IntegerArgumentType.integer(1))
 					.executes(context -> toggleDebug(
@@ -811,36 +810,25 @@ public class GuardVillagersMod implements ModInitializer {
 
 		UUID playerId = player.getUuid();
 		boolean currentlyEnabled = GuardDebugManager.isEnabled(server, playerId);
-		if (requestedRange < 0) {
-			if (currentlyEnabled) {
-				GuardDebugManager.setEnabled(server, playerId, false);
-				DEBUG_PATH_HASH_CACHE.remove(playerId);
-				sendDebugSync(player, false, 0.0D);
-				clearDebugData(player);
-				player.sendMessage(Text.literal("Debug disabled."), false);
-				return Command.SINGLE_SUCCESS;
-			}
-
-			GuardDebugManager.setEnabled(server, playerId, true);
-			GuardDebugManager.setRange(server, playerId, -1.0D);
-			double effectiveRange = GuardDebugManager.getEffectiveRange(player);
-			sendDebugSync(player, true, effectiveRange);
-			player.sendMessage(Text.literal("Debug enabled. Range: " + formatDebugRange(effectiveRange) + " blocks."), false);
+		if (currentlyEnabled) {
+			GuardDebugManager.setEnabled(server, playerId, false);
+			DEBUG_PATH_HASH_CACHE.remove(playerId);
+			sendDebugSync(player, false, 0.0D);
+			clearDebugData(player);
+			player.sendMessage(Text.literal("Debug disabled."), false);
 			return Command.SINGLE_SUCCESS;
 		}
 
-		double clampedRange = clampRequestedDebugRange(player, requestedRange);
-		GuardDebugManager.setRange(server, playerId, clampedRange);
-		if (!currentlyEnabled) {
-			GuardDebugManager.setEnabled(server, playerId, true);
-			double effectiveRange = GuardDebugManager.getEffectiveRange(player);
-			sendDebugSync(player, true, effectiveRange);
-			player.sendMessage(Text.literal("Debug enabled. Range: " + formatDebugRange(effectiveRange) + " blocks."), false);
+		if (requestedRange < 0) {
+			GuardDebugManager.setRange(server, playerId, -1.0D);
 		} else {
-			double effectiveRange = GuardDebugManager.getEffectiveRange(player);
-			sendDebugSync(player, true, effectiveRange);
-			player.sendMessage(Text.literal("Debug range updated to " + formatDebugRange(effectiveRange) + " blocks."), false);
+			double clampedRange = clampRequestedDebugRange(player, requestedRange);
+			GuardDebugManager.setRange(server, playerId, clampedRange);
 		}
+		GuardDebugManager.setEnabled(server, playerId, true);
+		double effectiveRange = GuardDebugManager.getEffectiveRange(player);
+		sendDebugSync(player, true, effectiveRange);
+		player.sendMessage(Text.literal("Debug enabled. Range: " + formatDebugRange(effectiveRange) + " blocks."), false);
 		return Command.SINGLE_SUCCESS;
 	}
 
@@ -950,7 +938,7 @@ public class GuardVillagersMod implements ModInitializer {
 			for (GuardEntity guard : world.getEntitiesByClass(
 				GuardEntity.class,
 				player.getBoundingBox().expand(effectiveRange),
-				entity -> entity.squaredDistanceTo(player) <= maxDistanceSq
+				entity -> entity.isOwnedBy(playerId) && entity.squaredDistanceTo(player) <= maxDistanceSq
 			)) {
 				int guardId = guard.getId();
 				GuardEntity.GuardDebugSnapshot snapshot = guard.getDebugSnapshot(DEBUG_MAX_PATH_NODES);

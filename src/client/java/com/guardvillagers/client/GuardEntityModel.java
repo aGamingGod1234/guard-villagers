@@ -13,7 +13,8 @@ import net.minecraft.util.Identifier;
 
 public final class GuardEntityModel extends BipedEntityModel<GuardEntityRenderer.GuardRenderState> {
 	public static final EntityModelLayer GUARD_LAYER = new EntityModelLayer(Identifier.of("guardvillagers", "guard"), "main");
-	public static final EntityModelLayer GUARD_ARMOR_LAYER = new EntityModelLayer(Identifier.of("guardvillagers", "guard"), "armor");
+	public static final EntityModelLayer GUARD_INNER_ARMOR_LAYER = new EntityModelLayer(Identifier.of("guardvillagers", "guard"), "inner_armor");
+	public static final EntityModelLayer GUARD_OUTER_ARMOR_LAYER = new EntityModelLayer(Identifier.of("guardvillagers", "guard"), "outer_armor");
 
 	public GuardEntityModel(ModelPart root) {
 		super(root);
@@ -67,10 +68,17 @@ public final class GuardEntityModel extends BipedEntityModel<GuardEntityRenderer
 		return TexturedModelData.of(modelData, 64, 64);
 	}
 
-	public static TexturedModelData getArmorModelData() {
+	public static TexturedModelData getInnerArmorModelData() {
+		return createArmorModelData(new Dilation(0.5F));
+	}
+
+	public static TexturedModelData getOuterArmorModelData() {
+		return createArmorModelData(new Dilation(1.0F));
+	}
+
+	private static TexturedModelData createArmorModelData(Dilation armorDilation) {
 		ModelData modelData = new ModelData();
 		ModelPartData root = modelData.getRoot();
-		Dilation armorDilation = new Dilation(1.0F);
 
 		ModelPartData head = root.addChild(
 			"head",
@@ -110,5 +118,14 @@ public final class GuardEntityModel extends BipedEntityModel<GuardEntityRenderer
 		);
 
 		return TexturedModelData.of(modelData, 64, 32);
+	}
+
+	@Override
+	public void setAngles(GuardEntityRenderer.GuardRenderState state) {
+		super.setAngles(state);
+		this.rightArm.yaw = 0.0F;
+		this.rightArm.roll = 0.0F;
+		this.leftArm.yaw = 0.0F;
+		this.leftArm.roll = 0.0F;
 	}
 }
