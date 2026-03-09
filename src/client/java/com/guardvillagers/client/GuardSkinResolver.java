@@ -3,7 +3,8 @@ package com.guardvillagers.client;
 import net.minecraft.util.Identifier;
 
 public final class GuardSkinResolver {
-	private static final Identifier DEFAULT_TEXTURE = Identifier.of("minecraft", "textures/entity/villager/villager.png");
+	private static final Identifier DEFAULT_TEXTURE = Identifier.of("minecraft",
+			"textures/entity/villager/villager.png");
 
 	private GuardSkinResolver() {
 	}

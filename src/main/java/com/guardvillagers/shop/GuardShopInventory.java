@@ -71,7 +71,13 @@ public class GuardShopInventory extends SimpleInventory {
 		}
 		PurchaseBatchResult result = GuardVillagersMod.purchaseGuards(this.player, requested);
 		switch (result.result()) {
-			case SUCCESS -> this.player.sendMessage(Text.literal("Guard hired: " + result.spawnedCount() + "."), true);
+			case SUCCESS -> {
+				if (result.spawnedCount() == 1 && !result.guardNames().isEmpty()) {
+					this.player.sendMessage(Text.literal(result.guardNames().getFirst() + " hired."), true);
+				} else {
+					this.player.sendMessage(Text.literal("Guards hired: " + result.spawnedCount() + "."), true);
+				}
+			}
 			case NOT_TRUSTED -> this.player.sendMessage(Text.literal("Village trust is too low to hire guards."), true);
 			case INSUFFICIENT_FUNDS -> this.player.sendMessage(Text.literal("Need " + cost + " emerald block(s) to hire a guard."), true);
 			case SPAWN_FAILED -> this.player.sendMessage(Text.literal("Could not find space to spawn a guard. Move to open ground."), true);

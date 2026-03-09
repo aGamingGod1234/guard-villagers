@@ -60,6 +60,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private static final int UNASSIGNED_CARD_GAP = 2;
 	private static final int SAVE_BUTTON_WIDTH = 60;
 	private static final int SAVE_BUTTON_HEIGHT = 18;
+	private static final int ADD_GROUP_BUTTON_WIDTH = 86;
+	private static final int ADD_GROUP_BUTTON_HEIGHT = 18;
 	private static final int DIALOG_WIDTH = 260;
 	private static final int DIALOG_HEIGHT = 90;
 	private static final int DIALOG_BUTTON_WIDTH = 70;
@@ -69,6 +71,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private static final double PANE_SCROLL_LERP_FACTOR = 0.35D;
 	private static final int LEFT_PANE_SCROLL_STEP = GROUP_BOX_HEIGHT + GROUP_BOX_GAP;
 	private static final int RIGHT_PANE_SCROLL_STEP = UNASSIGNED_CARD_HEIGHT + UNASSIGNED_CARD_GAP;
+	private static final int SCROLLBAR_TRACK_COLOR = 0x55394656;
 
 	private static final ItemStack GUARD_HEAD_ICON = new ItemStack(Items.PLAYER_HEAD);
 
@@ -100,6 +103,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private double paletteScrollAnimationFrom;
 	private double paletteScrollAnimationTo;
 	private long paletteScrollAnimationStartedAt;
+	private int paletteClipX;
+	private int paletteClipY;
+	private int paletteClipWidth;
+	private int paletteClipHeight;
 
 	// Groups two-pane layout
 	private int leftPaneX;
@@ -118,6 +125,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private int rightPaneScrollTarget;
 	private double leftPaneScrollAnimated;
 	private double rightPaneScrollAnimated;
+	private int addGroupButtonX;
+	private int addGroupButtonY;
 
 	// Dirty tracking for group assignments
 	private final Map<UUID, Integer> pendingAssignments = new HashMap<>();
@@ -418,21 +427,26 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		int swatchAreaWidth = VISIBLE_SWATCHES * SWATCH_SIZE + (VISIBLE_SWATCHES - 1) * SWATCH_GAP;
 		int startX = sepX - 5 - swatchAreaWidth;
 		int y = toggleY;
+		this.paletteClipX = startX;
+		this.paletteClipY = y;
+		this.paletteClipWidth = swatchAreaWidth;
+		this.paletteClipHeight = toggleSize;
+		context.enableScissor(this.paletteClipX, this.paletteClipY, this.paletteClipX + this.paletteClipWidth, this.paletteClipY + this.paletteClipHeight);
 		int swatchStride = SWATCH_SIZE + SWATCH_GAP;
-		int visibleMinX = startX - swatchStride;
-		int visibleMaxX = startX + swatchAreaWidth + swatchStride;
 		for (int colorIndex = 0; colorIndex < allColors.length; colorIndex++) {
 			double slot = colorIndex - renderedOffset;
 			int x = startX + (int) Math.round(slot * swatchStride);
-			if (x + SWATCH_SIZE < visibleMinX || x > visibleMaxX) {
-				continue;
-			}
 			RegionColor color = allColors[colorIndex];
 			context.fill(x, y, x + SWATCH_SIZE, y + SWATCH_SIZE, color.swatchArgb());
 			int border = this.chunkMapWidget.activeColor() == color ? 0xFFDCEBFF : 0xFF3B4A5E;
 			this.drawBorder(context, x, y, SWATCH_SIZE, SWATCH_SIZE, border);
-			this.paletteSwatches.add(new PaletteSwatch(color, x, y, SWATCH_SIZE, SWATCH_SIZE));
+			int clampedLeft = Math.max(x, this.paletteClipX);
+			int clampedRight = Math.min(x + SWATCH_SIZE, this.paletteClipX + this.paletteClipWidth);
+			if (clampedRight > clampedLeft) {
+				this.paletteSwatches.add(new PaletteSwatch(color, x, y, SWATCH_SIZE, SWATCH_SIZE));
+			}
 		}
+		context.disableScissor();
 
 		// Separator before palette area
 		int sepX2 = startX - 5;
@@ -636,7 +650,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		}
 
 		// Left pane bottom fade
-		this.renderBottomFade(context, this.leftPaneX, leftContentY + leftContentH - 16, this.leftPaneW, 16);
+		this.renderBottomFade(context, this.leftPaneX, leftContentY + leftContentH - 16, this.leftPaneW - 4, 16);
 
 		// === RIGHT PANE: Unassigned Guards ===
 		context.fill(this.rightPaneX, this.rightPaneY, this.rightPaneX + this.rightPaneW, this.rightPaneY + this.rightPaneH, 0xCC131B25);
@@ -668,7 +682,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		}
 
 		// Right pane bottom fade
-		this.renderBottomFade(context, this.rightPaneX, rightContentY + rightContentH - 16, this.rightPaneW, 16);
+		this.renderBottomFade(context, this.rightPaneX, rightContentY + rightContentH - 16, this.rightPaneW - 4, 16);
 
 		if (this.editingRow >= 0 && this.groupRenameField != null && !this.groupRenameField.isVisible()) {
 			this.cancelGroupRename();
@@ -676,7 +690,26 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 		// Bottom bar
 		context.fill(this.contentX, this.contentY + this.contentHeight - BOTTOM_BAR_HEIGHT, this.contentX + this.contentWidth, this.contentY + this.contentHeight, 0xAA131B25);
-		context.drawText(this.textRenderer, Text.literal("Drag guards to assign | Shift+RMB header: rename | Click swatch: cycle color"), this.contentX + 6, this.contentY + this.contentHeight - 13, TEXT_SECONDARY, false);
+		this.addGroupButtonX = this.contentX + 6;
+		this.addGroupButtonY = this.contentY + this.contentHeight - BOTTOM_BAR_HEIGHT + 1;
+		boolean addGroupHovered = this.contains(this.addGroupButtonX, this.addGroupButtonY, ADD_GROUP_BUTTON_WIDTH, ADD_GROUP_BUTTON_HEIGHT - 2, mouseX, mouseY);
+		context.fill(
+			this.addGroupButtonX,
+			this.addGroupButtonY,
+			this.addGroupButtonX + ADD_GROUP_BUTTON_WIDTH,
+			this.addGroupButtonY + ADD_GROUP_BUTTON_HEIGHT - 2,
+			addGroupHovered ? 0xFF3B5771 : 0xFF2A3E54
+		);
+		this.drawBorder(context, this.addGroupButtonX, this.addGroupButtonY, ADD_GROUP_BUTTON_WIDTH, ADD_GROUP_BUTTON_HEIGHT - 2, 0xFF6C95BC);
+		context.drawText(this.textRenderer, Text.literal("Add Group"), this.addGroupButtonX + 12, this.addGroupButtonY + 4, TEXT_PRIMARY, false);
+		context.drawText(
+			this.textRenderer,
+			Text.literal("Drag guards to assign | Shift+RMB header: rename | Click swatch: cycle color"),
+			this.addGroupButtonX + ADD_GROUP_BUTTON_WIDTH + 8,
+			this.contentY + this.contentHeight - 13,
+			TEXT_SECONDARY,
+			false
+		);
 
 		// Save button (only when dirty)
 		if (this.dirty) {
@@ -705,6 +738,18 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 				this.showUnsavedDialog = true;
 			} else {
 				this.mode = ViewMode.TACTICS;
+			}
+			return true;
+		}
+
+		if (button == 0 && this.contains(this.addGroupButtonX, this.addGroupButtonY, ADD_GROUP_BUTTON_WIDTH, ADD_GROUP_BUTTON_HEIGHT - 2, mouseX, mouseY)) {
+			ClientTacticsDataStore.WorldContext worldContext = this.resolveWorldContext();
+			if (worldContext != null) {
+				int nextRow = this.dataStore.groupCount(worldContext);
+				this.dataStore.ensureGroupCount(worldContext, nextRow + 1);
+			}
+			if (this.client != null && this.client.getNetworkHandler() != null) {
+				this.client.getNetworkHandler().sendChatCommand("guards groups add");
 			}
 			return true;
 		}
@@ -804,13 +849,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		if (this.client == null || this.client.world == null || this.client.player == null) {
 			return List.of();
 		}
-		// Use player-centered bounding box matching server view distance instead of world-spanning box
-		double range = 256.0;
-		double px = this.client.player.getX();
-		double pz = this.client.player.getZ();
+		double worldLimit = 30_000_000.0D;
 		Box searchBox = new Box(
-			px - range, this.client.world.getBottomY(), pz - range,
-			px + range, this.client.world.getTopYInclusive(), pz + range
+			-worldLimit, this.client.world.getBottomY(), -worldLimit,
+			worldLimit, this.client.world.getTopYInclusive(), worldLimit
 		);
 		return this.client.world.getEntitiesByClass(GuardEntity.class, searchBox, guard -> guard.isOwnedBy(owner));
 	}
@@ -953,30 +995,11 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	}
 
 	private boolean isPaletteHovered(double mouseX, double mouseY) {
-		for (PaletteSwatch swatch : this.paletteSwatches) {
-			if (swatch.color() != null && swatch.contains(mouseX, mouseY)) {
-				return true;
-			}
-		}
-		// Also check the area between swatches (the full palette row)
-		if (!this.paletteSwatches.isEmpty()) {
-			int minX = Integer.MAX_VALUE;
-			int maxX = Integer.MIN_VALUE;
-			int minY = Integer.MAX_VALUE;
-			int maxY = Integer.MIN_VALUE;
-			for (PaletteSwatch swatch : this.paletteSwatches) {
-				if (swatch.color() != null) {
-					minX = Math.min(minX, swatch.x());
-					maxX = Math.max(maxX, swatch.x() + swatch.width());
-					minY = Math.min(minY, swatch.y());
-					maxY = Math.max(maxY, swatch.y() + swatch.height());
-				}
-			}
-			if (minX != Integer.MAX_VALUE && mouseX >= minX && mouseX < maxX && mouseY >= minY && mouseY < maxY) {
-				return true;
-			}
-		}
-		return false;
+		return this.paletteClipWidth > 0
+			&& mouseX >= this.paletteClipX
+			&& mouseX < this.paletteClipX + this.paletteClipWidth
+			&& mouseY >= this.paletteClipY
+			&& mouseY < this.paletteClipY + this.paletteClipHeight;
 	}
 
 	private void renderGuardMiniCard(DrawContext context, GuardEntity guard, int x, int y) {
@@ -985,7 +1008,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		context.drawItem(GUARD_HEAD_ICON, x + 2, y + 3);
 		String name = guard.getName().getString();
 		if (name.length() > 8) {
-			name = name.substring(0, 7) + "…";
+			name = name.substring(0, 7) + "...";
 		}
 		context.drawText(this.textRenderer, Text.literal(name), x + 20, y + 3, TEXT_PRIMARY, false);
 		context.drawText(this.textRenderer, Text.literal("Lv" + guard.getLevel()), x + 20, y + 12, TEXT_SECONDARY, false);
@@ -1000,7 +1023,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	}
 
 	private void renderScrollbar(DrawContext context, int x, int y, int width, int height, int scroll, int maxScroll, int totalContent) {
-		context.fill(x, y, x + width, y + height, 0x44FFFFFF);
+		context.fill(x, y, x + width, y + height, SCROLLBAR_TRACK_COLOR);
 		if (maxScroll <= 0 || totalContent <= 0) {
 			return;
 		}
@@ -1129,7 +1152,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 				return;
 			}
 		}
-		// Dropped outside any target — cancelled
+		// Dropped outside any target, cancel assignment.
 	}
 
 	private boolean handleSaveButtonClick(double mouseX, double mouseY) {

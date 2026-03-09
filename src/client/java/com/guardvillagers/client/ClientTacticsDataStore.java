@@ -65,6 +65,10 @@ public final class ClientTacticsDataStore {
 		return this.dimension(context).discovered.contains(ChunkPos.toLong(chunkX, chunkZ));
 	}
 
+	public long[] discoveredChunkKeys(WorldContext context) {
+		return this.dimension(context).discovered.toLongArray();
+	}
+
 	public RegionColor getRegionColor(WorldContext context, int chunkX, int chunkZ) {
 		int colorId = this.dimension(context).regionByChunk.get(ChunkPos.toLong(chunkX, chunkZ));
 		return RegionColor.fromId(colorId);

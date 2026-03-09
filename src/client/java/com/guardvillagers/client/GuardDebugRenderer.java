@@ -1,7 +1,7 @@
 package com.guardvillagers.client;
 
-import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
+import com.guardvillagers.entity.GuardRole;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents;
 import net.minecraft.client.MinecraftClient;
@@ -15,9 +15,11 @@ import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.text.Text;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.MathHelper;
+import net.minecraft.world.RaycastContext;
 import net.minecraft.util.math.Vec3d;
 import org.joml.Matrix4f;
 
@@ -33,6 +35,10 @@ public final class GuardDebugRenderer {
 	private static final double CIRCLE_Y_OFFSET = 0.01D;
 	private static final float LABEL_SCALE = 0.020F;
 	private static final float LINE_HALF_WIDTH = 0.015F;
+	private static final float PATH_GREEN_R = 0.28F;
+	private static final float PATH_GREEN_G = 0.70F;
+	private static final float PATH_GREEN_B = 0.42F;
+	private static final float PATH_ALPHA = 0.40F;
 	private static final float[][] CIRCLE_POINTS = buildCirclePoints();
 	private static final List<GuardEntity> CACHED_GUARDS = new ArrayList<>();
 	private static long lastCacheTick = Long.MIN_VALUE;
@@ -108,7 +114,9 @@ public final class GuardDebugRenderer {
 		CACHED_GUARDS.addAll(client.world.getEntitiesByClass(
 			GuardEntity.class,
 			client.player.getBoundingBox().expand(range),
-			guard -> guard.isAlive() && guard.squaredDistanceTo(client.player) <= rangeSq
+			guard -> guard.isAlive()
+				&& (guard.getOwnerUuid() == null || guard.isOwnedBy(client.player.getUuid()))
+				&& guard.squaredDistanceTo(client.player) <= rangeSq
 		));
 	}
 
@@ -157,20 +165,27 @@ public final class GuardDebugRenderer {
 		if (snapshot == null || snapshot.pathNodes().isEmpty()) {
 			return;
 		}
-
-		int currentIndex = snapshot.currentPathIndex();
 		List<BlockPos> nodes = snapshot.pathNodes();
-		if (currentIndex < 0 || currentIndex >= nodes.size()) {
-			return;
-		}
-
 		VertexConsumer filled = vertexConsumers.getBuffer(RenderLayers.debugFilledBox());
-		int startIndex = Math.max(0, currentIndex - 2);
-		for (int i = startIndex; i < nodes.size(); i++) {
+		for (int i = 0; i < nodes.size(); i++) {
 			BlockPos node = nodes.get(i);
-			drawFilledBlock(matrices, filled, node, 0.0F, 0.39F, 1.0F, 0.30F);
+			drawTopFaceCarpet(matrices, filled, node, PATH_GREEN_R, PATH_GREEN_G, PATH_GREEN_B, PATH_ALPHA);
 		}
-		drawFilledBlock(matrices, filled, guard.getBlockPos(), 1.0F, 0.0F, 0.0F, 0.30F);
+		BlockPos destination = nodes.get(nodes.size() - 1);
+		drawFilledBox(
+			matrices,
+			filled,
+			destination.getX(),
+			destination.getY(),
+			destination.getZ(),
+			destination.getX() + 1.0D,
+			destination.getY() + 1.0D,
+			destination.getZ() + 1.0D,
+			PATH_GREEN_R,
+			PATH_GREEN_G,
+			PATH_GREEN_B,
+			0.22F
+		);
 	}
 
 	private static void renderTargetLine(
@@ -181,13 +196,9 @@ public final class GuardDebugRenderer {
 		MinecraftClient client,
 		Vec3d cameraPos
 	) {
-		LivingEntity target = resolveTarget(guard, snapshot, client);
-		if (target == null || !target.isAlive()) {
-			return;
-		}
-
 		Vec3d origin = guard.getEyePos();
-		Vec3d destination = closestPointOnBox(target.getBoundingBox(), origin);
+		LivingEntity target = resolveTarget(guard, snapshot, client);
+		Vec3d destination = resolveLookDestination(guard, target);
 		VertexConsumer consumer = vertexConsumers.getBuffer(RenderLayers.debugFilledBox());
 		Matrix4f matrix = matrices.peek().getPositionMatrix();
 		renderLineSegment(
@@ -200,11 +211,34 @@ public final class GuardDebugRenderer {
 			destination.x,
 			destination.y,
 			destination.z,
-			1.0F,
-			1.0F,
-			0.0F,
+			0.95F,
+			0.95F,
+			0.20F,
 			1.0F
 		);
+	}
+
+	private static Vec3d resolveLookDestination(GuardEntity guard, LivingEntity target) {
+		Vec3d origin = guard.getEyePos();
+		if (target != null && target.isAlive()) {
+			return closestPointOnBox(target.getBoundingBox(), origin);
+		}
+		Vec3d lookDir = guard.getRotationVec(1.0F);
+		Vec3d fallback = origin.add(lookDir.multiply(24.0D));
+		if (guard.getEntityWorld() == null) {
+			return fallback;
+		}
+		HitResult raycast = guard.getEntityWorld().raycast(new RaycastContext(
+			origin,
+			fallback,
+			RaycastContext.ShapeType.COLLIDER,
+			RaycastContext.FluidHandling.NONE,
+			guard
+		));
+		if (raycast.getType() == HitResult.Type.MISS) {
+			return fallback;
+		}
+		return raycast.getPos();
 	}
 
 	private static LivingEntity resolveTarget(
@@ -251,7 +285,7 @@ public final class GuardDebugRenderer {
 				false,
 				matrix,
 				vertexConsumers,
-				TextRenderer.TextLayerType.SEE_THROUGH,
+				TextRenderer.TextLayerType.NORMAL,
 				background,
 				LightmapTextureManager.MAX_LIGHT_COORDINATE
 			);
@@ -267,7 +301,7 @@ public final class GuardDebugRenderer {
 		lines.add(line("HP: " + hp + "/" + maxHp, 0xFF5555));
 
 		int level = guard.getLevel();
-		lines.add(line("Lvl: " + level, 0x55FF55));
+		lines.add(line("Level: " + level, 0x55FF55));
 
 		int xp = guard.getExperience();
 		String xpLine = level >= 10 ? "XP: " + xp + "/MAX" : "XP: " + xp + "/" + (level * 120);
@@ -275,27 +309,27 @@ public final class GuardDebugRenderer {
 
 		lines.add(line("Role: " + titleCase(guard.getRole().name()), 0xFFFF55));
 
-		GuardBehavior behavior = guard.getBehavior();
-		String behaviorValue = behavior == null ? "Nil" : titleCase(behavior.name());
-		lines.add(line("Behavior: " + behaviorValue, 0xFF55FF));
+		LivingEntity target = guard.getTarget();
+		String targetValue = target == null ? "None" : target.getName().getString();
+		lines.add(line("Target: " + targetValue, 0xFF55FF));
+
+		String typeValue = guard.getRole() == GuardRole.BOWMAN ? "Bowmen" : "Swordsmen";
+		lines.add(line("Type: " + typeValue, 0xF5E6A9));
 
 		UUID ownerUuid = guard.getOwnerUuid();
 		String ownerValue = ownerUuid == null ? "Nil" : resolveOwnerName(ownerUuid, client);
-		lines.add(line("Owner: " + ownerValue, 0xFFFFFF));
-
-		String groupValue = guard.getGroupIndex() < 0 ? "Nil" : guard.getGroupName();
-		lines.add(line("Group: " + groupValue, 0xFFAA00));
+		lines.add(line("Owned: " + ownerValue, ownerUuid == null ? 0xAAAAAA : 0xFFFFFF));
 
 		RegionColor regionColor = ClientTacticsDataStore.getInstance().getRegionColor(worldContext, guard.getBlockX() >> 4, guard.getBlockZ() >> 4);
 		String zoneValue = regionColor == RegionColor.NONE ? "Nil" : regionColor.label();
-		lines.add(line("Zone: " + zoneValue, 0x5555FF));
+		lines.add(line("Zone: " + zoneValue, regionColor == RegionColor.NONE ? 0xAAAAAA : 0x5555FF));
+
+		String groupValue = guard.getGroupIndex() < 0 ? "Nil" : guard.getGroupName();
+		lines.add(line("Group: " + groupValue, guard.getGroupIndex() < 0 ? 0xAAAAAA : 0xFFAA00));
 		return lines;
 	}
 
 	private static DebugLabelLine line(String text, int color) {
-		if (text.endsWith("Nil")) {
-			return new DebugLabelLine(text, 0xAAAAAA);
-		}
 		return new DebugLabelLine(text, color);
 	}
 
@@ -346,6 +380,30 @@ public final class GuardDebugRenderer {
 			pos.getZ(),
 			pos.getX() + 1.0D,
 			pos.getY() + 1.0D,
+			pos.getZ() + 1.0D,
+			r,
+			g,
+			b,
+			a
+		);
+	}
+
+	private static void drawTopFaceCarpet(MatrixStack matrices, VertexConsumer consumer, BlockPos pos, float r, float g, float b, float a) {
+		double y = pos.getY() + 1.002D;
+		quad(
+			consumer,
+			matrices.peek().getPositionMatrix(),
+			pos.getX(),
+			y,
+			pos.getZ(),
+			pos.getX() + 1.0D,
+			y,
+			pos.getZ(),
+			pos.getX() + 1.0D,
+			y,
+			pos.getZ() + 1.0D,
+			pos.getX(),
+			y,
 			pos.getZ() + 1.0D,
 			r,
 			g,

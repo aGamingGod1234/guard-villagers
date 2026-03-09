@@ -1,10 +1,13 @@
 package com.guardvillagers.entity.projectile;
 
+import com.guardvillagers.entity.GuardEntity;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.projectile.ArrowEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.world.World;
 
 public class GuardArrowEntity extends ArrowEntity {
@@ -14,6 +17,21 @@ public class GuardArrowEntity extends ArrowEntity {
 
 	public GuardArrowEntity(World world, LivingEntity owner, ItemStack stack, ItemStack shotFrom) {
 		super(world, owner, stack, shotFrom);
+	}
+
+	@Override
+	protected void onEntityHit(EntityHitResult entityHitResult) {
+		Entity hitEntity = entityHitResult.getEntity();
+		Entity owner = this.getOwner();
+		if (hitEntity instanceof GuardEntity hitGuard && owner instanceof GuardEntity shooterGuard) {
+			if (shooterGuard.getOwnerUuid() != null && shooterGuard.getOwnerUuid().equals(hitGuard.getOwnerUuid())) {
+				if (this.getEntityWorld() instanceof ServerWorld) {
+					this.discard();
+				}
+				return;
+			}
+		}
+		super.onEntityHit(entityHitResult);
 	}
 
 	@Override

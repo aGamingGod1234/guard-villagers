@@ -62,11 +62,9 @@ public final class GuardTacticsState extends PersistentState {
 		private static final int MAX_COLOR_ID = 10;
 		private static final int DEFAULT_FORMATION_ID = FormationType.FOLLOW.getId();
 		private static final int MIN_ROW_INDEX = 0;
-		private static final int MAX_ROW_INDEX = 31;
 		private static final int MIN_COLUMN_INDEX = 0;
 		private static final int MAX_COLUMN_INDEX = 2;
 		private static final int MAX_GROUP_NAME_LENGTH = 24;
-		private static final int MAX_GROUP_COUNT = MAX_ROW_INDEX + 1;
 		private static final List<String> DEFAULT_GROUPS = List.of();
 		private static final List<String> GROUP_NAME_CYCLE = List.of(
 			"Alpha",
@@ -135,9 +133,6 @@ public final class GuardTacticsState extends PersistentState {
 				String sanitized = sanitizeGroupName(name);
 				if (!sanitized.isEmpty()) {
 					this.groupNames.add(sanitized);
-					if (this.groupNames.size() >= MAX_GROUP_COUNT) {
-						break;
-					}
 				}
 			}
 			this.preferredFormationId = normalizeFormationId(preferredFormationId);
@@ -231,9 +226,6 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		public int addGroup() {
-			if (this.groupNames.size() >= MAX_GROUP_COUNT) {
-				return MAX_GROUP_COUNT - 1;
-			}
 			int index = this.groupNames.size();
 			String name = index < GROUP_NAME_CYCLE.size() ? GROUP_NAME_CYCLE.get(index) : "Group " + (index + 1);
 			this.groupNames.add(name);
@@ -257,7 +249,7 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		public void ensureGroupCount(int count) {
-			int normalizedCount = Math.max(0, Math.min(MAX_GROUP_COUNT, count));
+			int normalizedCount = Math.max(0, count);
 			if (normalizedCount <= this.groupNames.size()) {
 				return;
 			}
@@ -346,7 +338,7 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		private static boolean isValidRow(int row) {
-			return row >= MIN_ROW_INDEX && row <= MAX_ROW_INDEX;
+			return row >= MIN_ROW_INDEX;
 		}
 
 		private static boolean isValidColumn(int column) {
@@ -354,7 +346,7 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		private static int normalizeRow(int row) {
-			return Math.max(MIN_ROW_INDEX, Math.min(MAX_ROW_INDEX, row));
+			return Math.max(MIN_ROW_INDEX, row);
 		}
 
 		private static int normalizeColumn(int column) {

@@ -14,15 +14,12 @@ public final class GuardBowAttackGoal extends Goal {
 
 	private final GuardEntity guard;
 	private final double speed;
-	private final int attackInterval;
 	private final float squaredRange;
-	private int cooldown = -1;
 	private int targetVisibleTicks;
 
-	public GuardBowAttackGoal(GuardEntity guard, double speed, int attackInterval, float range) {
+	public GuardBowAttackGoal(GuardEntity guard, double speed, float range) {
 		this.guard = guard;
 		this.speed = speed;
-		this.attackInterval = Math.max(1, attackInterval);
 		this.squaredRange = range * range;
 		this.setControls(EnumSet.of(Control.MOVE, Control.LOOK));
 	}
@@ -46,7 +43,6 @@ public final class GuardBowAttackGoal extends Goal {
 	public void stop() {
 		this.guard.setAttacking(false);
 		this.targetVisibleTicks = 0;
-		this.cooldown = -1;
 		this.guard.clearActiveItem();
 		this.guard.getNavigation().stop();
 	}
@@ -85,10 +81,9 @@ public final class GuardBowAttackGoal extends Goal {
 				if (useTicks >= MIN_PULL_TICKS) {
 					this.guard.clearActiveItem();
 					this.guard.shootAt(target, BowItem.getPullProgress(useTicks));
-					this.cooldown = this.attackInterval;
 				}
 			}
-		} else if (--this.cooldown <= 0 && this.targetVisibleTicks >= -60) {
+		} else if (this.targetVisibleTicks >= -60) {
 			this.guard.setCurrentHand(Hand.MAIN_HAND);
 		}
 	}
