@@ -3,6 +3,7 @@ package com.guardvillagers.client;
 import com.guardvillagers.GuardVillagersMod;
 import com.guardvillagers.network.GuardDebugDataPayload;
 import com.guardvillagers.network.GuardDebugSyncPayload;
+import com.guardvillagers.network.GuardRosterSyncPayload;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -23,6 +24,17 @@ public class GuardVillagersClient implements ClientModInitializer {
 
 	@Override
 	public void onInitializeClient() {
+		ClientPlayNetworking.registerGlobalReceiver(GuardRosterSyncPayload.ID, (payload, context) ->
+			context.client().execute(() -> {
+				MinecraftClient client = context.client();
+				if (client.world == null) {
+					return;
+				}
+				ClientTacticsDataStore.WorldContext worldContext = ClientTacticsDataStore.resolveContext(client, client.world);
+				ClientGuardRosterStore.getInstance().applyPayload(worldContext, payload);
+				ClientTacticsDataStore.getInstance().replaceGroupNames(worldContext, payload.groupNames());
+			})
+		);
 		ClientPlayNetworking.registerGlobalReceiver(GuardDebugSyncPayload.ID, (payload, context) ->
 			context.client().execute(() -> {
 				ClientDebugState.update(payload.enabled(), payload.range());
@@ -60,11 +72,13 @@ public class GuardVillagersClient implements ClientModInitializer {
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			ClientTacticsDataStore.getInstance().flush();
 			TERRAIN_CACHE.clearAll();
+			ClientGuardRosterStore.getInstance().clear();
 			ClientDebugState.reset();
 			ClientGuardDebugData.clear();
 		});
 		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
 			ClientTacticsDataStore.getInstance().flush();
+			ClientGuardRosterStore.getInstance().clear();
 			ClientDebugState.reset();
 			ClientGuardDebugData.clear();
 		});

@@ -9,46 +9,53 @@ import net.minecraft.server.world.ServerWorld;
 import java.util.EnumSet;
 
 public final class FormationFollowOwnerGoal extends Goal {
-	private static final int REPATH_INTERVAL_TICKS = 6;
-	private static final int FOLLOW_RESUME_RADIUS_BLOCKS = 128;
-	private static final double FOLLOW_RESUME_RADIUS_SQ = FOLLOW_RESUME_RADIUS_BLOCKS * FOLLOW_RESUME_RADIUS_BLOCKS;
+	private static final int CATCH_UP_REPATH_INTERVAL_TICKS = 2;
+	private static final int STALLED_PROGRESS_WINDOW_TICKS = 20;
+	private static final int EXIT_STABILITY_TICKS = 10;
+	private static final double IMMEDIATE_CATCH_UP_DISTANCE_BLOCKS = 14.0D;
+	private static final double STALLED_CATCH_UP_DISTANCE_BLOCKS = 8.0D;
+	private static final double EXIT_DISTANCE_BLOCKS = 6.0D;
+	private static final double MIN_PROGRESS_BLOCKS = 0.5D;
+	private static final double MAX_EXIT_REGRESSION_BLOCKS = 0.25D;
 
 	private final GuardEntity guard;
 	private final double speed;
-	private final double startDistanceSq;
-	private final double stopDistanceSq;
 	private ServerPlayerEntity owner;
 	private int updateCountdownTicks;
+	private int progressWindowTicks;
+	private int settledTicks;
+	private double sampledDistanceBlocks = Double.MAX_VALUE;
+	private double lastDistanceBlocks = Double.MAX_VALUE;
 	private float oldWaterPathfindingPenalty;
 
 	public FormationFollowOwnerGoal(GuardEntity guard, double speed) {
-		this(guard, speed, 8.0D, 4.0D);
-	}
-
-	public FormationFollowOwnerGoal(GuardEntity guard, double speed, double startDistanceSq, double stopDistanceSq) {
 		this.guard = guard;
 		this.speed = speed;
-		this.startDistanceSq = Math.max(1.0D, startDistanceSq);
-		this.stopDistanceSq = Math.max(1.0D, stopDistanceSq);
-		this.setControls(EnumSet.of(Control.MOVE));
+		this.setControls(EnumSet.of(Control.MOVE, Control.LOOK));
 	}
 
 	@Override
 	public boolean canStart() {
 		if (!(this.guard.getEntityWorld() instanceof ServerWorld world)) {
+			this.resetProgressSampling();
 			return false;
 		}
+
 		ServerPlayerEntity resolvedOwner = this.guard.resolveOwner(world);
 		if (resolvedOwner == null || resolvedOwner.isSpectator()) {
+			this.resetProgressSampling();
 			return false;
 		}
 		if (!this.guard.canFollowOwnerFormation()) {
+			this.resetProgressSampling();
 			return false;
 		}
-		double distanceSq = this.guard.squaredDistanceTo(resolvedOwner);
-		if (distanceSq < this.startDistanceSq || distanceSq > FOLLOW_RESUME_RADIUS_SQ) {
+
+		double distanceBlocks = Math.sqrt(this.guard.squaredDistanceTo(resolvedOwner));
+		if (!this.shouldEnterCatchUp(distanceBlocks)) {
 			return false;
 		}
+
 		this.owner = resolvedOwner;
 		return true;
 	}
@@ -61,23 +68,42 @@ public final class FormationFollowOwnerGoal extends Goal {
 		if (!this.guard.canFollowOwnerFormation()) {
 			return false;
 		}
-		double distanceSq = this.guard.squaredDistanceTo(this.owner);
-		return distanceSq > this.stopDistanceSq && distanceSq <= FOLLOW_RESUME_RADIUS_SQ;
+
+		double distanceBlocks = Math.sqrt(this.guard.squaredDistanceTo(this.owner));
+		if (distanceBlocks > EXIT_DISTANCE_BLOCKS) {
+			this.settledTicks = 0;
+			this.lastDistanceBlocks = distanceBlocks;
+			return true;
+		}
+
+		if (distanceBlocks <= this.lastDistanceBlocks + MAX_EXIT_REGRESSION_BLOCKS) {
+			this.settledTicks++;
+		} else {
+			this.settledTicks = 0;
+		}
+		this.lastDistanceBlocks = distanceBlocks;
+		return this.settledTicks < EXIT_STABILITY_TICKS;
 	}
 
 	@Override
 	public void start() {
 		this.updateCountdownTicks = 0;
+		this.settledTicks = 0;
+		this.lastDistanceBlocks = this.owner == null ? Double.MAX_VALUE : Math.sqrt(this.guard.squaredDistanceTo(this.owner));
 		this.oldWaterPathfindingPenalty = this.guard.getPathfindingPenalty(PathNodeType.WATER);
 		this.guard.setPathfindingPenalty(PathNodeType.WATER, 0.0F);
+		this.guard.setCatchUpSpeedActive(true);
 	}
 
 	@Override
 	public void stop() {
 		this.owner = null;
 		this.updateCountdownTicks = 0;
+		this.settledTicks = 0;
+		this.lastDistanceBlocks = Double.MAX_VALUE;
 		this.guard.getNavigation().stop();
 		this.guard.setPathfindingPenalty(PathNodeType.WATER, this.oldWaterPathfindingPenalty);
+		this.guard.setCatchUpSpeedActive(false);
 	}
 
 	@Override
@@ -90,12 +116,50 @@ public final class FormationFollowOwnerGoal extends Goal {
 		if (--this.updateCountdownTicks > 0) {
 			return;
 		}
-		this.updateCountdownTicks = this.getTickCount(REPATH_INTERVAL_TICKS);
+		this.updateCountdownTicks = this.getTickCount(CATCH_UP_REPATH_INTERVAL_TICKS);
 
 		if (this.guard.isLeashed() || this.guard.hasVehicle()) {
 			return;
 		}
 
 		this.guard.getNavigation().startMovingTo(this.owner, this.speed);
+	}
+
+	private boolean shouldEnterCatchUp(double distanceBlocks) {
+		if (distanceBlocks <= EXIT_DISTANCE_BLOCKS) {
+			this.resetProgressSampling(distanceBlocks);
+			return false;
+		}
+		if (distanceBlocks > IMMEDIATE_CATCH_UP_DISTANCE_BLOCKS) {
+			this.resetProgressSampling(distanceBlocks);
+			return true;
+		}
+		if (distanceBlocks <= STALLED_CATCH_UP_DISTANCE_BLOCKS) {
+			this.resetProgressSampling(distanceBlocks);
+			return false;
+		}
+		if (this.progressWindowTicks == 0) {
+			this.resetProgressSampling(distanceBlocks);
+			return false;
+		}
+
+		this.progressWindowTicks++;
+		if (this.progressWindowTicks < STALLED_PROGRESS_WINDOW_TICKS) {
+			return false;
+		}
+
+		double progressBlocks = this.sampledDistanceBlocks - distanceBlocks;
+		this.resetProgressSampling(distanceBlocks);
+		return progressBlocks < MIN_PROGRESS_BLOCKS;
+	}
+
+	private void resetProgressSampling() {
+		this.progressWindowTicks = 0;
+		this.sampledDistanceBlocks = Double.MAX_VALUE;
+	}
+
+	private void resetProgressSampling(double distanceBlocks) {
+		this.progressWindowTicks = 1;
+		this.sampledDistanceBlocks = distanceBlocks;
 	}
 }

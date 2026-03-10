@@ -256,3 +256,117 @@
 - Relaunch Minecraft completely and verify two cases first: an unarmored guard standing idle, and a guard wearing armor while holding a weapon.
 - If any remaining artifact appears, capture one close screenshot from the front and one from the side so the exact failing cuboid face can be isolated without changing the vanilla textures.
 
+## [2026-03-10] — Resume Notes For Follow Recovery And Tactical Map Overhaul
+### What Was Implemented
+- Audited the existing follow, shop spawn, groups UI, and tactical map code paths against the requested implementation plan.
+- Confirmed the current worktree was clean before documentation, so no partial implementation from the aborted session needs to be unwound.
+- Created `contine_next_session.md` as a detailed handoff file with confirmed defect locations, implementation order, target files, and verification steps for the next session.
+
+### Files Modified
+- `contine_next_session.md` — added a detailed resume brief for the follow recovery, server-synced groups roster, exact spawn-column, and tactical map performance work.
+- `PROJECT_LOG.md` — recorded the current status and the remaining implementation work.
+
+### Assumptions Made (flag these for review)
+- The user’s instruction to keep the guard visual “perfect” means renderer, model, and texture behavior are out of scope for the next implementation pass.
+- The tactical zone changes remain visual-only and chunk-based; no server-side gameplay wiring is part of the deferred work.
+- “Server-owned roster” means guards currently loaded and known to the server, without force-loading chunks.
+
+### Known Issues / Deferred
+- The requested implementation has not been started yet; this session stopped at analysis and handoff documentation only.
+- Plain `/guards follow` still only targets unzoned guards.
+- Shop purchases still spawn using the current lateral offset ring rather than the player’s exact `X/Z`.
+- The Groups screen still depends on client-loaded `GuardEntity` instances and can therefore miss owned guards.
+- The tactical map still uses the current expensive per-frame terrain rasterization path and has not received the planned 64x64 cached-texture rewrite.
+
+### Suggested Next Steps
+- Start implementation in this order: `GuardVillagersMod`, `GuardEntity`, `FormationFollowOwnerGoal`, `GuardNavigation`/`SquadRouteCache`, new roster payload, client roster consumption, then `ChunkTerrainCache` and `ChunkMapWidget`.
+- Build after each subsystem milestone with `.\gradlew.bat compileJava compileClientJava`, then finish with `.\gradlew.bat build`.
+- Use `contine_next_session.md` as the source of truth for the exact remaining work, acceptance criteria, and file-level hotspots.
+
+## [2026-03-10] — Follow Recovery, Synced Guard Roster, And Tactical Map Rewrite
+### What Was Implemented
+- Reworked plain `/guards follow` to target all owned guards, while keeping group-specific follow limited to the named group.
+- Added a persisted follow-override state on guards, cleared it on stay/home assignment flows, suppressed zone tethering while active, and blocked higher-priority behavior goals from stealing follow control.
+- Replaced the owner follow goal with conditional catch-up behavior that only activates when a guard is materially behind or stalled relative to the owner, with a transient catch-up speed modifier and 2-tick repaths.
+- Changed navigation stall recovery from stop-only to stop + targeted squad-route invalidation + immediate repath, and added nearby dry-exit probing when guards stall in or against flowing water.
+- Removed lateral hire offsets so purchased guards now spawn on the player's exact `X/Z` column and either find a valid `Y` on that column or fail cleanly.
+- Added a server-authenticated roster sync payload with authoritative group names plus per-guard summaries, and sent it when the tactics/groups screen opens and after group add/rename/assignment changes.
+- Added a transient client roster store, updated client group-name syncing, and migrated the groups screen/drag flow from client entity scans to synced guard summaries keyed by guard UUID.
+- Rebuilt the tactical map terrain pipeline to use 64x64 chunk sampling, cached chunk textures for zoomed-in rendering, average-color LOD for zoomed-out rendering, a viewport-bounded discovered-chunk index, and stable per-frame chunk edge coordinates.
+- Verified `.\gradlew.bat compileJava compileClientJava` and `.\gradlew.bat build` both complete successfully after the implementation.
+
+### Files Modified
+- `src/main/java/com/guardvillagers/GuardVillagersMod.java` — follow command behavior, exact-column purchase spawn, roster payload registration/sending.
+- `src/main/java/com/guardvillagers/entity/GuardEntity.java` — persisted follow override, transient catch-up speed modifier, behavior/tether gating changes.
+- `src/main/java/com/guardvillagers/entity/goal/FormationFollowOwnerGoal.java` — conditional catch-up activation/exit logic and 2-tick repaths.
+- `src/main/java/com/guardvillagers/item/GuardWhistleItem.java` — explicit whistle home assignment now clears forced follow.
+- `src/main/java/com/guardvillagers/navigation/GuardNavigation.java` — stall recovery, dry-exit probing, immediate repath behavior.
+- `src/main/java/com/guardvillagers/navigation/SquadRouteCache.java` — targeted squad-route invalidation helper.
+- `src/main/java/com/guardvillagers/network/GuardRosterSyncPayload.java` — new server-to-client roster/group sync payload.
+- `src/client/java/com/guardvillagers/client/ClientGuardRosterStore.java` — transient synced roster store for the active world context.
+- `src/client/java/com/guardvillagers/client/ClientTacticsDataStore.java` — authoritative group-name replacement and discovered-chunk viewport index.
+- `src/client/java/com/guardvillagers/client/GuardVillagersClient.java` — roster payload receiver registration and transient-store cleanup.
+- `src/client/java/com/guardvillagers/client/GuardDragHandler.java` — drag preview now uses synced guard summaries instead of live entities.
+- `src/client/java/com/guardvillagers/client/GuardTacticsScreen.java` — groups UI migrated to synced summaries and UUID-based assignment saves.
+- `src/client/java/com/guardvillagers/client/ChunkTerrainCache.java` — 64x64 terrain sampling and cached texture generation path.
+- `src/client/java/com/guardvillagers/client/ChunkMapWidget.java` — viewport-bounded rendering, average-color LOD, cached texture draw path, stable chunk edges.
+- `contine_next_session.md` — refreshed handoff status after the implementation pass.
+- `PROJECT_LOG.md` — recorded the completed work, assumptions, and verification state.
+
+### Assumptions Made (flag these for review)
+- The catch-up speed modifier uses a `+35%` temporary movement-speed bonus because the requested behavior specified a transient speed mode but did not define the exact multiplier.
+- The zoomed-in terrain-texture threshold uses a chunk footprint of roughly `18px` before switching from average-color LOD to the cached 64x64 texture path.
+- “Assignment save” payload refresh is satisfied by sending the roster payload after each `/guards groups assign ...` command invoked by the groups screen save flow.
+
+### Known Issues / Deferred
+- I did not run an in-game manual pass from the terminal, so the gameplay and renderer acceptance checklist in `contine_next_session.md` still needs live verification.
+- `GuardVillagersClient.java` still reports an existing deprecated API usage note during compilation; the build succeeds and this task did not change that deprecation status intentionally.
+
+### Suggested Next Steps
+- Launch Minecraft and run the manual checklist for exact-column hiring, forced follow behavior, water/hill recovery, synced groups roster coverage, and tactical-map performance/visual stability.
+- If the catch-up speed or texture-threshold tuning feels off in-game, adjust those constants only after measuring the affected scenario rather than broad refactoring.
+
+## [2026-03-10] — README Usage Guide Rewrite
+### What Was Implemented
+- Rewrote `README.md` into a comprehensive user-facing guide covering installation, first use, guard ownership, controls, tactics, shop progression, reputation, commands, and admin/debug tooling.
+- Removed stale documentation for older command surfaces and replaced it with the currently implemented `/guards` command set and current tactics/groups workflows.
+- Organized the guide with clearer sections, tables, quick-start steps, and behavior notes so players can use the mod without reading source files.
+
+### Files Modified
+- `README.md` — replaced the old overview with a full usage guide based on current mod behavior.
+- `PROJECT_LOG.md` — recorded the documentation rewrite and its review assumptions.
+
+### Assumptions Made (flag these for review)
+- The README should target end users and server operators rather than mod developers, so it prioritizes gameplay usage and command behavior over internal architecture.
+- Documentation should only describe behavior confirmed in the current source, without promising unverified in-game outcomes beyond what the code currently implements.
+
+### Known Issues / Deferred
+- I did not run an in-game verification pass specifically for the README wording; the guide is source-based rather than playtested line by line.
+- The README currently has no screenshots or GIFs; the formatting is comprehensive text-first documentation.
+
+### Suggested Next Steps
+- Review the guide in-game once and adjust any wording that feels inaccurate from a player perspective.
+- Add a few screenshots later if you want the README to double as a presentation page for releases.
+
+## [2026-03-10] — Build And Replace Installed Mod Jars
+### What Was Implemented
+- Ran `.\gradlew.bat build` against the current workspace and confirmed the runtime artifact is up to date.
+- Replaced the repo-local `.minecraft\mods\guard-villagers-1.0.0.jar` with the freshly built `build\libs\guard-villagers-1.0.0.jar`.
+- Replaced the active `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` with the same built artifact.
+- Verified all three jar files match by SHA-256 hash: `4B8A332B1F8AC319917BDDBFB5134B9CE98192FCA335D0244B68B48C2E643D74`.
+
+### Files Modified
+- `.minecraft\mods\guard-villagers-1.0.0.jar` — replaced with the current build output for repo-local testing.
+- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` — replaced with the current build output for the default Minecraft instance.
+- `PROJECT_LOG.md` — recorded the build, deployment, and hash verification.
+
+### Assumptions Made (flag these for review)
+- Replacing both the repo-local and `%APPDATA%` mod jars is preferable here because both installed locations exist and keeping them synchronized avoids loading different builds between local and default instances.
+
+### Known Issues / Deferred
+- No Minecraft launch or in-game smoke test was performed after copying the jar files.
+
+### Suggested Next Steps
+- Restart Minecraft if it is already running so it loads the replaced jar.
+- Verify the current world loads the updated mod and spot-check the latest follow/tactics changes in-game.
+

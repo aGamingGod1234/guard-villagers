@@ -8,6 +8,8 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import it.unimi.dsi.fastutil.ints.Int2IntMap;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.longs.Long2IntMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
@@ -56,7 +58,9 @@ public final class ClientTacticsDataStore {
 	// Dev note: discovered chunks are tracked from client chunk-load events and persisted by world + dimension.
 	public void markDiscovered(WorldContext context, int chunkX, int chunkZ) {
 		DimensionData dimensionData = this.dimension(context);
-		if (dimensionData.discovered.add(ChunkPos.toLong(chunkX, chunkZ))) {
+		long chunkKey = ChunkPos.toLong(chunkX, chunkZ);
+		if (dimensionData.discovered.add(chunkKey)) {
+			this.indexDiscoveredChunk(dimensionData, chunkKey);
 			this.markDirty();
 		}
 	}
@@ -67,6 +71,23 @@ public final class ClientTacticsDataStore {
 
 	public long[] discoveredChunkKeys(WorldContext context) {
 		return this.dimension(context).discovered.toLongArray();
+	}
+
+	public List<ChunkPos> discoveredChunksInBounds(WorldContext context, int minChunkX, int maxChunkX, int minChunkZ, int maxChunkZ) {
+		DimensionData dimensionData = this.dimension(context);
+		List<ChunkPos> visibleChunks = new ArrayList<>();
+		for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+			IntOpenHashSet zValues = dimensionData.discoveredByChunkX.get(chunkX);
+			if (zValues == null || zValues.isEmpty()) {
+				continue;
+			}
+			for (int chunkZ : zValues) {
+				if (chunkZ >= minChunkZ && chunkZ <= maxChunkZ) {
+					visibleChunks.add(new ChunkPos(chunkX, chunkZ));
+				}
+			}
+		}
+		return visibleChunks;
 	}
 
 	public RegionColor getRegionColor(WorldContext context, int chunkX, int chunkZ) {
@@ -126,6 +147,24 @@ public final class ClientTacticsDataStore {
 		if (!previous.equals(sanitized)) {
 			this.markDirty();
 		}
+	}
+
+	public void replaceGroupNames(WorldContext context, List<String> groupNames) {
+		if (context == null) {
+			return;
+		}
+
+		List<String> sanitizedNames = groupNames == null
+				? List.of()
+				: groupNames.stream().map(ClientTacticsDataStore::sanitizeGroupName).toList();
+		WorldData worldData = this.world(context);
+		if (worldData.groupNames.equals(sanitizedNames)) {
+			return;
+		}
+
+		worldData.groupNames.clear();
+		worldData.groupNames.addAll(sanitizedNames);
+		this.markDirty();
 	}
 
 	public RegionColor getGroupColor(WorldContext context, int row) {
@@ -205,6 +244,12 @@ public final class ClientTacticsDataStore {
 		this.dirtyAtMillis = System.currentTimeMillis();
 	}
 
+	private void indexDiscoveredChunk(DimensionData dimensionData, long chunkKey) {
+		int chunkX = ChunkPos.getPackedX(chunkKey);
+		int chunkZ = ChunkPos.getPackedZ(chunkKey);
+		dimensionData.discoveredByChunkX.computeIfAbsent(chunkX, ignored -> new IntOpenHashSet()).add(chunkZ);
+	}
+
 	private WorldData world(WorldContext context) {
 		return this.worlds.computeIfAbsent(context.worldId(), ignored -> new WorldData());
 	}
@@ -273,7 +318,9 @@ public final class ClientTacticsDataStore {
 						if (discoveredArray != null) {
 							for (JsonElement discoveredElement : discoveredArray) {
 								try {
-									dimensionData.discovered.add(Long.parseLong(asString(discoveredElement)));
+									long chunkKey = Long.parseLong(asString(discoveredElement));
+									dimensionData.discovered.add(chunkKey);
+									this.indexDiscoveredChunk(dimensionData, chunkKey);
 								} catch (NumberFormatException ignored) {
 								}
 							}
@@ -436,6 +483,7 @@ public final class ClientTacticsDataStore {
 	private static final class DimensionData {
 		private final LongOpenHashSet discovered = new LongOpenHashSet();
 		private final Long2IntOpenHashMap regionByChunk = new Long2IntOpenHashMap();
+		private final Int2ObjectOpenHashMap<IntOpenHashSet> discoveredByChunkX = new Int2ObjectOpenHashMap<>();
 
 		private DimensionData() {
 			this.regionByChunk.defaultReturnValue(0);

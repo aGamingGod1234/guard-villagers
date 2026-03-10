@@ -66,6 +66,13 @@ public class SquadRouteCache {
         SQUAD_ROUTES.put(key, new CachedRoute(copyPath(path), currentTick, origin, target));
     }
 
+    public static void invalidateSquadRoute(UUID groupId, BlockPos target) {
+        if (groupId == null || target == null) {
+            return;
+        }
+        SQUAD_ROUTES.remove(new CacheKey(groupId, quantize(target)));
+    }
+
     /**
      * Creates a safe defensive copy of a path.
      */

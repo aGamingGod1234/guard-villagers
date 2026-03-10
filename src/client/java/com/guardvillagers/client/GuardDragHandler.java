@@ -1,6 +1,5 @@
 package com.guardvillagers.client;
 
-import com.guardvillagers.entity.GuardEntity;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.item.ItemStack;
@@ -10,14 +9,14 @@ import net.minecraft.text.Text;
 public final class GuardDragHandler {
 	private static final ItemStack GUARD_HEAD_ICON = new ItemStack(Items.PLAYER_HEAD);
 
-	private GuardEntity draggedGuard;
+	private ClientGuardRosterStore.GuardRosterEntry draggedGuard;
 	private int sourceGroupIndex = -1;
 	private boolean fromUnassigned;
 	private double dragX;
 	private double dragY;
 	private boolean active;
 
-	public void beginDrag(GuardEntity guard, int sourceGroup, boolean unassigned, double mouseX, double mouseY) {
+	public void beginDrag(ClientGuardRosterStore.GuardRosterEntry guard, int sourceGroup, boolean unassigned, double mouseX, double mouseY) {
 		this.draggedGuard = guard;
 		this.sourceGroupIndex = sourceGroup;
 		this.fromUnassigned = unassigned;
@@ -35,7 +34,7 @@ public final class GuardDragHandler {
 		return this.active;
 	}
 
-	public GuardEntity draggedGuard() {
+	public ClientGuardRosterStore.GuardRosterEntry draggedGuard() {
 		return this.draggedGuard;
 	}
 
@@ -70,7 +69,6 @@ public final class GuardDragHandler {
 		int x = (int) this.dragX - cardW / 2;
 		int y = (int) this.dragY - cardH / 2;
 
-		// Draw with slight scale-up effect (1.1x) via translate
 		context.getMatrices().pushMatrix();
 		context.getMatrices().translate((float) this.dragX, (float) this.dragY);
 		context.getMatrices().scale(1.1F, 1.1F);
@@ -80,17 +78,17 @@ public final class GuardDragHandler {
 		drawBorder(context, x, y, cardW, cardH, 0xFF6A8FBF);
 
 		context.drawItem(GUARD_HEAD_ICON, x + 4, y + 4);
-		String name = this.draggedGuard.getName().getString();
+		String name = this.draggedGuard.displayName();
 		if (name.length() > 10) {
-			name = name.substring(0, 9) + "…";
+			name = name.substring(0, 9) + "...";
 		}
 		context.drawText(textRenderer, Text.literal(name), x + 22, y + 4, 0xFFEAF1FA, false);
-		context.drawText(textRenderer, Text.literal("Lv " + this.draggedGuard.getLevel()), x + 22, y + 14, 0xFFB6C6D6, false);
+		context.drawText(textRenderer, Text.literal("Lv " + this.draggedGuard.level()), x + 22, y + 14, 0xFFB6C6D6, false);
 
-		drawArmorIcon(context, this.draggedGuard.getEquippedStack(EquipmentSlot.HEAD), x + 4, y + 26);
-		drawArmorIcon(context, this.draggedGuard.getEquippedStack(EquipmentSlot.CHEST), x + 22, y + 26);
-		drawArmorIcon(context, this.draggedGuard.getEquippedStack(EquipmentSlot.LEGS), x + 40, y + 26);
-		drawArmorIcon(context, this.draggedGuard.getEquippedStack(EquipmentSlot.FEET), x + 58, y + 26);
+		drawArmorIcon(context, this.draggedGuard.helmet(), x + 4, y + 26);
+		drawArmorIcon(context, this.draggedGuard.chest(), x + 22, y + 26);
+		drawArmorIcon(context, this.draggedGuard.legs(), x + 40, y + 26);
+		drawArmorIcon(context, this.draggedGuard.boots(), x + 58, y + 26);
 
 		context.getMatrices().popMatrix();
 	}
@@ -110,5 +108,6 @@ public final class GuardDragHandler {
 		context.fill(x + w - 1, y, x + w, y + h, color);
 	}
 
-	public record DropResult(GuardEntity guard, int sourceGroupIndex, boolean fromUnassigned) {}
+	public record DropResult(ClientGuardRosterStore.GuardRosterEntry guard, int sourceGroupIndex, boolean fromUnassigned) {
+	}
 }

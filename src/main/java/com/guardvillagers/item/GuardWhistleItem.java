@@ -47,6 +47,7 @@ public final class GuardWhistleItem extends Item {
 
 		if (player.isSneaking()) {
 			int nextRadius = Math.min(96, Math.max(16, guard.getPatrolRadius() + 8));
+			guard.setFollowOverride(false);
 			if (guard.getHome().isEmpty()) {
 				guard.setHome(guard.getBlockPos(), nextRadius);
 			} else {
@@ -55,6 +56,7 @@ public final class GuardWhistleItem extends Item {
 			player.sendMessage(Text.literal("Patrol radius set to " + nextRadius + " blocks."), true);
 		} else {
 			int radius = Math.max(24, guard.getPatrolRadius());
+			guard.setFollowOverride(false);
 			guard.setHome(guard.getBlockPos(), radius);
 			player.sendMessage(Text.literal("Guard home zone assigned at current location."), true);
 		}

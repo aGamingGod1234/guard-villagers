@@ -1,20 +1,24 @@
 package com.guardvillagers.client;
 
+import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.util.math.ChunkPos;
+
+import java.util.Comparator;
+import java.util.List;
 
 public final class ChunkMapWidget {
 	private static final double MIN_ZOOM = 0.05D;
 	private static final double MAX_ZOOM = 16.0D;
 	private static final double ZOOM_STEP_BASE = 1.1D;
 	private static final double BASE_CHUNK_PIXELS = 24.0D;
+	private static final double DETAILED_TEXTURE_MIN_CHUNK_PIXELS = 18.0D;
 
 	private static final int MAP_BACKGROUND = 0xFF10161D;
 	private static final int SELECTION_OVERLAY = 0x446FD3FF;
 	private static final int HOVER_OVERLAY = 0x33FFFFFF;
 	private static final int ZONE_OUTLINE_ALPHA_MASK = 0xCC000000;
-	private static final int TERRAIN_TILE_RESOLUTION = 16;
 
 	private final ClientTacticsDataStore dataStore;
 	private final ChunkTerrainCache terrainCache;
@@ -56,12 +60,11 @@ public final class ChunkMapWidget {
 	}
 
 	public void render(
-		DrawContext context,
-		ClientWorld world,
-		ClientTacticsDataStore.WorldContext worldContext,
-		int mouseX,
-		int mouseY
-	) {
+			DrawContext context,
+			ClientWorld world,
+			ClientTacticsDataStore.WorldContext worldContext,
+			int mouseX,
+			int mouseY) {
 		context.fill(this.x, this.y, this.x + this.width, this.y + this.height, MAP_BACKGROUND);
 		this.hoveredChunk = null;
 		if (world == null || worldContext == null) {
@@ -71,70 +74,75 @@ public final class ChunkMapWidget {
 		double chunkScale = this.chunkScale();
 		double viewportCenterX = this.x + (this.width / 2.0D);
 		double viewportCenterY = this.y + (this.height / 2.0D);
-		int minScreenX = this.x;
-		int maxScreenX = this.x + this.width;
-		int minScreenY = this.y;
-		int maxScreenY = this.y + this.height;
+		VisibleChunkFrame visibleFrame = this.computeVisibleFrame(viewportCenterX, viewportCenterY, chunkScale);
+		List<ChunkPos> visibleChunks = this.dataStore.discoveredChunksInBounds(
+				worldContext,
+				visibleFrame.minChunkX(),
+				visibleFrame.maxChunkX(),
+				visibleFrame.minChunkZ(),
+				visibleFrame.maxChunkZ());
+		visibleChunks.sort(Comparator.comparingDouble(this::distanceToCameraSq));
+		this.terrainCache.prepareVisibleTiles(worldContext, world, visibleChunks);
+
+		int[] chunkXEdges = this.computeChunkEdges(visibleFrame.minChunkX(), visibleFrame.maxChunkX(), this.centerChunkX, viewportCenterX, chunkScale);
+		int[] chunkZEdges = this.computeChunkEdges(visibleFrame.minChunkZ(), visibleFrame.maxChunkZ(), this.centerChunkZ, viewportCenterY, chunkScale);
 
 		context.enableScissor(this.x, this.y, this.x + this.width, this.y + this.height);
-		for (long chunkKey : this.dataStore.discoveredChunkKeys(worldContext)) {
-			int chunkX = ChunkPos.getPackedX(chunkKey);
-			int chunkZ = ChunkPos.getPackedZ(chunkKey);
-			int left = (int) Math.floor(viewportCenterX + (chunkX - this.centerChunkX) * chunkScale);
-			int right = (int) Math.ceil(viewportCenterX + ((chunkX + 1) - this.centerChunkX) * chunkScale);
-			int top = (int) Math.floor(viewportCenterY + (chunkZ - this.centerChunkZ) * chunkScale);
-			int bottom = (int) Math.ceil(viewportCenterY + ((chunkZ + 1) - this.centerChunkZ) * chunkScale);
-			if (right <= left) {
-				right = left + 1;
-			}
-			if (bottom <= top) {
-				bottom = top + 1;
-			}
-			if (right <= minScreenX || left >= maxScreenX || bottom <= minScreenY || top >= maxScreenY) {
+		for (ChunkPos chunkPos : visibleChunks) {
+			int xIndex = chunkPos.x - visibleFrame.minChunkX();
+			int zIndex = chunkPos.z - visibleFrame.minChunkZ();
+			int left = chunkXEdges[xIndex];
+			int right = chunkXEdges[xIndex + 1];
+			int top = chunkZEdges[zIndex];
+			int bottom = chunkZEdges[zIndex + 1];
+			if (right <= left || bottom <= top) {
 				continue;
 			}
 
-			this.renderChunkTerrain(context, world, worldContext, chunkX, chunkZ, left, top, right, bottom);
+			this.renderChunkTerrain(context, worldContext, chunkPos.x, chunkPos.z, left, top, right, bottom);
 
-			RegionColor regionColor = this.dataStore.getRegionColor(worldContext, chunkX, chunkZ);
+			RegionColor regionColor = this.dataStore.getRegionColor(worldContext, chunkPos.x, chunkPos.z);
 			if (regionColor != RegionColor.NONE) {
-				this.drawZoneHighlight(context, worldContext, chunkX, chunkZ, left, top, right, bottom, regionColor);
+				this.drawZoneHighlight(context, worldContext, chunkPos.x, chunkPos.z, left, top, right, bottom, regionColor);
 			}
 
-			if (this.isChunkSelected(chunkX, chunkZ)) {
+			if (this.isChunkSelected(chunkPos.x, chunkPos.z)) {
 				context.fill(left, top, right, bottom, SELECTION_OVERLAY);
 			}
 		}
 		context.disableScissor();
 
-		if (this.contains(mouseX, mouseY)) {
-			int hoveredChunkX = (int) Math.floor(this.screenToChunkX(mouseX));
-			int hoveredChunkZ = (int) Math.floor(this.screenToChunkZ(mouseY));
-			if (this.dataStore.isDiscovered(worldContext, hoveredChunkX, hoveredChunkZ)) {
-				this.hoveredChunk = new ChunkPos(hoveredChunkX, hoveredChunkZ);
-				int left = (int) Math.floor(viewportCenterX + (hoveredChunkX - this.centerChunkX) * chunkScale);
-				int right = (int) Math.ceil(viewportCenterX + ((hoveredChunkX + 1) - this.centerChunkX) * chunkScale);
-				int top = (int) Math.floor(viewportCenterY + (hoveredChunkZ - this.centerChunkZ) * chunkScale);
-				int bottom = (int) Math.ceil(viewportCenterY + ((hoveredChunkZ + 1) - this.centerChunkZ) * chunkScale);
-				if (right <= left) {
-					right = left + 1;
-				}
-				if (bottom <= top) {
-					bottom = top + 1;
-				}
-				context.fill(left, top, right, bottom, HOVER_OVERLAY);
-			}
+		if (!this.contains(mouseX, mouseY)) {
+			return;
 		}
+
+		ChunkPos hovered = this.chunkAt(mouseX, mouseY);
+		if (hovered == null || !this.dataStore.isDiscovered(worldContext, hovered.x, hovered.z)) {
+			return;
+		}
+
+		this.hoveredChunk = hovered;
+		int hoveredXIndex = hovered.x - visibleFrame.minChunkX();
+		int hoveredZIndex = hovered.z - visibleFrame.minChunkZ();
+		if (hoveredXIndex < 0 || hoveredXIndex + 1 >= chunkXEdges.length || hoveredZIndex < 0 || hoveredZIndex + 1 >= chunkZEdges.length) {
+			return;
+		}
+
+		context.fill(
+				chunkXEdges[hoveredXIndex],
+				chunkZEdges[hoveredZIndex],
+				chunkXEdges[hoveredXIndex + 1],
+				chunkZEdges[hoveredZIndex + 1],
+				HOVER_OVERLAY);
 	}
 
 	public boolean mouseClicked(
-		double mouseX,
-		double mouseY,
-		int button,
-		boolean shiftDown,
-		ClientWorld world,
-		ClientTacticsDataStore.WorldContext worldContext
-	) {
+			double mouseX,
+			double mouseY,
+			int button,
+			boolean shiftDown,
+			ClientWorld world,
+			ClientTacticsDataStore.WorldContext worldContext) {
 		if (!this.contains(mouseX, mouseY) || world == null || worldContext == null) {
 			return false;
 		}
@@ -167,14 +175,13 @@ public final class ChunkMapWidget {
 	}
 
 	public boolean mouseDragged(
-		double mouseX,
-		double mouseY,
-		int button,
-		double deltaX,
-		double deltaY,
-		ClientWorld world,
-		ClientTacticsDataStore.WorldContext worldContext
-	) {
+			double mouseX,
+			double mouseY,
+			int button,
+			double deltaX,
+			double deltaY,
+			ClientWorld world,
+			ClientTacticsDataStore.WorldContext worldContext) {
 		if (world == null || worldContext == null) {
 			return false;
 		}
@@ -284,80 +291,66 @@ public final class ChunkMapWidget {
 	}
 
 	private void renderChunkTerrain(
-		DrawContext context,
-		ClientWorld world,
-		ClientTacticsDataStore.WorldContext worldContext,
-		int chunkX,
-		int chunkZ,
-		int left,
-		int top,
-		int right,
-		int bottom
-	) {
-		ChunkTerrainCache.TerrainTile tile = this.terrainCache.getOrCreate(worldContext, world, chunkX, chunkZ);
+			DrawContext context,
+			ClientTacticsDataStore.WorldContext worldContext,
+			int chunkX,
+			int chunkZ,
+			int left,
+			int top,
+			int right,
+			int bottom) {
+		ChunkTerrainCache.TerrainTile tile = this.terrainCache.getCachedTile(worldContext, chunkX, chunkZ);
 		if (tile == null) {
-			context.fill(left, top, right, bottom, 0xFF222A32);
-			return;
-		}
-		if (this.zoom <= 1.0D) {
-			context.fill(left, top, right, bottom, tile.averageColor());
 			return;
 		}
 
 		int widthPixels = right - left;
 		int heightPixels = bottom - top;
-		int[] colors = tile.colors();
-		for (int pixelZ = 0; pixelZ < TERRAIN_TILE_RESOLUTION; pixelZ++) {
-			int rowTop = top + (heightPixels * pixelZ) / TERRAIN_TILE_RESOLUTION;
-			int rowBottom = top + (heightPixels * (pixelZ + 1)) / TERRAIN_TILE_RESOLUTION;
-			if (rowBottom <= rowTop) {
-				continue;
-			}
-			for (int pixelX = 0; pixelX < TERRAIN_TILE_RESOLUTION; pixelX++) {
-				int columnLeft = left + (widthPixels * pixelX) / TERRAIN_TILE_RESOLUTION;
-				int columnRight = left + (widthPixels * (pixelX + 1)) / TERRAIN_TILE_RESOLUTION;
-				if (columnRight <= columnLeft) {
-					continue;
-				}
-				int color = colors[pixelZ * TERRAIN_TILE_RESOLUTION + pixelX];
-				context.fill(columnLeft, rowTop, columnRight, rowBottom, color);
-			}
+		if (Math.min(widthPixels, heightPixels) < DETAILED_TEXTURE_MIN_CHUNK_PIXELS) {
+			context.fill(left, top, right, bottom, tile.averageColor());
+			return;
 		}
+
+		context.drawTexture(
+				RenderPipelines.GUI_TEXTURED,
+				tile.textureId(),
+				left,
+				top,
+				0.0F,
+				0.0F,
+				widthPixels,
+				heightPixels,
+				ChunkTerrainCache.tileResolution(),
+				ChunkTerrainCache.tileResolution());
 	}
 
 	private void drawZoneHighlight(
-		DrawContext context,
-		ClientTacticsDataStore.WorldContext worldContext,
-		int chunkX,
-		int chunkZ,
-		int left,
-		int top,
-		int right,
-		int bottom,
-		RegionColor regionColor
-	) {
+			DrawContext context,
+			ClientTacticsDataStore.WorldContext worldContext,
+			int chunkX,
+			int chunkZ,
+			int left,
+			int top,
+			int right,
+			int bottom,
+			RegionColor regionColor) {
 		if (right - left < 1 || bottom - top < 1) {
 			return;
 		}
-		boolean northEdge = this.dataStore.getRegionColor(worldContext, chunkX, chunkZ - 1) != regionColor;
-		boolean southEdge = this.dataStore.getRegionColor(worldContext, chunkX, chunkZ + 1) != regionColor;
-		boolean westEdge = this.dataStore.getRegionColor(worldContext, chunkX - 1, chunkZ) != regionColor;
-		boolean eastEdge = this.dataStore.getRegionColor(worldContext, chunkX + 1, chunkZ) != regionColor;
-		if (!northEdge && !southEdge && !westEdge && !eastEdge) {
-			return;
-		}
+
 		context.fill(left, top, right, bottom, regionColor.overlayArgb());
+
 		int outlineColor = (regionColor.swatchArgb() & 0x00FFFFFF) | ZONE_OUTLINE_ALPHA_MASK;
-		if (northEdge) {
+		if (this.dataStore.getRegionColor(worldContext, chunkX, chunkZ - 1) != regionColor) {
 			context.fill(left, top, right, top + 1, outlineColor);
 		}
-		if (southEdge) {
+		if (this.dataStore.getRegionColor(worldContext, chunkX, chunkZ + 1) != regionColor) {
 			context.fill(left, bottom - 1, right, bottom, outlineColor);
 		}
-		if (westEdge) {
+		if (this.dataStore.getRegionColor(worldContext, chunkX - 1, chunkZ) != regionColor) {
 			context.fill(left, top, left + 1, bottom, outlineColor);
 		}
-		if (eastEdge) {
+		if (this.dataStore.getRegionColor(worldContext, chunkX + 1, chunkZ) != regionColor) {
 			context.fill(right - 1, top, right, bottom, outlineColor);
 		}
 	}
@@ -377,9 +370,39 @@ public final class ChunkMapWidget {
 		if (!this.contains(mouseX, mouseY)) {
 			return null;
 		}
-		int chunkX = (int) Math.floor(this.screenToChunkX(mouseX));
-		int chunkZ = (int) Math.floor(this.screenToChunkZ(mouseY));
-		return new ChunkPos(chunkX, chunkZ);
+		return new ChunkPos((int) Math.floor(this.screenToChunkX(mouseX)), (int) Math.floor(this.screenToChunkZ(mouseY)));
+	}
+
+	private VisibleChunkFrame computeVisibleFrame(double viewportCenterX, double viewportCenterY, double chunkScale) {
+		double minChunkX = this.centerChunkX + ((this.x - viewportCenterX) / chunkScale);
+		double maxChunkX = this.centerChunkX + (((this.x + this.width) - viewportCenterX) / chunkScale);
+		double minChunkZ = this.centerChunkZ + ((this.y - viewportCenterY) / chunkScale);
+		double maxChunkZ = this.centerChunkZ + (((this.y + this.height) - viewportCenterY) / chunkScale);
+
+		return new VisibleChunkFrame(
+				(int) Math.floor(Math.min(minChunkX, maxChunkX)) - 1,
+				(int) Math.ceil(Math.max(minChunkX, maxChunkX)) + 1,
+				(int) Math.floor(Math.min(minChunkZ, maxChunkZ)) - 1,
+				(int) Math.ceil(Math.max(minChunkZ, maxChunkZ)) + 1);
+	}
+
+	private int[] computeChunkEdges(int minChunk, int maxChunk, double centerChunkAxis, double viewportCenterAxis, double chunkScale) {
+		int[] edges = new int[(maxChunk - minChunk) + 2];
+		for (int index = 0; index < edges.length; index++) {
+			double rawEdge = viewportCenterAxis + (((minChunk + index) - centerChunkAxis) * chunkScale);
+			int edge = (int) Math.round(rawEdge);
+			if (index > 0 && edge <= edges[index - 1]) {
+				edge = edges[index - 1] + 1;
+			}
+			edges[index] = edge;
+		}
+		return edges;
+	}
+
+	private double distanceToCameraSq(ChunkPos chunkPos) {
+		double dx = (chunkPos.x + 0.5D) - this.centerChunkX;
+		double dz = (chunkPos.z + 0.5D) - this.centerChunkZ;
+		return (dx * dx) + (dz * dz);
 	}
 
 	private double chunkScale() {
@@ -402,5 +425,8 @@ public final class ChunkMapWidget {
 
 	private static double clamp(double value, double min, double max) {
 		return Math.max(min, Math.min(max, value));
+	}
+
+	private record VisibleChunkFrame(int minChunkX, int maxChunkX, int minChunkZ, int maxChunkZ) {
 	}
 }

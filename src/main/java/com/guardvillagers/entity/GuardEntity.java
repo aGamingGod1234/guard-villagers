@@ -117,12 +117,15 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private static final Identifier LEVEL_HEALTH_MODIFIER_ID = GuardVillagersMod.id("guard_level_health");
 	private static final Identifier LEVEL_DAMAGE_MODIFIER_ID = GuardVillagersMod.id("guard_level_damage");
 	private static final Identifier LEVEL_SPEED_MODIFIER_ID = GuardVillagersMod.id("guard_level_speed");
+	private static final Identifier FOLLOW_CATCH_UP_SPEED_MODIFIER_ID = GuardVillagersMod.id("guard_follow_catch_up_speed");
+	private static final double FOLLOW_CATCH_UP_SPEED_BONUS = 0.35D;
 
 	private static final String OWNER_KEY = "GuardOwner";
 	private static final String ROLE_KEY = "GuardRole";
 	private static final String BEHAVIOR_KEY = "GuardBehavior";
 	private static final String FORMATION_KEY = "GuardFormation";
 	private static final String STAYING_KEY = "GuardStaying";
+	private static final String FOLLOW_OVERRIDE_KEY = "GuardFollowOverride";
 	private static final String SQUAD_ID_KEY = "GuardSquadId";
 	private static final String SQUAD_LEADER_KEY = "GuardSquadLeader";
 	private static final String EXPERIENCE_KEY = "GuardExperience";
@@ -253,6 +256,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private UUID ownerUuid;
 	private UUID squadId;
 	private boolean staying;
+	private boolean followOverride;
 	private boolean retreating;
 	private UUID mainTarget;
 	private UUID urgentTarget;
@@ -280,6 +284,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private String lastRegisteredOwnerName = "";
 	private long lastReceivedAlertTick = Long.MIN_VALUE;
 	private boolean playerMainHand;
+	private boolean catchUpSpeedActive;
 	private final EnumMap<EquipmentSlot, Boolean> playerArmor = new EnumMap<>(EquipmentSlot.class);
 
 	public GuardEntity(EntityType<? extends PathAwareEntity> entityType, net.minecraft.world.World world) {
@@ -522,7 +527,19 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	public void setStaying(boolean staying) {
 		this.staying = staying;
 		if (staying) {
+			this.setFollowOverride(false);
 			this.clearCombatTarget();
+		}
+	}
+
+	public boolean hasFollowOverride() {
+		return this.followOverride;
+	}
+
+	public void setFollowOverride(boolean followOverride) {
+		this.followOverride = followOverride;
+		if (!followOverride) {
+			this.setCatchUpSpeedActive(false);
 		}
 	}
 
@@ -543,6 +560,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	public void setHome(BlockPos home, int patrolRadius) {
+		this.setFollowOverride(false);
 		this.home = home.toImmutable();
 		this.setPatrolRadius(patrolRadius);
 		this.syncHomeData();
@@ -553,6 +571,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	public void clearHome() {
+		this.setFollowOverride(false);
 		this.home = null;
 		this.patrolRadius = 0;
 		this.syncHomeData();
@@ -664,7 +683,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	public boolean canExecuteBehaviorGoals() {
-		return !this.staying && !this.retreating && this.rallyTicks <= 0;
+		return !this.staying && !this.followOverride && !this.retreating && this.rallyTicks <= 0;
 	}
 
 	public boolean canFollowOwnerFormation() {
@@ -675,6 +694,26 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			return false;
 		}
 		return GuardReputationManager.isTrustedByGuards(world, this.ownerUuid, this.getBlockPos());
+	}
+
+	public void setCatchUpSpeedActive(boolean catchUpSpeedActive) {
+		if (this.catchUpSpeedActive == catchUpSpeedActive) {
+			return;
+		}
+
+		this.catchUpSpeedActive = catchUpSpeedActive;
+		EntityAttributeInstance speedInstance = this.getAttributeInstance(EntityAttributes.MOVEMENT_SPEED);
+		if (speedInstance == null) {
+			return;
+		}
+
+		speedInstance.removeModifier(FOLLOW_CATCH_UP_SPEED_MODIFIER_ID);
+		if (catchUpSpeedActive) {
+			speedInstance.addTemporaryModifier(new EntityAttributeModifier(
+					FOLLOW_CATCH_UP_SPEED_MODIFIER_ID,
+					FOLLOW_CATCH_UP_SPEED_BONUS,
+					EntityAttributeModifier.Operation.ADD_MULTIPLIED_BASE));
+		}
 	}
 
 	public boolean shouldTacticallyRetreat() {
@@ -1555,6 +1594,10 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			this.clearCombatTarget();
 		}
 
+		if (this.followOverride) {
+			return;
+		}
+
 		if (this.getTarget() == null && this.home
 				.getSquaredDistance(this.getBlockPos()) > (double) (this.patrolRadius + 8) * (this.patrolRadius + 8)) {
 			this.getNavigation().startMovingTo(this.home.getX() + 0.5D, this.home.getY(), this.home.getZ() + 0.5D,
@@ -2013,6 +2056,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		view.putInt(BEHAVIOR_KEY, this.dataTracker.get(BEHAVIOR));
 		view.putInt(FORMATION_KEY, this.dataTracker.get(FORMATION));
 		view.putBoolean(STAYING_KEY, this.staying);
+		view.putBoolean(FOLLOW_OVERRIDE_KEY, this.followOverride);
 		view.putString(OWNER_KEY, this.ownerUuid == null ? "" : this.ownerUuid.toString());
 		view.putString(SQUAD_ID_KEY, this.squadId == null ? "" : this.squadId.toString());
 		view.putBoolean(SQUAD_LEADER_KEY, this.isSquadLeader());
@@ -2054,6 +2098,8 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.dataTracker.set(BEHAVIOR, view.getInt(BEHAVIOR_KEY, GuardBehavior.DEFENSIVE.getId()));
 		this.dataTracker.set(FORMATION, FormationType.FOLLOW.getId());
 		this.staying = view.getBoolean(STAYING_KEY, false);
+		this.followOverride = view.getBoolean(FOLLOW_OVERRIDE_KEY, false);
+		this.catchUpSpeedActive = false;
 		this.ownerUuid = parseUuid(view.getString(OWNER_KEY, ""));
 		this.squadId = parseUuid(view.getString(SQUAD_ID_KEY, ""));
 		this.dataTracker.set(SQUAD_LEADER, view.getBoolean(SQUAD_LEADER_KEY, false));
@@ -2099,6 +2145,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 					view.getInt(LAST_LAND_Y_KEY, 0),
 					view.getInt(LAST_LAND_Z_KEY, 0));
 		}
+		this.setCatchUpSpeedActive(false);
 		this.applyLevelModifiers();
 		this.updateCombatGoals();
 		if (this.getEntityWorld() instanceof ServerWorld) {

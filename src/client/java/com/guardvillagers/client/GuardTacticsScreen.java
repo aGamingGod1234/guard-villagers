@@ -76,6 +76,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private static final ItemStack GUARD_HEAD_ICON = new ItemStack(Items.PLAYER_HEAD);
 
 	private final ClientTacticsDataStore dataStore = ClientTacticsDataStore.getInstance();
+	private final ClientGuardRosterStore rosterStore = ClientGuardRosterStore.getInstance();
 	private final ChunkMapWidget chunkMapWidget = new ChunkMapWidget(this.dataStore, GuardVillagersClient.terrainCache());
 	private ViewMode mode;
 	private final List<PaletteSwatch> paletteSwatches = new ArrayList<>();
@@ -521,13 +522,13 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			return;
 		}
 
-		// Collect and categorize guards
-		List<GuardEntity> allGuards = this.collectOwnedGuards(this.client.player.getUuid());
-		Map<Integer, List<GuardEntity>> guardsByGroup = new HashMap<>();
-		List<GuardEntity> unassigned = new ArrayList<>();
+		boolean rosterLoaded = this.rosterStore.hasRoster(worldContext);
+		List<ClientGuardRosterStore.GuardRosterEntry> allGuards = this.collectOwnedGuards(worldContext);
+		Map<Integer, List<ClientGuardRosterStore.GuardRosterEntry>> guardsByGroup = new HashMap<>();
+		List<ClientGuardRosterStore.GuardRosterEntry> unassigned = new ArrayList<>();
 		int maxGroupRow = -1;
 
-		for (GuardEntity guard : allGuards) {
+		for (ClientGuardRosterStore.GuardRosterEntry guard : allGuards) {
 			int assignedGroup = this.getEffectiveGroup(guard);
 			if (assignedGroup < 0) {
 				unassigned.add(guard);
@@ -537,11 +538,11 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			}
 		}
 
-		Comparator<GuardEntity> guardSorter = Comparator
+		Comparator<ClientGuardRosterStore.GuardRosterEntry> guardSorter = Comparator
 			.comparingInt(this::armorGearScore).reversed()
-			.thenComparing(Comparator.comparingInt(GuardEntity::getLevel).reversed())
-			.thenComparing(guard -> guard.getName().getString(), String.CASE_INSENSITIVE_ORDER);
-		for (List<GuardEntity> groupGuards : guardsByGroup.values()) {
+			.thenComparing(Comparator.comparingInt(ClientGuardRosterStore.GuardRosterEntry::level).reversed())
+			.thenComparing(ClientGuardRosterStore.GuardRosterEntry::displayName, String.CASE_INSENSITIVE_ORDER);
+		for (List<ClientGuardRosterStore.GuardRosterEntry> groupGuards : guardsByGroup.values()) {
 			groupGuards.sort(guardSorter);
 		}
 		unassigned.sort(guardSorter);
@@ -598,7 +599,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			this.drawBorder(context, swatchX, swatchY, 14, 14, 0xFF6A7A8D);
 
 			// Group name
-			List<GuardEntity> rowGuards = guardsByGroup.getOrDefault(row, List.of());
+			List<ClientGuardRosterStore.GuardRosterEntry> rowGuards = guardsByGroup.getOrDefault(row, List.of());
 			String groupName = this.resolveGroupName(worldContext, row, rowGuards);
 			context.drawText(this.textRenderer, Text.literal(groupName), swatchX + 20, swatchY + 3, TEXT_PRIMARY, false);
 			context.drawText(this.textRenderer, Text.literal(rowGuards.size() + " guards"), boxX + 6, boxY + 22, TEXT_SECONDARY, false);
@@ -620,7 +621,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			int cardsFit = Math.max(0, (availableW + GUARD_CARD_GAP) / (GUARD_CARD_WIDTH + GUARD_CARD_GAP));
 			int cardsToDraw = Math.min(cardsFit, rowGuards.size());
 			for (int i = 0; i < cardsToDraw; i++) {
-				GuardEntity guard = rowGuards.get(i);
+				ClientGuardRosterStore.GuardRosterEntry guard = rowGuards.get(i);
 				int cx = cardX + i * (GUARD_CARD_WIDTH + GUARD_CARD_GAP);
 				this.renderGuardMiniCard(context, guard, cx, cardsY);
 				this.guardCards.add(new GuardCardHitbox(guard, cx, cardsY, GUARD_CARD_WIDTH, 22, row));
@@ -655,7 +656,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		// === RIGHT PANE: Unassigned Guards ===
 		context.fill(this.rightPaneX, this.rightPaneY, this.rightPaneX + this.rightPaneW, this.rightPaneY + this.rightPaneH, 0xCC131B25);
 		this.drawBorder(context, this.rightPaneX, this.rightPaneY, this.rightPaneW, this.rightPaneH, ROW_BORDER);
-		context.drawText(this.textRenderer, Text.literal("All Guards (" + allGuards.size() + ")"), this.rightPaneX + 6, this.rightPaneY + 4, SUBTITLE_GROUPS, false);
+		String guardHeader = rosterLoaded ? "All Guards (" + allGuards.size() + ")" : "All Guards (syncing...)";
+		context.drawText(this.textRenderer, Text.literal(guardHeader), this.rightPaneX + 6, this.rightPaneY + 4, SUBTITLE_GROUPS, false);
 
 		int rightContentY = this.rightPaneY + 16;
 		int rightContentH = this.rightPaneH - 16;
@@ -667,7 +669,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 		context.enableScissor(this.rightPaneX + 1, rightContentY, this.rightPaneX + this.rightPaneW - 1, rightContentY + rightContentH);
 		for (int i = 0; i < unassigned.size(); i++) {
-			GuardEntity guard = unassigned.get(i);
+			ClientGuardRosterStore.GuardRosterEntry guard = unassigned.get(i);
 			int cardY = rightContentY + i * (UNASSIGNED_CARD_HEIGHT + UNASSIGNED_CARD_GAP) - this.rightPaneScroll;
 			int cardX = this.rightPaneX + 4;
 			int cardW = this.rightPaneW - 12;
@@ -702,9 +704,12 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		);
 		this.drawBorder(context, this.addGroupButtonX, this.addGroupButtonY, ADD_GROUP_BUTTON_WIDTH, ADD_GROUP_BUTTON_HEIGHT - 2, 0xFF6C95BC);
 		context.drawText(this.textRenderer, Text.literal("Add Group"), this.addGroupButtonX + 12, this.addGroupButtonY + 4, TEXT_PRIMARY, false);
+		String groupHelpText = rosterLoaded
+			? "Drag guards to assign | Shift+RMB header: rename | Click swatch: cycle color"
+			: "Syncing guard roster from server...";
 		context.drawText(
 			this.textRenderer,
-			Text.literal("Drag guards to assign | Shift+RMB header: rename | Click swatch: cycle color"),
+			Text.literal(groupHelpText),
 			this.addGroupButtonX + ADD_GROUP_BUTTON_WIDTH + 8,
 			this.contentY + this.contentHeight - 13,
 			TEXT_SECONDARY,
@@ -845,28 +850,20 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		this.setFocused(null);
 	}
 
-	private List<GuardEntity> collectOwnedGuards(UUID owner) {
-		if (this.client == null || this.client.world == null || this.client.player == null) {
-			return List.of();
-		}
-		double worldLimit = 30_000_000.0D;
-		Box searchBox = new Box(
-			-worldLimit, this.client.world.getBottomY(), -worldLimit,
-			worldLimit, this.client.world.getTopYInclusive(), worldLimit
-		);
-		return this.client.world.getEntitiesByClass(GuardEntity.class, searchBox, guard -> guard.isOwnedBy(owner));
+	private List<ClientGuardRosterStore.GuardRosterEntry> collectOwnedGuards(ClientTacticsDataStore.WorldContext worldContext) {
+		return this.rosterStore.roster(worldContext);
 	}
 
-	private void renderGuardCard(DrawContext context, GuardEntity guard, int x, int y) {
+	private void renderGuardCard(DrawContext context, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y) {
 		context.fill(x, y, x + GUARD_CARD_WIDTH, y + GUARD_CARD_HEIGHT, CARD_BACKGROUND);
 		this.drawBorder(context, x, y, GUARD_CARD_WIDTH, GUARD_CARD_HEIGHT, CARD_BORDER);
 		context.drawItem(GUARD_HEAD_ICON, x + 4, y + 4);
-		context.drawText(this.textRenderer, Text.literal("Lv " + guard.getLevel()), x + 24, y + 8, TEXT_PRIMARY, false);
+		context.drawText(this.textRenderer, Text.literal("Lv " + guard.level()), x + 24, y + 8, TEXT_PRIMARY, false);
 
-		this.drawArmorIcon(context, guard.getEquippedStack(EquipmentSlot.HEAD), x + 4, y + 24);
-		this.drawArmorIcon(context, guard.getEquippedStack(EquipmentSlot.CHEST), x + 20, y + 24);
-		this.drawArmorIcon(context, guard.getEquippedStack(EquipmentSlot.LEGS), x + 36, y + 24);
-		this.drawArmorIcon(context, guard.getEquippedStack(EquipmentSlot.FEET), x + 52, y + 24);
+		this.drawArmorIcon(context, guard.helmet(), x + 4, y + 24);
+		this.drawArmorIcon(context, guard.chest(), x + 20, y + 24);
+		this.drawArmorIcon(context, guard.legs(), x + 36, y + 24);
+		this.drawArmorIcon(context, guard.boots(), x + 52, y + 24);
 	}
 
 	private void drawArmorIcon(DrawContext context, ItemStack stack, int x, int y) {
@@ -877,11 +874,11 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		context.drawItem(stack, x, y);
 	}
 
-	private int armorGearScore(GuardEntity guard) {
-		return this.pieceScore(guard.getEquippedStack(EquipmentSlot.HEAD))
-			+ this.pieceScore(guard.getEquippedStack(EquipmentSlot.CHEST))
-			+ this.pieceScore(guard.getEquippedStack(EquipmentSlot.LEGS))
-			+ this.pieceScore(guard.getEquippedStack(EquipmentSlot.FEET));
+	private int armorGearScore(ClientGuardRosterStore.GuardRosterEntry guard) {
+		return this.pieceScore(guard.helmet())
+			+ this.pieceScore(guard.chest())
+			+ this.pieceScore(guard.legs())
+			+ this.pieceScore(guard.boots());
 	}
 
 	private int pieceScore(ItemStack stack) {
@@ -907,10 +904,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		return 0;
 	}
 
-	private String resolveGroupName(ClientTacticsDataStore.WorldContext worldContext, int row, List<GuardEntity> rowGuards) {
+	private String resolveGroupName(ClientTacticsDataStore.WorldContext worldContext, int row, List<ClientGuardRosterStore.GuardRosterEntry> rowGuards) {
 		String stored = this.dataStore.getGroupName(worldContext, row);
 		if (!rowGuards.isEmpty() && this.isGenericGroupName(stored)) {
-			String fromGuard = rowGuards.getFirst().getGroupName();
+			String fromGuard = rowGuards.getFirst().groupName();
 			if (fromGuard != null && !fromGuard.isBlank()) {
 				return fromGuard;
 			}
@@ -1002,24 +999,24 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			&& mouseY < this.paletteClipY + this.paletteClipHeight;
 	}
 
-	private void renderGuardMiniCard(DrawContext context, GuardEntity guard, int x, int y) {
+	private void renderGuardMiniCard(DrawContext context, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y) {
 		context.fill(x, y, x + GUARD_CARD_WIDTH, y + 22, CARD_BACKGROUND);
 		this.drawBorder(context, x, y, GUARD_CARD_WIDTH, 22, CARD_BORDER);
 		context.drawItem(GUARD_HEAD_ICON, x + 2, y + 3);
-		String name = guard.getName().getString();
+		String name = guard.displayName();
 		if (name.length() > 8) {
 			name = name.substring(0, 7) + "...";
 		}
 		context.drawText(this.textRenderer, Text.literal(name), x + 20, y + 3, TEXT_PRIMARY, false);
-		context.drawText(this.textRenderer, Text.literal("Lv" + guard.getLevel()), x + 20, y + 12, TEXT_SECONDARY, false);
+		context.drawText(this.textRenderer, Text.literal("Lv" + guard.level()), x + 20, y + 12, TEXT_SECONDARY, false);
 	}
 
-	private void renderUnassignedCard(DrawContext context, GuardEntity guard, int x, int y, int width) {
+	private void renderUnassignedCard(DrawContext context, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int width) {
 		context.fill(x, y, x + width, y + UNASSIGNED_CARD_HEIGHT, CARD_BACKGROUND);
 		this.drawBorder(context, x, y, width, UNASSIGNED_CARD_HEIGHT, CARD_BORDER);
 		context.drawItem(GUARD_HEAD_ICON, x + 2, y + 5);
-		context.drawText(this.textRenderer, guard.getName(), x + 20, y + 4, TEXT_PRIMARY, false);
-		context.drawText(this.textRenderer, Text.literal("Lv " + guard.getLevel() + " | " + guard.getGroupName()), x + 20, y + 14, TEXT_SECONDARY, false);
+		context.drawText(this.textRenderer, Text.literal(guard.displayName()), x + 20, y + 4, TEXT_PRIMARY, false);
+		context.drawText(this.textRenderer, Text.literal("Lv " + guard.level() + " | " + guard.groupName()), x + 20, y + 14, TEXT_SECONDARY, false);
 	}
 
 	private void renderScrollbar(DrawContext context, int x, int y, int width, int height, int scroll, int maxScroll, int totalContent) {
@@ -1039,18 +1036,18 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		}
 	}
 
-	private void renderGuardTooltip(DrawContext context, GuardEntity guard, int mouseX, int mouseY) {
+	private void renderGuardTooltip(DrawContext context, ClientGuardRosterStore.GuardRosterEntry guard, int mouseX, int mouseY) {
 		List<Text> tooltip = new ArrayList<>();
-		tooltip.add(guard.getName());
-		ItemStack weapon = guard.getMainHandStack();
-		ItemStack helmet = guard.getEquippedStack(EquipmentSlot.HEAD);
-		ItemStack chest = guard.getEquippedStack(EquipmentSlot.CHEST);
-		ItemStack legs = guard.getEquippedStack(EquipmentSlot.LEGS);
-		ItemStack boots = guard.getEquippedStack(EquipmentSlot.FEET);
+		tooltip.add(Text.literal(guard.displayName()));
+		ItemStack weapon = guard.mainHand();
+		ItemStack helmet = guard.helmet();
+		ItemStack chest = guard.chest();
+		ItemStack legs = guard.legs();
+		ItemStack boots = guard.boots();
 		int totalArmor = this.armorPoints(helmet) + this.armorPoints(chest) + this.armorPoints(legs) + this.armorPoints(boots);
 		tooltip.add(Text.literal("\u00A77Weapon: \u00A7f" + this.itemName(weapon) + " (" + this.weaponDamage(weapon) + " dmg)"));
-		tooltip.add(Text.literal("\u00A77Armor: \u00A7f" + totalArmor + " | HP: " + (int) guard.getMaxHealth()));
-		tooltip.add(Text.literal("\u00A77Group: \u00A7f" + guard.getGroupName()));
+		tooltip.add(Text.literal("\u00A77Armor: \u00A7f" + totalArmor + " | Level: " + guard.level()));
+		tooltip.add(Text.literal("\u00A77Group: \u00A7f" + guard.groupName()));
 		context.drawTooltip(this.textRenderer, tooltip, mouseX, mouseY);
 	}
 
@@ -1146,7 +1143,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 						this.dataStore.ensureGroupCount(worldContext, targetGroup + 1);
 					}
 				}
-				UUID guardId = result.guard().getUuid();
+				UUID guardId = result.guard().guardUuid();
 				this.pendingAssignments.put(guardId, targetGroup);
 				this.dirty = true;
 				return;
@@ -1177,12 +1174,12 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		this.dirty = false;
 	}
 
-	private int getEffectiveGroup(GuardEntity guard) {
-		Integer pending = this.pendingAssignments.get(guard.getUuid());
+	private int getEffectiveGroup(ClientGuardRosterStore.GuardRosterEntry guard) {
+		Integer pending = this.pendingAssignments.get(guard.guardUuid());
 		if (pending != null) {
 			return pending;
 		}
-		return guard.getGroupIndex();
+		return guard.groupIndex();
 	}
 
 	@Override
@@ -1262,7 +1259,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		}
 	}
 
-	private record GuardCardHitbox(GuardEntity guard, int x, int y, int width, int height, int groupIndex) {
+	private record GuardCardHitbox(ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int width, int height, int groupIndex) {
 		private boolean contains(double mouseX, double mouseY) {
 			return mouseX >= this.x && mouseY >= this.y && mouseX < this.x + this.width && mouseY < this.y + this.height;
 		}
