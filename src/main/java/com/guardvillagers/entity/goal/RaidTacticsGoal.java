@@ -1,7 +1,7 @@
 package com.guardvillagers.entity.goal;
 
-import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
+import com.guardvillagers.entity.ai.GuardBehaviorExecutor;
 import net.minecraft.entity.ai.goal.Goal;
 import net.minecraft.entity.raid.RaiderEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -23,11 +23,8 @@ public final class RaidTacticsGoal extends Goal {
 
 	@Override
 	public boolean canStart() {
-		if (!this.guard.canExecuteBehaviorGoals()) {
-			return false;
-		}
-		GuardBehavior behavior = this.guard.getBehavior();
-		if (behavior != GuardBehavior.OFFENSIVE && behavior != GuardBehavior.DEFENSIVE) {
+		if (!(this.guard.isBehaviorExecutor(GuardBehaviorExecutor.RAID_OFFENSIVE)
+				|| this.guard.isBehaviorExecutor(GuardBehaviorExecutor.RAID_DEFENSIVE))) {
 			return false;
 		}
 		if (!(this.guard.getEntityWorld() instanceof ServerWorld world)) {
@@ -42,8 +39,8 @@ public final class RaidTacticsGoal extends Goal {
 		if (this.raid == null || !this.raid.isActive()) {
 			return false;
 		}
-		GuardBehavior behavior = this.guard.getBehavior();
-		return behavior == GuardBehavior.OFFENSIVE || behavior == GuardBehavior.DEFENSIVE;
+		return this.guard.isBehaviorExecutor(GuardBehaviorExecutor.RAID_OFFENSIVE)
+				|| this.guard.isBehaviorExecutor(GuardBehaviorExecutor.RAID_DEFENSIVE);
 	}
 
 	@Override
@@ -57,19 +54,22 @@ public final class RaidTacticsGoal extends Goal {
 			return;
 		}
 
-		GuardBehavior behavior = this.guard.getBehavior();
-		if (behavior == GuardBehavior.OFFENSIVE) {
+		if (this.guard.isBehaviorExecutor(GuardBehaviorExecutor.RAID_OFFENSIVE)) {
 			RaiderEntity target = findNearestRaider(world);
 			if (target != null) {
-				this.guard.setPriorityTarget(target);
 				if (this.guard.squaredDistanceTo(target) > 16.0D) {
 					this.guard.getNavigation().startMovingTo(target, this.speed);
+				} else {
+					this.guard.getNavigation().stop();
 				}
+			} else {
+				BlockPos center = this.raid.getCenter();
+				this.guard.getNavigation().startMovingTo(center.getX() + 0.5D, center.getY(), center.getZ() + 0.5D, this.speed);
 			}
 			return;
 		}
 
-		if (behavior == GuardBehavior.DEFENSIVE) {
+		if (this.guard.isBehaviorExecutor(GuardBehaviorExecutor.RAID_DEFENSIVE)) {
 			BlockPos center = this.raid.getCenter();
 			double distanceSq = this.guard.squaredDistanceTo(center.getX() + 0.5D, center.getY(), center.getZ() + 0.5D);
 			if (distanceSq > 25.0D) {

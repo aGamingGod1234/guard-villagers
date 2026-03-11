@@ -1,6 +1,7 @@
 package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
+import com.guardvillagers.entity.ai.GuardAiIntent;
 import net.minecraft.block.BlockState;
 import net.minecraft.entity.ai.goal.Goal;
 import net.minecraft.entity.ai.pathing.PathNodeType;
@@ -32,12 +33,12 @@ public final class SeekAirGoal extends Goal {
 
     @Override
     public boolean canStart() {
-        return this.guard.isSubmergedInWater() && this.guard.getAir() < AIR_CRITICAL_THRESHOLD;
+        return this.guard.isAiIntent(GuardAiIntent.SEEK_AIR);
     }
 
     @Override
     public boolean shouldContinue() {
-        return this.guard.isSubmergedInWater() || this.guard.getAir() < this.guard.getMaxAir();
+        return this.guard.isAiIntent(GuardAiIntent.SEEK_AIR);
     }
 
     @Override
@@ -46,7 +47,6 @@ public final class SeekAirGoal extends Goal {
         this.guard.setPathfindingPenalty(PathNodeType.WATER, 0.0F);
         this.repathTicks = 0;
         this.targetAirPos = null;
-        this.guard.suspendCombat();
     }
 
     @Override
@@ -54,7 +54,6 @@ public final class SeekAirGoal extends Goal {
         this.guard.getNavigation().stop();
         this.guard.setPathfindingPenalty(PathNodeType.WATER, this.oldWaterPenalty);
         this.targetAirPos = null;
-        this.guard.resumeCombat();
     }
 
     @Override

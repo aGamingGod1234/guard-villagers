@@ -943,7 +943,7 @@ public class GuardVillagersMod implements ModInitializer {
 					if (guard.squaredDistanceTo(livingTarget) > alertRange * alertRange) {
 						continue;
 					}
-					guard.receiveOwnerAlert(livingTarget, alertTick);
+					guard.receiveOwnerAttackAlert(livingTarget, alertTick);
 				}
 			} catch (RuntimeException exception) {
 				LOGGER.error("Failed to dispatch manual target from {}", serverPlayer.getName().getString(), exception);
@@ -1010,7 +1010,7 @@ public class GuardVillagersMod implements ModInitializer {
 						if (guard.squaredDistanceTo(attacker) > range * range) {
 							continue;
 						}
-						guard.receiveOwnerAlert(attacker, tick);
+						guard.receiveOwnerDamagedAlert(attacker, tick);
 					}
 				} catch (RuntimeException ex) {
 					LOGGER.error("Failed owner-defense alert (victim) for {}", ownerVictim.getName().getString(), ex);
@@ -1035,7 +1035,7 @@ public class GuardVillagersMod implements ModInitializer {
 						if (guard.squaredDistanceTo(target) > range * range) {
 							continue;
 						}
-						guard.receiveOwnerAlert(target, tick);
+						guard.receiveOwnerAttackAlert(target, tick);
 					}
 				} catch (RuntimeException ex) {
 					LOGGER.error("Failed owner-defense alert (attacker) for {}", ownerAttacker.getName().getString(),

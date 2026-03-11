@@ -1,9 +1,8 @@
 package com.guardvillagers.entity.goal;
 
-import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
+import com.guardvillagers.entity.ai.GuardBehaviorExecutor;
 import net.minecraft.entity.ai.goal.Goal;
-import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.poi.PointOfInterestStorage;
@@ -26,15 +25,13 @@ public final class CrowdControlGoal extends Goal {
 
 	@Override
 	public boolean canStart() {
-		return this.guard.getBehavior() == GuardBehavior.CROWD_CONTROL
-			&& this.guard.canExecuteBehaviorGoals()
+		return this.guard.isBehaviorExecutor(GuardBehaviorExecutor.CROWD_CONTROL)
 			&& this.resolveAnchor();
 	}
 
 	@Override
 	public boolean shouldContinue() {
-		return this.guard.getBehavior() == GuardBehavior.CROWD_CONTROL
-			&& this.guard.canExecuteBehaviorGoals()
+		return this.guard.isBehaviorExecutor(GuardBehaviorExecutor.CROWD_CONTROL)
 			&& this.anchor != null;
 	}
 
@@ -59,25 +56,6 @@ public final class CrowdControlGoal extends Goal {
 			this.guard.getNavigation().startMovingTo(this.anchor.getX() + 0.5D, this.anchor.getY(), this.anchor.getZ() + 0.5D, this.speed);
 		} else {
 			this.guard.getNavigation().stop();
-		}
-
-		if (this.guard.getTarget() == null && this.guard.getEntityWorld() instanceof ServerWorld world) {
-			HostileEntity hostile = null;
-			double bestDistance = Double.MAX_VALUE;
-			for (HostileEntity candidate : world.getEntitiesByClass(
-				HostileEntity.class,
-				this.guard.getBoundingBox().expand(10.0D),
-				entity -> entity.isAlive() && this.guard.canTargetWithinZone(entity.getBlockPos()))
-			) {
-				double candidateDistance = this.guard.squaredDistanceTo(candidate);
-				if (candidateDistance < bestDistance) {
-					bestDistance = candidateDistance;
-					hostile = candidate;
-				}
-			}
-			if (hostile != null) {
-				this.guard.setPriorityTarget(hostile);
-			}
 		}
 	}
 

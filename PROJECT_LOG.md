@@ -370,3 +370,88 @@
 - Restart Minecraft if it is already running so it loads the replaced jar.
 - Verify the current world loads the updated mod and spot-check the latest follow/tactics changes in-game.
 
+## [2026-03-11] — Guard Death Message And Upgrade Snapshot Fix
+### What Was Implemented
+- Changed owned-guard death notifications to use the vanilla tameable-style death message path so the message format comes from Minecraft's normal death-source text.
+- Kept the guard death notification owner-only by sending it directly to the resolved owner player instead of broadcasting it.
+- Snapshotted armor, weapon, and support upgrade levels onto each guard when its loadout is assigned so later shop upgrades only affect newly hired guards.
+- Updated guard healing, shield syncing, and shield damage reduction to use each guard's stored support snapshot instead of the owner's current live upgrade state.
+- Persisted the stored loadout snapshot in guard save data and added a fallback for older saved guards that were created before the new fields existed.
+
+### Files Modified
+- `src/main/java/com/guardvillagers/entity/GuardEntity.java` — switched death-message generation to the tameable-style path and stored per-guard upgrade snapshots for future support/gear behavior.
+- `PROJECT_LOG.md` — recorded the implementation details, migration assumption, and verification result.
+
+### Assumptions Made (flag these for review)
+- For guards already saved in the world before this change, missing loadout snapshot data is initialized from the owner's current shop upgrade state once on load so those legacy guards keep their present behavior and do not pick up later upgrades after that point.
+
+### Known Issues / Deferred
+- I only verified this with `.\gradlew.bat compileJava`; I did not run an in-game gameplay pass from the terminal.
+
+### Suggested Next Steps
+- Spawn or hire one guard, buy a shop upgrade, and confirm only guards hired after the upgrade receive the new loadout/support benefits.
+- Kill an owned guard with a few different damage sources in-game to confirm the owner sees the expected vanilla-format death text and nobody else does.
+
+## [2026-03-11] — Guard Debug Overlay Path And Target Fix
+### What Was Implemented
+- Changed the guard debug targeting line so it only renders when the guard currently has a target, and it now points to that target's eye position.
+- Reworked path debug rendering to use the synced `currentPathIndex` so the overlay reflects the guard AI's active path progression in real time.
+- Added color-coded flat translucent path markers: green for the current path node, blue for visible route nodes, and red for the final destination node.
+- Limited trailing blue path markers so nodes disappear once they are more than 3 path nodes behind the current node.
+- Replaced the old full-height destination box and all-green path overlay with thin carpet-like slabs that cover the full block footprint.
+
+### Files Modified
+- `src/client/java/com/guardvillagers/client/GuardDebugRenderer.java` — fixed target-line visibility and path-node rendering/coloring to match the intended debug visualization.
+- `PROJECT_LOG.md` — recorded the renderer change, verification step, and rendering assumption.
+
+### Assumptions Made (flag these for review)
+- Interpreted the requested “outlined blocks similar to carpets” as very thin translucent full-footprint slabs so the debug markers stay flat against the ground while remaining clearly visible.
+
+### Known Issues / Deferred
+- I did not run an in-game visual pass, so the exact opacity/height may still need tuning after you look at it in motion.
+
+### Suggested Next Steps
+- Toggle guard debug in-game and verify the yellow target line only appears when a guard has an active target.
+- Watch a moving guard path and confirm the green current-node marker, blue route markers, and red destination marker match the live pathfinder state.
+
+## [2026-03-11] — Guard AI Coordinator Refactor
+### What Was Implemented
+- Centralized guard high-level AI decisions into a dedicated `GuardAiController` that now owns target arbitration, alert ingestion, combat state, rally state, and intent selection.
+- Introduced explicit prioritized intents for water recovery, retreat, engagement, rally, owner following, behavior-mode execution, and idle fallback so only one high-level movement/combat intent is active at a time.
+- Removed scattered target writes from `GuardEntity` tick/combat flows and routed owner alerts, damage alerts, allied alerts, fallback hostile scans, and raid context through the coordinator pipeline.
+- Converted behavior goals into thin intent executors so perimeter, crowd-control, raid, rally, anchor, retreat, air-seeking, and return-to-land behavior no longer re-decide strategy independently.
+- Kept bow and melee combat execution split at the goal layer while making target ownership and combat suspension deterministic at the coordinator layer.
+- Updated owner-alert event hooks to feed coordinator-facing APIs instead of directly fighting over `setTarget()` from event callbacks.
+- Built the mod jar after verification so the packaged artifact matches the AI refactor state.
+
+### Files Modified
+- `src/main/java/com/guardvillagers/entity/ai/GuardAiController.java` — new single authority for alerts, target arbitration, intent selection, rally handling, and combat-state transitions.
+- `src/main/java/com/guardvillagers/entity/ai/GuardAiIntent.java` — defines the explicit high-level priority model.
+- `src/main/java/com/guardvillagers/entity/ai/GuardBehaviorExecutor.java` — isolates which behavior-mode executor may run when behavior intents are active.
+- `src/main/java/com/guardvillagers/entity/GuardEntity.java` — removed duplicated tactical state, delegated AI ownership to the controller, and cleaned damage/alert/fallback flows.
+- `src/main/java/com/guardvillagers/GuardVillagersMod.java` — owner attack and owner damaged hooks now enqueue coordinator alerts.
+- `src/main/java/com/guardvillagers/entity/goal/SeekAirGoal.java` — now runs only when the coordinator selects `SEEK_AIR`.
+- `src/main/java/com/guardvillagers/entity/goal/ReturnToLandGoal.java` — now runs only when the coordinator selects `RETURN_TO_LAND`.
+- `src/main/java/com/guardvillagers/entity/goal/TacticalRetreatGoal.java` — now executes retreat movement without owning target-clearing strategy.
+- `src/main/java/com/guardvillagers/entity/goal/GuardBowAttackGoal.java` — now requires coordinator-owned engage intent before ranged execution.
+- `src/main/java/com/guardvillagers/entity/goal/PerimeterPatrolGoal.java` — now acts as a perimeter executor rather than a strategy chooser.
+- `src/main/java/com/guardvillagers/entity/goal/CrowdControlGoal.java` — now acts as a crowd-control executor rather than a target selector.
+- `src/main/java/com/guardvillagers/entity/goal/RaidTacticsGoal.java` — now executes raid positioning selected by the coordinator.
+- `src/main/java/com/guardvillagers/entity/goal/GuardRallyGoal.java` — new thin executor for coordinator-owned rally intent.
+- `src/main/java/com/guardvillagers/entity/goal/GuardHomeAnchorGoal.java` — new thin executor for anchor/home-zone behavior.
+- `src/main/java/com/guardvillagers/entity/goal/GuardIdleGoal.java` — new thin idle fallback executor.
+- `PROJECT_LOG.md` — recorded the AI refactor, assumptions, and verification state.
+
+### Assumptions Made (flag these for review)
+- The old urgent-target and primary-target gameplay model should be preserved, but deterministic ordering is preferable to any prior random hostile fallback choice.
+- Behavior-specific goals should be fully suspended whenever a higher-priority water-safety, retreat, rally, follow-owner, or combat intent is active, even if some previous edge cases allowed overlap.
+- Existing save compatibility is preserved by keeping persistent guard/owner/loadout data untouched and limiting the refactor to transient AI coordination state.
+
+### Known Issues / Deferred
+- I did not run an in-game manual pass from the terminal, so gameplay validation for owner alerts, raid support, retreat, and water recovery still needs live confirmation.
+- `src/client/java/com/guardvillagers/client/GuardVillagersClient.java` still reports an existing deprecated API note during client compile; this refactor did not change that warning.
+
+### Suggested Next Steps
+- Run an in-game AI smoke pass covering owner attack alerts, owner damaged alerts, follow-owner, perimeter, crowd-control, raid, retreat, water recovery, ranged vs melee combat, and zone tethering.
+- If any combat feel adjustments are needed, tune coordinator constants and deterministic ranking rules rather than reintroducing target writes into individual goals.
+

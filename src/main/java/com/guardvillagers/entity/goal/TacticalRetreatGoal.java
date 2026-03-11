@@ -1,6 +1,7 @@
 package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
+import com.guardvillagers.entity.ai.GuardAiIntent;
 import net.minecraft.entity.ai.goal.Goal;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
@@ -21,24 +22,22 @@ public final class TacticalRetreatGoal extends Goal {
 
 	@Override
 	public boolean canStart() {
-		return this.guard.shouldTacticallyRetreat();
+		return this.guard.isAiIntent(GuardAiIntent.RETREAT);
 	}
 
 	@Override
 	public boolean shouldContinue() {
-		return this.guard.shouldContinueRetreat();
+		return this.guard.isAiIntent(GuardAiIntent.RETREAT);
 	}
 
 	@Override
 	public void start() {
-		this.guard.setRetreating(true);
 		this.safePoint = null;
 		this.recalculateTicks = 0;
 	}
 
 	@Override
 	public void stop() {
-		this.guard.setRetreating(false);
 		this.safePoint = null;
 		this.guard.getNavigation().stop();
 	}
@@ -57,6 +56,5 @@ public final class TacticalRetreatGoal extends Goal {
 		if (this.safePoint != null) {
 			this.guard.getNavigation().startMovingTo(this.safePoint.getX() + 0.5D, this.safePoint.getY(), this.safePoint.getZ() + 0.5D, this.speed);
 		}
-		this.guard.setTarget(null);
 	}
 }

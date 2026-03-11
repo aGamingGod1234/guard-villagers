@@ -15,11 +15,8 @@ import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.text.Text;
-import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
 import net.minecraft.util.math.MathHelper;
-import net.minecraft.world.RaycastContext;
 import net.minecraft.util.math.Vec3d;
 import org.joml.Matrix4f;
 
@@ -35,10 +32,19 @@ public final class GuardDebugRenderer {
 	private static final double CIRCLE_Y_OFFSET = 0.01D;
 	private static final float LABEL_SCALE = 0.020F;
 	private static final float LINE_HALF_WIDTH = 0.015F;
-	private static final float PATH_GREEN_R = 0.28F;
-	private static final float PATH_GREEN_G = 0.70F;
-	private static final float PATH_GREEN_B = 0.42F;
-	private static final float PATH_ALPHA = 0.40F;
+	private static final int PATH_TRAIL_KEEP_BEHIND = 3;
+	private static final double PATH_MARKER_Y_OFFSET = 0.015D;
+	private static final double PATH_MARKER_HEIGHT = 0.045D;
+	private static final float PATH_CURRENT_R = 0.18F;
+	private static final float PATH_CURRENT_G = 0.95F;
+	private static final float PATH_CURRENT_B = 0.28F;
+	private static final float PATH_NODE_R = 0.20F;
+	private static final float PATH_NODE_G = 0.55F;
+	private static final float PATH_NODE_B = 1.00F;
+	private static final float PATH_DESTINATION_R = 1.00F;
+	private static final float PATH_DESTINATION_G = 0.22F;
+	private static final float PATH_DESTINATION_B = 0.22F;
+	private static final float PATH_ALPHA = 0.34F;
 	private static final float[][] CIRCLE_POINTS = buildCirclePoints();
 	private static final List<GuardEntity> CACHED_GUARDS = new ArrayList<>();
 	private static long lastCacheTick = Long.MIN_VALUE;
@@ -166,26 +172,36 @@ public final class GuardDebugRenderer {
 			return;
 		}
 		List<BlockPos> nodes = snapshot.pathNodes();
+		int currentPathIndex = snapshot.currentPathIndex();
+		if (currentPathIndex < 0 || currentPathIndex >= nodes.size()) {
+			return;
+		}
+
+		int firstVisibleIndex = Math.max(0, currentPathIndex - PATH_TRAIL_KEEP_BEHIND);
 		VertexConsumer filled = vertexConsumers.getBuffer(RenderLayers.debugFilledBox());
 		for (int i = 0; i < nodes.size(); i++) {
+			if (i < firstVisibleIndex) {
+				continue;
+			}
 			BlockPos node = nodes.get(i);
-			drawTopFaceCarpet(matrices, filled, node, PATH_GREEN_R, PATH_GREEN_G, PATH_GREEN_B, PATH_ALPHA);
+			if (i == currentPathIndex) {
+				drawFlatMarker(matrices, filled, node, PATH_CURRENT_R, PATH_CURRENT_G, PATH_CURRENT_B, PATH_ALPHA);
+				continue;
+			}
+			if (i == nodes.size() - 1) {
+				drawFlatMarker(
+					matrices,
+					filled,
+					node,
+					PATH_DESTINATION_R,
+					PATH_DESTINATION_G,
+					PATH_DESTINATION_B,
+					PATH_ALPHA
+				);
+				continue;
+			}
+			drawFlatMarker(matrices, filled, node, PATH_NODE_R, PATH_NODE_G, PATH_NODE_B, PATH_ALPHA);
 		}
-		BlockPos destination = nodes.get(nodes.size() - 1);
-		drawFilledBox(
-			matrices,
-			filled,
-			destination.getX(),
-			destination.getY(),
-			destination.getZ(),
-			destination.getX() + 1.0D,
-			destination.getY() + 1.0D,
-			destination.getZ() + 1.0D,
-			PATH_GREEN_R,
-			PATH_GREEN_G,
-			PATH_GREEN_B,
-			0.22F
-		);
 	}
 
 	private static void renderTargetLine(
@@ -196,9 +212,13 @@ public final class GuardDebugRenderer {
 		MinecraftClient client,
 		Vec3d cameraPos
 	) {
-		Vec3d origin = guard.getEyePos();
 		LivingEntity target = resolveTarget(guard, snapshot, client);
-		Vec3d destination = resolveLookDestination(guard, target);
+		if (target == null || !target.isAlive()) {
+			return;
+		}
+
+		Vec3d origin = guard.getEyePos();
+		Vec3d destination = target.getEyePos();
 		VertexConsumer consumer = vertexConsumers.getBuffer(RenderLayers.debugFilledBox());
 		Matrix4f matrix = matrices.peek().getPositionMatrix();
 		renderLineSegment(
@@ -216,29 +236,6 @@ public final class GuardDebugRenderer {
 			0.20F,
 			1.0F
 		);
-	}
-
-	private static Vec3d resolveLookDestination(GuardEntity guard, LivingEntity target) {
-		Vec3d origin = guard.getEyePos();
-		if (target != null && target.isAlive()) {
-			return closestPointOnBox(target.getBoundingBox(), origin);
-		}
-		Vec3d lookDir = guard.getRotationVec(1.0F);
-		Vec3d fallback = origin.add(lookDir.multiply(24.0D));
-		if (guard.getEntityWorld() == null) {
-			return fallback;
-		}
-		HitResult raycast = guard.getEntityWorld().raycast(new RaycastContext(
-			origin,
-			fallback,
-			RaycastContext.ShapeType.COLLIDER,
-			RaycastContext.FluidHandling.NONE,
-			guard
-		));
-		if (raycast.getType() == HitResult.Type.MISS) {
-			return fallback;
-		}
-		return raycast.getPos();
 	}
 
 	private static LivingEntity resolveTarget(
@@ -371,39 +368,17 @@ public final class GuardDebugRenderer {
 		return builder.length() == 0 ? "Nil" : builder.toString();
 	}
 
-	private static void drawFilledBlock(MatrixStack matrices, VertexConsumer consumer, BlockPos pos, float r, float g, float b, float a) {
+	private static void drawFlatMarker(MatrixStack matrices, VertexConsumer consumer, BlockPos pos, float r, float g, float b, float a) {
+		double minY = pos.getY() + PATH_MARKER_Y_OFFSET;
+		double maxY = minY + PATH_MARKER_HEIGHT;
 		drawFilledBox(
 			matrices,
 			consumer,
 			pos.getX(),
-			pos.getY(),
+			minY,
 			pos.getZ(),
 			pos.getX() + 1.0D,
-			pos.getY() + 1.0D,
-			pos.getZ() + 1.0D,
-			r,
-			g,
-			b,
-			a
-		);
-	}
-
-	private static void drawTopFaceCarpet(MatrixStack matrices, VertexConsumer consumer, BlockPos pos, float r, float g, float b, float a) {
-		double y = pos.getY() + 1.002D;
-		quad(
-			consumer,
-			matrices.peek().getPositionMatrix(),
-			pos.getX(),
-			y,
-			pos.getZ(),
-			pos.getX() + 1.0D,
-			y,
-			pos.getZ(),
-			pos.getX() + 1.0D,
-			y,
-			pos.getZ() + 1.0D,
-			pos.getX(),
-			y,
+			maxY,
 			pos.getZ() + 1.0D,
 			r,
 			g,
@@ -538,14 +513,6 @@ public final class GuardDebugRenderer {
 		consumer.vertex(matrix, bx, by, bz).color(r, g, b, a);
 		consumer.vertex(matrix, cx, cy, cz).color(r, g, b, a);
 		consumer.vertex(matrix, ex, ey, ez).color(r, g, b, a);
-	}
-
-	private static Vec3d closestPointOnBox(Box box, Vec3d point) {
-		return new Vec3d(
-			Math.max(box.minX, Math.min(point.x, box.maxX)),
-			Math.max(box.minY, Math.min(point.y, box.maxY)),
-			Math.max(box.minZ, Math.min(point.z, box.maxZ))
-		);
 	}
 
 	private static float[][] buildCirclePoints() {

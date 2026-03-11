@@ -1,7 +1,7 @@
 package com.guardvillagers.entity.goal;
 
-import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
+import com.guardvillagers.entity.ai.GuardBehaviorExecutor;
 import com.guardvillagers.village.VillageDescriptor;
 import com.guardvillagers.village.VillageManagerHandler;
 import net.minecraft.entity.ai.goal.Goal;
@@ -42,15 +42,13 @@ public final class PerimeterPatrolGoal extends Goal {
 
 	@Override
 	public boolean canStart() {
-		return this.guard.getBehavior() == GuardBehavior.PERIMETER
-			&& this.guard.canExecuteBehaviorGoals()
+		return this.guard.isBehaviorExecutor(GuardBehaviorExecutor.PERIMETER)
 			&& this.refreshVillageData();
 	}
 
 	@Override
 	public boolean shouldContinue() {
-		return this.guard.getBehavior() == GuardBehavior.PERIMETER
-			&& this.guard.canExecuteBehaviorGoals()
+		return this.guard.isBehaviorExecutor(GuardBehaviorExecutor.PERIMETER)
 			&& (!this.edgePoints.isEmpty() || !this.interiorPoints.isEmpty());
 	}
 

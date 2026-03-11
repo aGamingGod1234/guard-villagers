@@ -1,6 +1,7 @@
 package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
+import com.guardvillagers.entity.ai.GuardAiIntent;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.ai.goal.Goal;
 import net.minecraft.item.BowItem;
@@ -90,6 +91,9 @@ public final class GuardBowAttackGoal extends Goal {
 
 	private boolean hasValidTarget() {
 		LivingEntity target = this.guard.getTarget();
-		return target != null && target.isAlive() && this.guard.getMainHandStack().isOf(Items.BOW);
+		return this.guard.isAiIntent(GuardAiIntent.ENGAGE_TARGET)
+			&& target != null
+			&& target.isAlive()
+			&& this.guard.getMainHandStack().isOf(Items.BOW);
 	}
 }

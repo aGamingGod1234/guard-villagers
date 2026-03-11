@@ -1,6 +1,7 @@
 package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
+import com.guardvillagers.entity.ai.GuardAiIntent;
 import net.minecraft.entity.ai.goal.Goal;
 import net.minecraft.entity.ai.pathing.PathNodeType;
 import net.minecraft.util.math.BlockPos;
@@ -25,26 +26,14 @@ public final class ReturnToLandGoal extends Goal {
 
 	@Override
 	public boolean canStart() {
-		if (this.guard.getTarget() != null) {
-			return false;
-		}
-		if (!this.guard.isTouchingWater()) {
-			return false;
-		}
-		BlockPos landPos = this.guard.getLastLandPos();
-		return landPos != null;
+		return this.guard.isAiIntent(GuardAiIntent.RETURN_TO_LAND)
+				&& this.guard.getLastLandPos() != null;
 	}
 
 	@Override
 	public boolean shouldContinue() {
-		if (this.guard.getTarget() != null) {
-			return false;
-		}
-		if (!this.guard.isTouchingWater()) {
-			return false;
-		}
-		BlockPos landPos = this.guard.getLastLandPos();
-		return landPos != null;
+		return this.guard.isAiIntent(GuardAiIntent.RETURN_TO_LAND)
+				&& this.guard.getLastLandPos() != null;
 	}
 
 	@Override
