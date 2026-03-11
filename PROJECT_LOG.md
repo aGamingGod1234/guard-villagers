@@ -455,3 +455,43 @@
 - Run an in-game AI smoke pass covering owner attack alerts, owner damaged alerts, follow-owner, perimeter, crowd-control, raid, retreat, water recovery, ranged vs melee combat, and zone tethering.
 - If any combat feel adjustments are needed, tune coordinator constants and deterministic ranking rules rather than reintroducing target writes into individual goals.
 
+## [2026-03-11] — Repo Local Mod Jar Deployment
+### What Was Implemented
+- Copied the freshly built `build\libs\guard-villagers-1.0.0.jar` into the repo-local `.minecraft\mods\guard-villagers-1.0.0.jar`.
+- Verified the copied jar matches the build artifact by SHA-256 hash.
+
+### Files Modified
+- `.minecraft\mods\guard-villagers-1.0.0.jar` — replaced with the current build output for repo-local testing.
+- `PROJECT_LOG.md` — recorded the deployment target and verification result.
+
+### Assumptions Made (flag these for review)
+- Interpreted the request for `.minecraft/mods` as the repo-local `.minecraft\mods` directory under this workspace, not `%APPDATA%\.minecraft\mods`.
+
+### Known Issues / Deferred
+- I did not replace `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` during this step.
+
+### Suggested Next Steps
+- If you meant the roaming Minecraft instance instead of the repo-local test instance, copy the same jar to `%APPDATA%\.minecraft\mods` as a follow-up.
+
+## [2026-03-11] — Debug Overlay Deployment Verification
+### What Was Implemented
+- Confirmed the guard debug renderer source already contains the pathfinding overlay fix and yellow target-line fix.
+- Identified that `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` was stale compared to the current build output.
+- Redeployed the current build jar to both the repo-local `.minecraft\mods` folder and `%APPDATA%\.minecraft\mods`.
+- Verified the build artifact and both deployed jars match exactly by SHA-256 hash.
+
+### Files Modified
+- `.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the current build output.
+- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the current build output used by the default Minecraft instance.
+- `PROJECT_LOG.md` — recorded the stale-jar diagnosis and redeployment verification.
+
+### Assumptions Made (flag these for review)
+- Interpreted the in-game test instance as either the repo-local `.minecraft` folder or the default `%APPDATA%\.minecraft` installation and updated both to remove deployment ambiguity.
+
+### Known Issues / Deferred
+- I did not run an in-game visual pass from the terminal after redeploying the jar.
+
+### Suggested Next Steps
+- Restart Minecraft completely before retesting so the client loads the refreshed mod jar.
+- If the overlay still looks wrong after restart, confirm which launcher profile and mods directory the game instance is using.
+
