@@ -7,7 +7,6 @@ import com.guardvillagers.village.VillageManagerHandler;
 import net.minecraft.entity.ai.goal.Goal;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.Heightmap;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -23,6 +22,7 @@ public final class PerimeterPatrolGoal extends Goal {
 	private static final int MIN_NEXT_DISTANCE_SQ = 36;
 	private static final int RECALCULATE_INTERVAL = 120;
 	private static final int MODE_SWITCH_BASE = 400;
+	private static final double PATROL_SLOT_SPACING = 1.25D;
 
 	private final GuardEntity guard;
 	private final double speed;
@@ -91,14 +91,18 @@ public final class PerimeterPatrolGoal extends Goal {
 		}
 
 		BlockPos target = points.get(this.pointIndex % points.size());
-		double distanceSq = this.guard.squaredDistanceTo(target.getX() + 0.5D, target.getY(), target.getZ() + 0.5D);
+		BlockPos groundedTarget = this.guard.resolveGroundMovementSlot(world, target, PATROL_SLOT_SPACING, true);
+		double distanceSq = this.guard.squaredDistanceTo(
+				groundedTarget.getX() + 0.5D,
+				groundedTarget.getY(),
+				groundedTarget.getZ() + 0.5D);
 		if (distanceSq < 9.0D) {
 			this.advancePoint(points);
 			target = points.get(this.pointIndex % points.size());
+			groundedTarget = this.guard.resolveGroundMovementSlot(world, target, PATROL_SLOT_SPACING, true);
 		}
 
-		BlockPos top = world.getTopPosition(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, target);
-		this.guard.getNavigation().startMovingTo(top.getX() + 0.5D, top.getY(), top.getZ() + 0.5D, this.speed);
+		this.guard.getGuardNavigation().startMovingToStatic(groundedTarget, this.speed);
 	}
 
 	private void advancePoint(List<BlockPos> points) {

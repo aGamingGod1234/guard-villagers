@@ -11,9 +11,9 @@ import java.util.UUID;
 
 public class SquadRouteCache {
     private static final Map<CacheKey, CachedRoute> SQUAD_ROUTES = new HashMap<>();
-    private static final int MAX_CACHE_AGE_TICKS = 120; // 6 seconds
-    private static final double MAX_TARGET_DRIFT_SQR = 16.0; // 4 blocks
-    private static final double MAX_ORIGIN_DRIFT_SQR = 1024.0; // 32 blocks
+    private static final int MAX_CACHE_AGE_TICKS = 40; // 2 seconds
+    private static final double MAX_TARGET_DRIFT_SQR = 0.0; // exact static target only
+    private static final double MAX_ORIGIN_DRIFT_SQR = 144.0; // 12 blocks
 
     /**
      * Tries to find a valid cached route for a squad/owner given a target position.
@@ -101,7 +101,7 @@ public class SquadRouteCache {
     }
 
     private static BlockPos quantize(BlockPos pos) {
-        return new BlockPos(pos.getX() >> 2, pos.getY() >> 2, pos.getZ() >> 2);
+        return pos.toImmutable();
     }
 
     private record CacheKey(UUID groupId, BlockPos quantizedTarget) {

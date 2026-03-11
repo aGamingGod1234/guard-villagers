@@ -8,6 +8,7 @@ import com.guardvillagers.GuardVillagersMod;
 import com.guardvillagers.entity.ai.GuardAiController;
 import com.guardvillagers.entity.ai.GuardAiIntent;
 import com.guardvillagers.entity.ai.GuardBehaviorExecutor;
+import com.guardvillagers.entity.ai.GuardMovementSlotResolver;
 import com.guardvillagers.entity.goal.CrowdControlGoal;
 import com.guardvillagers.entity.goal.ElectLeaderGoal;
 import com.guardvillagers.entity.goal.FormationFollowOwnerGoal;
@@ -86,6 +87,7 @@ import net.minecraft.world.ServerWorldAccess;
 import net.minecraft.world.rule.GameRules;
 import net.minecraft.world.poi.PointOfInterestStorage;
 import net.minecraft.world.poi.PointOfInterestTypes;
+import com.guardvillagers.navigation.GuardNavigation;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -123,6 +125,11 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private static final Identifier LEVEL_SPEED_MODIFIER_ID = GuardVillagersMod.id("guard_level_speed");
 	private static final Identifier FOLLOW_CATCH_UP_SPEED_MODIFIER_ID = GuardVillagersMod.id("guard_follow_catch_up_speed");
 	private static final double FOLLOW_CATCH_UP_SPEED_BONUS = 0.35D;
+	private static final int INITIAL_SPREAD_TICKS = 5;
+	private static final double SLOT_SPACING = 1.75D;
+	private static final double TARGET_APPROACH_DISTANCE = 2.5D;
+	private static final double FOLLOW_SLOT_CATCH_UP_DISTANCE_SQUARED = 12.0D * 12.0D;
+	private static final double FOLLOW_SLOT_VERTICAL_CATCH_UP_DISTANCE = 3.0D;
 
 	private static final String OWNER_KEY = "GuardOwner";
 	private static final String ROLE_KEY = "GuardRole";
@@ -281,6 +288,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private String lastRegisteredOwnerName = "";
 	private boolean playerMainHand;
 	private boolean catchUpSpeedActive;
+	private boolean initialSpreadResolved;
 	private int loadoutArmorLevel;
 	private int loadoutWeaponLevel;
 	private int loadoutSupportLevel;
@@ -662,6 +670,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	public boolean canTargetWithinZone(BlockPos pos) {
+		if (this.followOverride) {
+			return true;
+		}
 		if (this.home == null || this.patrolRadius <= 0) {
 			return true;
 		}
@@ -679,6 +690,47 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	public boolean canFollowOwnerFormation() {
 		return this.aiController.canFollowOwnerFormation();
+	}
+
+	public GuardNavigation getGuardNavigation() {
+		return (GuardNavigation) this.getNavigation();
+	}
+
+	public Vec3d resolveMovementSlot(ServerWorld world, Vec3d anchor, double spacing, boolean allowCenter) {
+		return GuardMovementSlotResolver.resolveDynamicSlot(world, this, anchor, spacing, allowCenter);
+	}
+
+	public BlockPos resolveGroundMovementSlot(ServerWorld world, BlockPos anchor, double spacing, boolean allowCenter) {
+		return GuardMovementSlotResolver.resolveGroundSlot(world, this, anchor, spacing, allowCenter);
+	}
+
+	public Vec3d resolveFollowSlot(ServerWorld world, ServerPlayerEntity owner) {
+		double ownerDistanceSq = this.squaredDistanceTo(owner);
+		double verticalDelta = Math.abs(owner.getY() - this.getY());
+		BlockPos groundedSlot = ownerDistanceSq > FOLLOW_SLOT_CATCH_UP_DISTANCE_SQUARED
+				|| verticalDelta > FOLLOW_SLOT_VERTICAL_CATCH_UP_DISTANCE
+						? GuardMovementSlotResolver.resolveFollowCatchUpSlot(
+								world,
+								this,
+								new Vec3d(owner.getX(), owner.getY(), owner.getZ()),
+								SLOT_SPACING)
+						: this.resolveGroundMovementSlot(world, owner.getBlockPos(), SLOT_SPACING, false);
+		return Vec3d.ofBottomCenter(groundedSlot);
+	}
+
+	public Vec3d resolveCombatApproachSlot(ServerWorld world, LivingEntity target) {
+		Vec3d away = this.getEntityPos().subtract(target.getEntityPos());
+		if (away.lengthSquared() < 1.0E-4D) {
+			double seedAngle = Math.toRadians(Math.floorMod(this.getUuid().hashCode(), 360));
+			away = new Vec3d(Math.cos(seedAngle), 0.0D, Math.sin(seedAngle));
+		}
+		Vec3d anchor = new Vec3d(target.getX(), target.getY(), target.getZ())
+				.add(away.normalize().multiply(TARGET_APPROACH_DISTANCE));
+		BlockPos groundedSlot = this.resolveGroundMovementSlot(world,
+				BlockPos.ofFloored(anchor.x, target.getBlockY(), anchor.z),
+				SLOT_SPACING,
+				false);
+		return Vec3d.ofBottomCenter(groundedSlot);
 	}
 
 	public void setCatchUpSpeedActive(boolean catchUpSpeedActive) {
@@ -724,7 +776,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			}
 		}
 		if (bestCleric != null) {
-			return bestCleric.getBlockPos();
+			return this.resolveGroundMovementSlot(world, bestCleric.getBlockPos(), SLOT_SPACING, false);
 		}
 
 		Optional<BlockPos> bedPos = world.getPointOfInterestStorage().getNearestPosition(
@@ -733,11 +785,11 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 				48,
 				PointOfInterestStorage.OccupationStatus.ANY);
 		if (bedPos.isPresent()) {
-			return bedPos.get();
+			return this.resolveGroundMovementSlot(world, bedPos.get(), SLOT_SPACING, false);
 		}
 
 		if (this.home != null) {
-			return this.home;
+			return this.resolveGroundMovementSlot(world, this.home, SLOT_SPACING, false);
 		}
 
 		LivingEntity target = this.aiController.getTrackedCombatTarget(world);
@@ -746,7 +798,8 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			Vec3d destination = this.getEntityPos().add(away);
 			BlockPos blockPos = new BlockPos((int) Math.floor(destination.x), (int) Math.floor(destination.y),
 					(int) Math.floor(destination.z));
-			return world.getTopPosition(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, blockPos);
+			BlockPos anchor = world.getTopPosition(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, blockPos);
+			return this.resolveGroundMovementSlot(world, anchor, SLOT_SPACING, false);
 		}
 
 		return this.getBlockPos();
@@ -1272,6 +1325,20 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		return false;
 	}
 
+	public boolean isSameMovementGroup(GuardEntity other) {
+		if (other == null || other == this) {
+			return true;
+		}
+		if (this.ownerUuid != null && this.ownerUuid.equals(other.ownerUuid)) {
+			boolean hasExplicitGroup = this.groupIndex >= 0 || other.groupIndex >= 0;
+			if (hasExplicitGroup) {
+				return this.groupIndex >= 0 && this.groupIndex == other.groupIndex;
+			}
+			return this.groupColumn == other.groupColumn;
+		}
+		return this.isSameGroup(other);
+	}
+
 	public boolean hasActiveCombatTarget() {
 		return this.aiController.hasActiveCombatTarget();
 	}
@@ -1292,6 +1359,10 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			this.addExperience(1);
 		}
 
+		if (!this.initialSpreadResolved && this.age <= INITIAL_SPREAD_TICKS) {
+			this.resolveInitialSpawnSpacing(world);
+		}
+
 		this.aiController.tick(world);
 		this.syncSupportEquipment();
 		this.updateShieldUsage();
@@ -1303,6 +1374,30 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 				&& this.getHealth() < this.getMaxHealth() * 0.6F) {
 			this.heal(this.getStoredHealingAmount());
 		}
+	}
+
+	private void resolveInitialSpawnSpacing(ServerWorld world) {
+		this.initialSpreadResolved = true;
+		List<GuardEntity> crowded = world.getEntitiesByClass(
+				GuardEntity.class,
+				this.getBoundingBox().expand(1.1D),
+				entity -> entity != this && entity.isAlive());
+		if (crowded.isEmpty()) {
+			return;
+		}
+
+		BlockPos spreadTarget = this.resolveGroundMovementSlot(world, this.getBlockPos(), SLOT_SPACING, false);
+		if (spreadTarget.getSquaredDistance(this.getBlockPos()) < 1.0D
+				|| !GuardVillagersMod.canGuardSpawnAt(world, spreadTarget)) {
+			return;
+		}
+
+		this.refreshPositionAndAngles(
+				spreadTarget.getX() + 0.5D,
+				spreadTarget.getY(),
+				spreadTarget.getZ() + 0.5D,
+				this.getYaw(),
+				this.getPitch());
 	}
 
 	private void syncSupportEquipment() {
@@ -1587,7 +1682,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			ServerPlayerEntity owner = this.resolveOwner(world);
 			boolean showDeathMessages = Boolean.TRUE.equals(world.getGameRules().getValue(GameRules.SHOW_DEATH_MESSAGES));
 			if (owner != null && showDeathMessages) {
-				owner.sendMessage(this.getDamageTracker().getDeathMessage());
+				owner.sendMessage(damageSource.getDeathMessage(this));
 			}
 		}
 	}

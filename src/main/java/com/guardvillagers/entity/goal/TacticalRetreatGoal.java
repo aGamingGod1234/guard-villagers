@@ -54,7 +54,7 @@ public final class TacticalRetreatGoal extends Goal {
 		}
 
 		if (this.safePoint != null) {
-			this.guard.getNavigation().startMovingTo(this.safePoint.getX() + 0.5D, this.safePoint.getY(), this.safePoint.getZ() + 0.5D, this.speed);
+			this.guard.getGuardNavigation().startMovingToStatic(this.safePoint, this.speed);
 		}
 	}
 }

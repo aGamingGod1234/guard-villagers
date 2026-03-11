@@ -495,3 +495,161 @@
 - Restart Minecraft completely before retesting so the client loads the refreshed mod jar.
 - If the overlay still looks wrong after restart, confirm which launcher profile and mods directory the game instance is using.
 
+## [2026-03-11] — Guard AI De-Clumping And Death Message Fix
+### What Was Implemented
+- Fixed purchased-guard spawning so hired guards now use the resolved safe spawn position instead of the player’s raw `X/Z`, and added horizontal nearby-column spawn searching for existing guard spawn flows.
+- Added deterministic guard movement slot resolution so follow-owner, crowd-control, home-anchor, rally, retreat, and raid-center movement stop collapsing entire groups onto one exact block.
+- Updated guard navigation to distinguish static anchor routing from dynamic chase/follow routing, disable squad-route caching for dynamic movement, and add repath hysteresis plus local crowd-jam recovery.
+- Relaxed combat stuck/lost-sight suppression when guards are jammed by allied guards so large groups do not snap off targets just because they are body-blocking each other.
+- Changed owner death notifications to use the death `DamageSource` message and still respect `showDeathMessages`.
+- Built the mod jar and redeployed it to both the repo-local `.minecraft\mods` folder and `%APPDATA%\.minecraft\mods`.
+
+### Files Modified
+- `src/main/java/com/guardvillagers/GuardVillagersMod.java` — fixed purchased spawn placement and routed existing guard spawns through nearby horizontal spawn search.
+- `src/main/java/com/guardvillagers/entity/GuardEntity.java` — added movement-slot helpers, initial anti-cram spread, distributed retreat targets, and detailed owner death messages.
+- `src/main/java/com/guardvillagers/entity/ai/GuardAiController.java` — stopped crowd jams from being treated as target-loss/stuck failures.
+- `src/main/java/com/guardvillagers/entity/ai/GuardMovementSlotResolver.java` — new shared slotting helper for distributed follow/anchor/chase targets.
+- `src/main/java/com/guardvillagers/entity/goal/*` — rewired follow, crowd, anchor, rally, retreat, raid, and bow movement to use distributed targets instead of single-point collapse.
+- `src/main/java/com/guardvillagers/navigation/GuardNavigation.java` — added dynamic-vs-static routing behavior, anti-thrash move gating, and crowd-jam recovery.
+- `src/main/java/com/guardvillagers/navigation/SquadRouteCache.java` — tightened static-route cache validity and removed broad drift assumptions.
+- `src/main/java/com/guardvillagers/village/VillageManagerHandler.java` — switched village spawn usage to the nearby spawn search helper.
+- `PROJECT_LOG.md` — recorded the implementation, assumptions, and deployment verification.
+
+### Assumptions Made (flag these for review)
+- Dynamic combat/follow movement should prefer fresher per-guard paths over squad path cache reuse, even if that slightly increases path recomputation.
+- Owner death messages should remain owner-only and use direct damage-source wording even if that differs from the previous generic `DamageTracker` output.
+- A short first-tick spread correction for newly created guards is acceptable for command/shop/manual burst spawns because it only affects immediately spawned entities.
+
+### Known Issues / Deferred
+- I did not run an in-game behavior pass from the terminal, so live tuning for spacing radius, repath cadence, and crowd-recovery feel may still need adjustment.
+- `src/client/java/com/guardvillagers/client/GuardVillagersClient.java` still reports the existing deprecated API note during client compile; this task did not change that warning.
+
+### Suggested Next Steps
+- Smoke-test large owned groups for spawn spread, follow-owner cohesion, combat pursuit, and village crowd-control behavior in a real world.
+- If any clumping remains, tune slot spacing and crowd-recovery distance before changing target arbitration again.
+
+## [2026-03-11] — Guard Jar Rebuild And Client Launch
+### What Was Implemented
+- Rebuilt the mod jar with the current guard AI and death-message changes.
+- Replaced the repo-local `.minecraft\mods\guard-villagers-1.0.0.jar` and `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` with the rebuilt artifact.
+- Verified the build artifact and both deployed jars match by SHA-256 hash.
+- Launched the repo-local Fabric client via `gradlew runClient`.
+
+### Files Modified
+- `.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the current build output for the repo-local test instance.
+- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the same build output to avoid stale installed jars.
+- `PROJECT_LOG.md` — recorded the rebuild, deployment, and client launch.
+
+### Assumptions Made (flag these for review)
+- Treated the workspace `.minecraft\mods` folder as the intended primary test instance and refreshed `%APPDATA%` as a secondary safeguard.
+
+### Known Issues / Deferred
+- I launched the client process but did not interact with the game or verify world behavior from here.
+
+### Suggested Next Steps
+- Use the launched client to validate 64-guard spawn spread, follow-owner movement, target pursuit, and detailed death-message output in-game.
+
+## [2026-03-11] — Follow Slot Grounding Fix
+### What Was Implemented
+- Replaced the shared ground-slot helper’s heightmap-top lookup with local spawn-safe grounding so slot targets stay near the intended vertical level instead of snapping to unrelated surface tops.
+- Updated follow-owner slots to target grounded reachable positions around the owner, and updated combat-approach slots to ground against the target’s local level before pathing.
+- Rebuilt the jar and redeployed it to both the repo-local and `%APPDATA%` mod folders.
+
+### Files Modified
+- `src/main/java/com/guardvillagers/entity/ai/GuardMovementSlotResolver.java` — changed ground slot resolution to use local nearby spawn validation.
+- `src/main/java/com/guardvillagers/entity/GuardEntity.java` — follow and combat slot helpers now return grounded reachable positions.
+- `.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the rebuilt jar containing the follow-slot fix.
+- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the same rebuilt jar.
+- `PROJECT_LOG.md` — recorded the follow-slot grounding correction.
+
+### Assumptions Made (flag these for review)
+- The cliff-follow failure was primarily caused by unreachable slot targets near the player rather than by a remaining pure navigation-mesh bug.
+
+### Known Issues / Deferred
+- The currently running Minecraft client still has the old jar loaded until it is restarted.
+
+### Suggested Next Steps
+- Restart Minecraft completely and re-run the 64-guard `/guards follow` cliff test against the new jar.
+
+## [2026-03-11] — Guard AI Audit
+### What Was Implemented
+- Audited the current guard AI control flow across `GuardEntity`, `GuardAiController`, `GuardNavigation`, movement slot resolution, behavior goals, command entrypoints, and village spawn/anchor logic.
+- Produced a prioritized issue register focused on stranded follow behavior, crowd deadlocks, vertical grounding errors, behavior-layer routing bypasses, and stale state transitions.
+- Classified findings as confirmed code issues, confirmed runtime issues, or suspected risks so future fixes can target root causes instead of symptoms.
+
+### Files Modified
+- `PROJECT_LOG.md` — recorded the AI audit findings and next-step recommendations.
+
+### Assumptions Made (flag these for review)
+- Treated the user-reported 64-guard `/guards follow` cliff failure, village clumping, and oscillation as confirmed runtime symptoms even though I did not drive the Minecraft client interactively from the terminal during this audit.
+- Treated the existing in-repo AI changes as the current baseline under review rather than reverting to any earlier architecture.
+
+### Known Issues / Deferred
+- This task did not include code changes or runtime instrumentation additions, so the audit stops at root-cause identification and fix direction.
+- A few lower-confidence risks still need live reproduction to rank them correctly against the confirmed pathing blockers.
+
+### Suggested Next Steps
+- Fix follow-slot scaling and grouping first so large owned groups stop sharing one global ring around the owner.
+- Replace remaining heightmap-top and raw spawn-grounding shortcuts in crowd recovery and patrol movement with path-safe local grounding.
+- Align all behavior goals on the same navigation contract and retest with 1, 8, 32, and 64 guards across cliffs, ramps, caves, village centers, and water transitions.
+
+## [2026-03-11] — Guard AI Follow And Pathing Fix Pass
+### What Was Implemented
+- Split movement slotting away from the broad “same owner equals same group” rule by introducing movement-group partitioning for owned guards, so large owned blobs no longer share one massive slot ring.
+- Added catch-up follow slot resolution that trails from the owner-facing side when guards are far away or on a very different elevation, which is intended to help large groups acquire the same climb path instead of orbiting unreachable side slots.
+- Allowed `followOverride` guards to ignore home-zone target restrictions so `/guards follow` can keep combat and pursuit active away from the saved home anchor.
+- Changed crowd-jam detection and crowd-recovery grounding to use movement groups plus nearby safe grounding instead of heightmap-top probing.
+- Moved perimeter patrol back onto the guard navigation helpers and grounded patrol points through the shared movement-slot resolver instead of raw vanilla navigation.
+- Cleared stale combat state when zoning a guard with the whistle so home/zone transitions do not inherit old chase state.
+- Updated guard spawn vertical search to prefer the nearest safe vertical slot instead of biasing downward to the lowest valid block.
+- Rebuilt the mod and refreshed both the repo-local and `%APPDATA%` installed jars.
+
+### Files Modified
+- `src/main/java/com/guardvillagers/entity/ai/GuardMovementSlotResolver.java` — added movement-group partitioning, cohort-based slot spreading, and follow catch-up slot resolution.
+- `src/main/java/com/guardvillagers/entity/GuardEntity.java` — added movement-group identity, follow catch-up selection, and follow-override zone bypass.
+- `src/main/java/com/guardvillagers/navigation/GuardNavigation.java` — changed crowd detection/recovery to use movement groups and safe grounded recovery targets.
+- `src/main/java/com/guardvillagers/entity/goal/PerimeterPatrolGoal.java` — routed patrol movement through grounded guard navigation instead of raw heightmap-top movement.
+- `src/main/java/com/guardvillagers/item/GuardWhistleItem.java` — cleared combat state on zone/home whistle commands.
+- `src/main/java/com/guardvillagers/GuardVillagersMod.java` — changed guard spawn vertical search to nearest-safe preference.
+- `.minecraft/mods/guard-villagers-1.0.0.jar` — refreshed with the rebuilt jar for the repo-local instance.
+- `%APPDATA%/.minecraft/mods/guard-villagers-1.0.0.jar` — refreshed with the same rebuilt jar for the installed client.
+- `PROJECT_LOG.md` — recorded this fix pass and verification results.
+
+### Assumptions Made (flag these for review)
+- Partitioning unassigned owned guards by `groupColumn` is an acceptable intermediate way to stop one-owner swarms from sharing a single slot cohort without changing save format or tactics UI semantics.
+- For large catch-up cases, approaching from the owner-facing side is preferable to using fully symmetric ring slots around the owner.
+- Treating one very close allied blocker as sufficient crowding is acceptable because the recovery only triggers after a stall window rather than on every tick.
+
+### Known Issues / Deferred
+- I did not run an in-game validation pass after the rebuild, so the remaining question is behavioral feel rather than compile/build correctness.
+- Water/air-seeking and ranged-goal continuation risks from the audit were not changed in this pass because they were not primary blockers for the reported 64-guard follow failure.
+- `src/client/java/com/guardvillagers/client/GuardVillagersClient.java` still emits the existing deprecated API note during client compile.
+
+### Suggested Next Steps
+- Fully restart Minecraft and retest the 64-guard `/guards follow` cliff scenario first.
+- If large groups still strand on narrow climbs, the next fix should be path-aware queueing on the owner approach vector rather than broader ring/cohort tuning.
+- Re-run the village-house clustering scenarios to confirm perimeter patrol and crowd recovery are no longer sending guards to bad vertical surfaces.
+
+## [2026-03-11] — Security Review Audit
+### What Was Implemented
+- Executed a repo-grounded security and exploit audit across commands, item/entity interaction, screen handlers, persistent-state parsing, periodic server tick work, client file I/O, and S2C payload handling.
+- Produced a prioritized findings report with concrete exploit paths, exact code anchors, and minimal remediation guidance.
+- Explicitly closed out non-findings for client-compromise surfaces such as remote download, process execution, native loading, and custom C2S packet handling.
+
+### Files Modified
+- `guard-villagers-security-review.md` — added the security review report with prioritized findings and fix directions.
+- `PROJECT_LOG.md` — recorded the audit deliverable and remaining follow-up.
+
+### Assumptions Made (flag these for review)
+- Ranked severity using a public-server-first threat model while still checking client-side safety surfaces.
+- Treated this task as a static code audit only; I did not drive a live Minecraft client/server exploit reproduction loop during this pass.
+
+### Known Issues / Deferred
+- No remediations were applied in this task; the repo still contains the findings documented in the report.
+- Runtime exploit validation, load testing, and negative-permission testing still need an interactive game session if the user wants proof-of-exploit evidence beyond static code review.
+
+### Suggested Next Steps
+- Patch `/guards debug` to require operator permission and re-audit the debug sync visibility rules.
+- Remove or contain the full-world ownership scan fallback before exposing the mod to untrusted public players.
+- Add hard limits and cleanup rules for tactics groups and persistent player/village state, then retest with high-churn public-server scenarios.
+

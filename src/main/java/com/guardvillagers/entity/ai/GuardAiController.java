@@ -418,7 +418,7 @@ public final class GuardAiController {
 			return;
 		}
 
-		if (this.guard.canSee(target)) {
+		if (this.guard.canSee(target) || this.guard.getGuardNavigation().isCrowdBlocked()) {
 			this.noSightTicks = 0;
 		} else if (++this.noSightTicks > TARGET_LOS_GRACE_TICKS) {
 			this.suppressTarget(target.getUuid(), world.getTime());
@@ -430,6 +430,12 @@ public final class GuardAiController {
 		}
 
 		if (this.guard.squaredDistanceTo(target) < TARGET_PROGRESS_RESET_DISTANCE_SQUARED) {
+			this.lastProgressPos = this.guard.getEntityPos();
+			this.stuckTargetTicks = 0;
+			return;
+		}
+
+		if (this.guard.getGuardNavigation().isCrowdBlocked()) {
 			this.lastProgressPos = this.guard.getEntityPos();
 			this.stuckTargetTicks = 0;
 			return;

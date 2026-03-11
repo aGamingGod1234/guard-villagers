@@ -51,7 +51,7 @@ public final class GuardBowAttackGoal extends Goal {
 	@Override
 	public void tick() {
 		LivingEntity target = this.guard.getTarget();
-		if (target == null) {
+		if (target == null || !(this.guard.getEntityWorld() instanceof net.minecraft.server.world.ServerWorld world)) {
 			return;
 		}
 
@@ -70,7 +70,8 @@ public final class GuardBowAttackGoal extends Goal {
 		if (distanceSq <= (double) this.squaredRange && this.targetVisibleTicks >= 20) {
 			this.guard.getNavigation().stop();
 		} else {
-			this.guard.getNavigation().startMovingTo(target, this.speed);
+			this.guard.getGuardNavigation().startMovingToDynamic(this.guard.resolveCombatApproachSlot(world, target),
+					this.speed);
 		}
 
 		this.guard.getLookControl().lookAt(target, 30.0F, 30.0F);

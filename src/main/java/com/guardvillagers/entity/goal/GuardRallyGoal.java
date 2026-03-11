@@ -37,13 +37,10 @@ public final class GuardRallyGoal extends Goal {
 	@Override
 	public void tick() {
 		BlockPos rallyPoint = this.guard.getRallyPoint().orElse(null);
-		if (rallyPoint == null) {
+		if (rallyPoint == null || !(this.guard.getEntityWorld() instanceof net.minecraft.server.world.ServerWorld world)) {
 			return;
 		}
-		this.guard.getNavigation().startMovingTo(
-				rallyPoint.getX() + 0.5D,
-				rallyPoint.getY(),
-				rallyPoint.getZ() + 0.5D,
-				this.speed);
+		BlockPos slot = this.guard.resolveGroundMovementSlot(world, rallyPoint, 1.75D, false);
+		this.guard.getGuardNavigation().startMovingToStatic(slot, this.speed);
 	}
 }

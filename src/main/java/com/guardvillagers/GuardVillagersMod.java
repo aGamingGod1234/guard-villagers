@@ -193,7 +193,7 @@ public class GuardVillagersMod implements ModInitializer {
 					return stack;
 				}
 
-				BlockPos spawn = findGuardSpawnPos(world, spawnPos, 8);
+				BlockPos spawn = findNearbyGuardSpawnPos(world, spawnPos, 8);
 				if (spawn == null) {
 					return stack;
 				}
@@ -515,12 +515,13 @@ public class GuardVillagersMod implements ModInitializer {
 
 		BlockPos candidate = new BlockPos(MathHelper.floor(player.getX()), player.getBlockY(),
 				MathHelper.floor(player.getZ()));
-		BlockPos spawn = findGuardSpawnPos(world, candidate, 10);
+		BlockPos spawn = findNearbyGuardSpawnPos(world, candidate, 10);
 		if (spawn == null) {
 			return null;
 		}
 
-		guard.refreshPositionAndAngles(player.getX(), spawn.getY(), player.getZ(), player.getYaw(), 0.0F);
+		guard.refreshPositionAndAngles(spawn.getX() + 0.5D, spawn.getY(), spawn.getZ() + 0.5D, player.getYaw(),
+				0.0F);
 		guard.setOwnerUuid(player.getUuid());
 		guard.setStaying(false);
 		guard.setFollowOverride(true);
@@ -806,39 +807,52 @@ public class GuardVillagersMod implements ModInitializer {
 		int x = origin.getX();
 		int z = origin.getZ();
 
-		// Check origin first
 		BlockPos base = new BlockPos(x, clampedY, z);
 		if (canGuardSpawnAt(world, base)) {
 			return base;
 		}
 
-		// Search UPWARD first — return immediately on first valid position
 		for (int step = 1; step <= range; step++) {
 			int upY = clampedY + step;
-			if (upY > topY)
-				break;
-			BlockPos up = new BlockPos(x, upY, z);
-			if (canGuardSpawnAt(world, up)) {
-				return up;
-			}
-		}
-
-		// Search DOWNWARD — pick the LOWEST valid block
-		BlockPos lowestDown = null;
-		for (int step = 1; step <= range; step++) {
 			int downY = clampedY - step;
-			if (downY < bottomY)
-				break;
-			BlockPos down = new BlockPos(x, downY, z);
-			if (canGuardSpawnAt(world, down)) {
-				lowestDown = down; // keep going to find the lowest
+			if (upY <= topY) {
+				BlockPos up = new BlockPos(x, upY, z);
+				if (canGuardSpawnAt(world, up)) {
+					return up;
+				}
+			}
+			if (downY >= bottomY) {
+				BlockPos down = new BlockPos(x, downY, z);
+				if (canGuardSpawnAt(world, down)) {
+					return down;
+				}
 			}
 		}
-		if (lowestDown != null) {
-			return lowestDown;
+		return null;
+	}
+
+	public static BlockPos findNearbyGuardSpawnPos(ServerWorld world, BlockPos origin, int verticalRange) {
+		int range = Math.max(0, verticalRange);
+		BlockPos inPlace = findGuardSpawnPos(world, origin, range);
+		if (inPlace != null) {
+			return inPlace;
 		}
 
-		// No valid position found — return null
+		int horizontalRange = Math.max(2, range);
+		for (int radius = 1; radius <= horizontalRange; radius++) {
+			for (int dx = -radius; dx <= radius; dx++) {
+				for (int dz = -radius; dz <= radius; dz++) {
+					if (Math.max(Math.abs(dx), Math.abs(dz)) != radius) {
+						continue;
+					}
+
+					BlockPos candidate = findGuardSpawnPos(world, origin.add(dx, 0, dz), range);
+					if (candidate != null) {
+						return candidate;
+					}
+				}
+			}
+		}
 		return null;
 	}
 

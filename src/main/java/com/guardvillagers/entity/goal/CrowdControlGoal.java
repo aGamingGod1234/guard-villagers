@@ -43,7 +43,7 @@ public final class CrowdControlGoal extends Goal {
 
 	@Override
 	public void tick() {
-		if (this.anchor == null) {
+		if (this.anchor == null || !(this.guard.getEntityWorld() instanceof ServerWorld world)) {
 			return;
 		}
 		if (this.recalculateTicks-- <= 0) {
@@ -51,9 +51,10 @@ public final class CrowdControlGoal extends Goal {
 			this.recalculateTicks = 100;
 		}
 
-		double distanceSq = this.guard.squaredDistanceTo(this.anchor.getX() + 0.5D, this.anchor.getY(), this.anchor.getZ() + 0.5D);
-		if (distanceSq > 16.0D) {
-			this.guard.getNavigation().startMovingTo(this.anchor.getX() + 0.5D, this.anchor.getY(), this.anchor.getZ() + 0.5D, this.speed);
+		BlockPos slot = this.guard.resolveGroundMovementSlot(world, this.anchor, 1.75D, false);
+		double distanceSq = this.guard.squaredDistanceTo(slot.getX() + 0.5D, slot.getY(), slot.getZ() + 0.5D);
+		if (distanceSq > 2.25D) {
+			this.guard.getGuardNavigation().startMovingToStatic(slot, this.speed);
 		} else {
 			this.guard.getNavigation().stop();
 		}

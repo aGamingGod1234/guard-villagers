@@ -5,6 +5,7 @@ import net.minecraft.entity.ai.goal.Goal;
 import net.minecraft.entity.ai.pathing.PathNodeType;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.math.Vec3d;
 
 import java.util.EnumSet;
 
@@ -51,7 +52,8 @@ public final class FormationFollowOwnerGoal extends Goal {
 			return false;
 		}
 
-		double distanceBlocks = Math.sqrt(this.guard.squaredDistanceTo(resolvedOwner));
+		Vec3d followSlot = this.guard.resolveFollowSlot(world, resolvedOwner);
+		double distanceBlocks = Math.sqrt(this.guard.squaredDistanceTo(followSlot));
 		if (!this.shouldEnterCatchUp(distanceBlocks)) {
 			return false;
 		}
@@ -69,7 +71,11 @@ public final class FormationFollowOwnerGoal extends Goal {
 			return false;
 		}
 
-		double distanceBlocks = Math.sqrt(this.guard.squaredDistanceTo(this.owner));
+		if (!(this.owner.getEntityWorld() instanceof ServerWorld world)) {
+			return false;
+		}
+		Vec3d followSlot = this.guard.resolveFollowSlot(world, this.owner);
+		double distanceBlocks = Math.sqrt(this.guard.squaredDistanceTo(followSlot));
 		if (distanceBlocks > EXIT_DISTANCE_BLOCKS) {
 			this.settledTicks = 0;
 			this.lastDistanceBlocks = distanceBlocks;
@@ -89,7 +95,12 @@ public final class FormationFollowOwnerGoal extends Goal {
 	public void start() {
 		this.updateCountdownTicks = 0;
 		this.settledTicks = 0;
-		this.lastDistanceBlocks = this.owner == null ? Double.MAX_VALUE : Math.sqrt(this.guard.squaredDistanceTo(this.owner));
+		if (this.owner != null && this.owner.getEntityWorld() instanceof ServerWorld world) {
+			Vec3d followSlot = this.guard.resolveFollowSlot(world, this.owner);
+			this.lastDistanceBlocks = Math.sqrt(this.guard.squaredDistanceTo(followSlot));
+		} else {
+			this.lastDistanceBlocks = Double.MAX_VALUE;
+		}
 		this.oldWaterPathfindingPenalty = this.guard.getPathfindingPenalty(PathNodeType.WATER);
 		this.guard.setPathfindingPenalty(PathNodeType.WATER, 0.0F);
 		this.guard.setCatchUpSpeedActive(true);
@@ -122,7 +133,11 @@ public final class FormationFollowOwnerGoal extends Goal {
 			return;
 		}
 
-		this.guard.getNavigation().startMovingTo(this.owner, this.speed);
+		if (!(this.owner.getEntityWorld() instanceof ServerWorld world)) {
+			return;
+		}
+		Vec3d followSlot = this.guard.resolveFollowSlot(world, this.owner);
+		this.guard.getGuardNavigation().startMovingToDynamic(followSlot, this.speed);
 	}
 
 	private boolean shouldEnterCatchUp(double distanceBlocks) {

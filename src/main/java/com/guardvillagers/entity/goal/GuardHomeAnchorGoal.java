@@ -37,9 +37,14 @@ public final class GuardHomeAnchorGoal extends Goal {
 	@Override
 	public void tick() {
 		BlockPos home = this.guard.getHome().orElse(null);
-		if (home == null) {
+		if (home == null || !(this.guard.getEntityWorld() instanceof net.minecraft.server.world.ServerWorld world)) {
 			return;
 		}
-		this.guard.getNavigation().startMovingTo(home.getX() + 0.5D, home.getY(), home.getZ() + 0.5D, this.speed);
+		BlockPos slot = this.guard.resolveGroundMovementSlot(world, home, 1.75D, false);
+		if (this.guard.squaredDistanceTo(slot.getX() + 0.5D, slot.getY(), slot.getZ() + 0.5D) <= 2.25D) {
+			this.guard.getNavigation().stop();
+			return;
+		}
+		this.guard.getGuardNavigation().startMovingToStatic(slot, this.speed);
 	}
 }

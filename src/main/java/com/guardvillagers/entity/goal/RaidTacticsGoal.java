@@ -58,22 +58,25 @@ public final class RaidTacticsGoal extends Goal {
 			RaiderEntity target = findNearestRaider(world);
 			if (target != null) {
 				if (this.guard.squaredDistanceTo(target) > 16.0D) {
-					this.guard.getNavigation().startMovingTo(target, this.speed);
+					this.guard.getGuardNavigation().startMovingToDynamic(this.guard.resolveCombatApproachSlot(world, target),
+							this.speed);
 				} else {
 					this.guard.getNavigation().stop();
 				}
 			} else {
 				BlockPos center = this.raid.getCenter();
-				this.guard.getNavigation().startMovingTo(center.getX() + 0.5D, center.getY(), center.getZ() + 0.5D, this.speed);
+				BlockPos slot = this.guard.resolveGroundMovementSlot(world, center, 1.75D, false);
+				this.guard.getGuardNavigation().startMovingToStatic(slot, this.speed);
 			}
 			return;
 		}
 
 		if (this.guard.isBehaviorExecutor(GuardBehaviorExecutor.RAID_DEFENSIVE)) {
 			BlockPos center = this.raid.getCenter();
-			double distanceSq = this.guard.squaredDistanceTo(center.getX() + 0.5D, center.getY(), center.getZ() + 0.5D);
+			BlockPos slot = this.guard.resolveGroundMovementSlot(world, center, 1.75D, false);
+			double distanceSq = this.guard.squaredDistanceTo(slot.getX() + 0.5D, slot.getY(), slot.getZ() + 0.5D);
 			if (distanceSq > 25.0D) {
-				this.guard.getNavigation().startMovingTo(center.getX() + 0.5D, center.getY(), center.getZ() + 0.5D, this.speed);
+				this.guard.getGuardNavigation().startMovingToStatic(slot, this.speed);
 			} else {
 				this.guard.getNavigation().stop();
 			}

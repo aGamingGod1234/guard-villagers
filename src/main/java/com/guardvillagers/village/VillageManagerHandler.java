@@ -327,7 +327,7 @@ public final class VillageManagerHandler {
 		int xOffset = SPAWN_RING_OFFSETS[ringIndex];
 		int zOffset = SPAWN_RING_OFFSETS[(ringIndex + 1) % SPAWN_RING_OFFSETS.length];
 		BlockPos origin = village.center().add(xOffset, 0, zOffset);
-		BlockPos spawn = GuardVillagersMod.findGuardSpawnPos(world, origin, 10);
+		BlockPos spawn = GuardVillagersMod.findNearbyGuardSpawnPos(world, origin, 10);
 		if (spawn == null) {
 			GuardVillagersMod.LOGGER.warn("No valid spawn position found for village guard in {}", village.id());
 			return false;
