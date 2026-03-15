@@ -531,6 +531,7 @@ public class GuardVillagersMod implements ModInitializer {
 		if (world.spawnEntity(guard)) {
 			return guard;
 		}
+		GuardOwnershipIndex.untrack(guard);
 		return null;
 	}
 

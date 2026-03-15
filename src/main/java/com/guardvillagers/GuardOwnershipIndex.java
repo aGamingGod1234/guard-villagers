@@ -4,7 +4,6 @@ import com.guardvillagers.entity.GuardEntity;
 import net.minecraft.entity.Entity;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.Box;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
@@ -14,7 +13,6 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class GuardOwnershipIndex {
-	private static final int WORLD_SEARCH_LIMIT = 30_000_000;
 	private static final int CLEANUP_INTERVAL_TICKS = 200;
 	private static volatile long lastCleanupTick = Long.MIN_VALUE;
 
@@ -64,16 +62,7 @@ public final class GuardOwnershipIndex {
 			return List.of();
 		}
 
-		List<GuardEntity> indexed = resolveIndexedGuards(server, ownerUuid);
-		if (!indexed.isEmpty()) {
-			return indexed;
-		}
-
-		List<GuardEntity> scanned = scanOwnedGuards(server, ownerUuid);
-		for (GuardEntity guard : scanned) {
-			track(guard);
-		}
-		return scanned;
+		return resolveIndexedGuards(server, ownerUuid);
 	}
 
 	public static int countOwnedGuards(MinecraftServer server, UUID ownerUuid) {
@@ -82,15 +71,7 @@ public final class GuardOwnershipIndex {
 		}
 
 		Set<UUID> indexedIds = OWNER_TO_GUARDS.get(ownerUuid);
-		if (indexedIds != null && !indexedIds.isEmpty()) {
-			return indexedIds.size();
-		}
-
-		List<GuardEntity> scanned = scanOwnedGuards(server, ownerUuid);
-		for (GuardEntity guard : scanned) {
-			track(guard);
-		}
-		return scanned.size();
+		return indexedIds == null ? 0 : indexedIds.size();
 	}
 
 	private static List<GuardEntity> resolveIndexedGuards(MinecraftServer server, UUID ownerUuid) {
@@ -134,18 +115,6 @@ public final class GuardOwnershipIndex {
 			}
 		}
 		return null;
-	}
-
-	private static List<GuardEntity> scanOwnedGuards(MinecraftServer server, UUID ownerUuid) {
-		List<GuardEntity> guards = new ArrayList<>();
-		for (ServerWorld world : server.getWorlds()) {
-			guards.addAll(world.getEntitiesByClass(
-				GuardEntity.class,
-				new Box(-WORLD_SEARCH_LIMIT, world.getBottomY(), -WORLD_SEARCH_LIMIT, WORLD_SEARCH_LIMIT, world.getTopYInclusive(), WORLD_SEARCH_LIMIT),
-				guard -> guard.isOwnedBy(ownerUuid)
-			));
-		}
-		return guards;
 	}
 
 	private static void maybeCleanup(long worldTime) {

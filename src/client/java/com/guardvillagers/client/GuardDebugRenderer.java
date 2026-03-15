@@ -33,18 +33,20 @@ public final class GuardDebugRenderer {
 	private static final float LABEL_SCALE = 0.020F;
 	private static final float LINE_HALF_WIDTH = 0.015F;
 	private static final int PATH_TRAIL_KEEP_BEHIND = 3;
-	private static final double PATH_MARKER_Y_OFFSET = 0.015D;
-	private static final double PATH_MARKER_HEIGHT = 0.045D;
-	private static final float PATH_CURRENT_R = 0.18F;
-	private static final float PATH_CURRENT_G = 0.95F;
-	private static final float PATH_CURRENT_B = 0.28F;
-	private static final float PATH_NODE_R = 0.20F;
-	private static final float PATH_NODE_G = 0.55F;
+	private static final double PATH_FILL_Y_OFFSET = 0.016D;
+	private static final double PATH_OUTLINE_Y_OFFSET = 0.018D;
+	private static final double PATH_OUTLINE_THICKNESS = 0.065D;
+	private static final float PATH_CURRENT_R = 0.42F;
+	private static final float PATH_CURRENT_G = 1.00F;
+	private static final float PATH_CURRENT_B = 0.34F;
+	private static final float PATH_NODE_R = 0.34F;
+	private static final float PATH_NODE_G = 0.72F;
 	private static final float PATH_NODE_B = 1.00F;
 	private static final float PATH_DESTINATION_R = 1.00F;
-	private static final float PATH_DESTINATION_G = 0.22F;
-	private static final float PATH_DESTINATION_B = 0.22F;
-	private static final float PATH_ALPHA = 0.34F;
+	private static final float PATH_DESTINATION_G = 0.38F;
+	private static final float PATH_DESTINATION_B = 0.34F;
+	private static final float PATH_FILL_ALPHA = 0.30F;
+	private static final float PATH_OUTLINE_ALPHA = 0.82F;
 	private static final float[][] CIRCLE_POINTS = buildCirclePoints();
 	private static final List<GuardEntity> CACHED_GUARDS = new ArrayList<>();
 	private static long lastCacheTick = Long.MIN_VALUE;
@@ -185,22 +187,21 @@ public final class GuardDebugRenderer {
 			}
 			BlockPos node = nodes.get(i);
 			if (i == currentPathIndex) {
-				drawFlatMarker(matrices, filled, node, PATH_CURRENT_R, PATH_CURRENT_G, PATH_CURRENT_B, PATH_ALPHA);
+				drawPathMarkerCarpet(matrices, filled, node, PATH_CURRENT_R, PATH_CURRENT_G, PATH_CURRENT_B);
 				continue;
 			}
 			if (i == nodes.size() - 1) {
-				drawFlatMarker(
+				drawPathMarkerCarpet(
 					matrices,
 					filled,
 					node,
 					PATH_DESTINATION_R,
 					PATH_DESTINATION_G,
-					PATH_DESTINATION_B,
-					PATH_ALPHA
+					PATH_DESTINATION_B
 				);
 				continue;
 			}
-			drawFlatMarker(matrices, filled, node, PATH_NODE_R, PATH_NODE_G, PATH_NODE_B, PATH_ALPHA);
+			drawPathMarkerCarpet(matrices, filled, node, PATH_NODE_R, PATH_NODE_G, PATH_NODE_B);
 		}
 	}
 
@@ -368,33 +369,96 @@ public final class GuardDebugRenderer {
 		return builder.length() == 0 ? "Nil" : builder.toString();
 	}
 
-	private static void drawFlatMarker(MatrixStack matrices, VertexConsumer consumer, BlockPos pos, float r, float g, float b, float a) {
-		double minY = pos.getY() + PATH_MARKER_Y_OFFSET;
-		double maxY = minY + PATH_MARKER_HEIGHT;
-		drawFilledBox(
+	private static void drawPathMarkerCarpet(MatrixStack matrices, VertexConsumer consumer, BlockPos pos, float r, float g, float b) {
+		double minX = pos.getX();
+		double maxX = minX + 1.0D;
+		double minZ = pos.getZ();
+		double maxZ = minZ + 1.0D;
+
+		drawHorizontalQuad(
 			matrices,
 			consumer,
-			pos.getX(),
-			minY,
-			pos.getZ(),
-			pos.getX() + 1.0D,
-			maxY,
-			pos.getZ() + 1.0D,
+			minX,
+			pos.getY() + PATH_FILL_Y_OFFSET,
+			minZ,
+			maxX,
+			maxZ,
 			r,
 			g,
 			b,
-			a
+			PATH_FILL_ALPHA
+		);
+
+		float outlineR = brightenChannel(r);
+		float outlineG = brightenChannel(g);
+		float outlineB = brightenChannel(b);
+		double outlineY = pos.getY() + PATH_OUTLINE_Y_OFFSET;
+
+		drawHorizontalQuad(
+			matrices,
+			consumer,
+			minX,
+			outlineY,
+			minZ,
+			maxX,
+			minZ + PATH_OUTLINE_THICKNESS,
+			outlineR,
+			outlineG,
+			outlineB,
+			PATH_OUTLINE_ALPHA
+		);
+		drawHorizontalQuad(
+			matrices,
+			consumer,
+			minX,
+			outlineY,
+			maxZ - PATH_OUTLINE_THICKNESS,
+			maxX,
+			maxZ,
+			outlineR,
+			outlineG,
+			outlineB,
+			PATH_OUTLINE_ALPHA
+		);
+		drawHorizontalQuad(
+			matrices,
+			consumer,
+			minX,
+			outlineY,
+			minZ + PATH_OUTLINE_THICKNESS,
+			minX + PATH_OUTLINE_THICKNESS,
+			maxZ - PATH_OUTLINE_THICKNESS,
+			outlineR,
+			outlineG,
+			outlineB,
+			PATH_OUTLINE_ALPHA
+		);
+		drawHorizontalQuad(
+			matrices,
+			consumer,
+			maxX - PATH_OUTLINE_THICKNESS,
+			outlineY,
+			minZ + PATH_OUTLINE_THICKNESS,
+			maxX,
+			maxZ - PATH_OUTLINE_THICKNESS,
+			outlineR,
+			outlineG,
+			outlineB,
+			PATH_OUTLINE_ALPHA
 		);
 	}
 
-	private static void drawFilledBox(
+	private static float brightenChannel(float channel) {
+		return Math.min(1.0F, channel + 0.24F);
+	}
+
+	private static void drawHorizontalQuad(
 		MatrixStack matrices,
 		VertexConsumer consumer,
 		double minX,
-		double minY,
+		double y,
 		double minZ,
 		double maxX,
-		double maxY,
 		double maxZ,
 		float r,
 		float g,
@@ -402,13 +466,7 @@ public final class GuardDebugRenderer {
 		float a
 	) {
 		Matrix4f matrix = matrices.peek().getPositionMatrix();
-
-		quad(consumer, matrix, minX, minY, minZ, maxX, minY, minZ, maxX, maxY, minZ, minX, maxY, minZ, r, g, b, a);
-		quad(consumer, matrix, minX, minY, maxZ, maxX, minY, maxZ, maxX, maxY, maxZ, minX, maxY, maxZ, r, g, b, a);
-		quad(consumer, matrix, minX, minY, minZ, minX, minY, maxZ, minX, maxY, maxZ, minX, maxY, minZ, r, g, b, a);
-		quad(consumer, matrix, maxX, minY, minZ, maxX, minY, maxZ, maxX, maxY, maxZ, maxX, maxY, minZ, r, g, b, a);
-		quad(consumer, matrix, minX, maxY, minZ, maxX, maxY, minZ, maxX, maxY, maxZ, minX, maxY, maxZ, r, g, b, a);
-		quad(consumer, matrix, minX, minY, minZ, maxX, minY, minZ, maxX, minY, maxZ, minX, minY, maxZ, r, g, b, a);
+		quad(consumer, matrix, minX, y, minZ, maxX, y, minZ, maxX, y, maxZ, minX, y, maxZ, r, g, b, a);
 	}
 
 	private static void quad(

@@ -126,6 +126,8 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private static final Identifier FOLLOW_CATCH_UP_SPEED_MODIFIER_ID = GuardVillagersMod.id("guard_follow_catch_up_speed");
 	private static final double FOLLOW_CATCH_UP_SPEED_BONUS = 0.35D;
 	private static final int INITIAL_SPREAD_TICKS = 5;
+	private static final double INITIAL_SPREAD_SPEED = 1.0D;
+	private static final double INITIAL_SPREAD_COMPLETE_DISTANCE_SQUARED = 0.45D * 0.45D;
 	private static final double SLOT_SPACING = 1.75D;
 	private static final double TARGET_APPROACH_DISTANCE = 2.5D;
 	private static final double FOLLOW_SLOT_CATCH_UP_DISTANCE_SQUARED = 12.0D * 12.0D;
@@ -289,6 +291,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private boolean playerMainHand;
 	private boolean catchUpSpeedActive;
 	private boolean initialSpreadResolved;
+	private BlockPos pendingInitialSpreadTarget;
 	private int loadoutArmorLevel;
 	private int loadoutWeaponLevel;
 	private int loadoutSupportLevel;
@@ -1364,6 +1367,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		}
 
 		this.aiController.tick(world);
+		this.tickInitialSpawnDispersal(world);
 		this.syncSupportEquipment();
 		this.updateShieldUsage();
 		this.updateGroupNameplate();
@@ -1392,12 +1396,33 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			return;
 		}
 
-		this.refreshPositionAndAngles(
-				spreadTarget.getX() + 0.5D,
-				spreadTarget.getY(),
-				spreadTarget.getZ() + 0.5D,
-				this.getYaw(),
-				this.getPitch());
+		this.pendingInitialSpreadTarget = spreadTarget.toImmutable();
+	}
+
+	private void tickInitialSpawnDispersal(ServerWorld world) {
+		BlockPos spreadTarget = this.pendingInitialSpreadTarget;
+		if (spreadTarget == null) {
+			return;
+		}
+		if (!GuardVillagersMod.canGuardSpawnAt(world, spreadTarget)) {
+			this.pendingInitialSpreadTarget = null;
+			return;
+		}
+
+		Vec3d targetPos = Vec3d.ofBottomCenter(spreadTarget);
+		if (this.squaredDistanceTo(targetPos.x, targetPos.y, targetPos.z) <= INITIAL_SPREAD_COMPLETE_DISTANCE_SQUARED) {
+			this.pendingInitialSpreadTarget = null;
+			return;
+		}
+
+		if (this.age <= INITIAL_SPREAD_TICKS) {
+			this.getGuardNavigation().startMovingToStatic(spreadTarget, INITIAL_SPREAD_SPEED);
+			return;
+		}
+
+		if (this.getNavigation().isIdle()) {
+			this.pendingInitialSpreadTarget = null;
+		}
 	}
 
 	private void syncSupportEquipment() {
