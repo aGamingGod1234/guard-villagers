@@ -92,11 +92,6 @@ public final class GuardDebugRenderer {
 			renderDetectionCircle(matrices, vertexConsumers, guard, cameraPos);
 			renderPathHighlights(matrices, vertexConsumers, guard, snapshot);
 			renderTargetLine(matrices, vertexConsumers, guard, snapshot, client, cameraPos);
-		}
-		for (GuardEntity guard : CACHED_GUARDS) {
-			if (!guard.isAlive() || guard.squaredDistanceTo(client.player) > maxDistanceSq) {
-				continue;
-			}
 			renderLabels(matrices, vertexConsumers, guard, client, worldContext);
 		}
 
@@ -293,7 +288,7 @@ public final class GuardDebugRenderer {
 	}
 
 	private static List<DebugLabelLine> buildLabelLines(GuardEntity guard, MinecraftClient client, ClientTacticsDataStore.WorldContext worldContext) {
-		List<DebugLabelLine> lines = new ArrayList<>();
+		List<DebugLabelLine> lines = new ArrayList<>(9);
 		int hp = Math.max(0, MathHelper.floor(guard.getHealth()));
 		int maxHp = Math.max(1, MathHelper.floor(guard.getMaxHealth()));
 		lines.add(line("HP: " + hp + "/" + maxHp, 0xFF5555));

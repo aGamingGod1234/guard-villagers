@@ -1076,8 +1076,8 @@ public class GuardVillagersMod implements ModInitializer {
 			sendDebugSync(player, true, effectiveRange);
 			double maxDistanceSq = effectiveRange * effectiveRange;
 			Map<Integer, Integer> previousHashes = DEBUG_PATH_HASH_CACHE.getOrDefault(playerId, Map.of());
-			Map<Integer, Integer> nextHashes = new HashMap<>();
-			List<GuardDebugDataPayload.GuardDebugEntry> changedEntries = new ArrayList<>();
+			Map<Integer, Integer> nextHashes = new HashMap<>(previousHashes.size());
+			List<GuardDebugDataPayload.GuardDebugEntry> changedEntries = new ArrayList<>(previousHashes.size());
 
 			for (GuardEntity guard : world.getEntitiesByClass(
 					GuardEntity.class,

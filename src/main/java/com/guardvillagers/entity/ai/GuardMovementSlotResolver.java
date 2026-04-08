@@ -22,7 +22,7 @@ public final class GuardMovementSlotResolver {
 	private static final Comparator<GuardEntity> SLOT_ORDER = Comparator
 			.comparingInt(GuardEntity::getGroupIndex)
 			.thenComparingInt(GuardEntity::getGroupColumn)
-			.thenComparing(entity -> entity.getUuid().toString());
+			.thenComparing(entity -> entity.getUuid());
 
 	private GuardMovementSlotResolver() {
 	}

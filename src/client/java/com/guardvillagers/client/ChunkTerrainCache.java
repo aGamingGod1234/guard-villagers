@@ -173,9 +173,11 @@ public final class ChunkTerrainCache {
 
 	private TerrainTile createTerrainTile(String worldKey, long chunkKey, TerrainSnapshot snapshot) {
 		NativeImage image = new NativeImage(TILE_RESOLUTION, TILE_RESOLUTION, false);
+		int[] colors = snapshot.colors();
 		for (int pixelZ = 0; pixelZ < TILE_RESOLUTION; pixelZ++) {
+			int rowOffset = pixelZ * TILE_RESOLUTION;
 			for (int pixelX = 0; pixelX < TILE_RESOLUTION; pixelX++) {
-				image.setColorArgb(pixelX, pixelZ, snapshot.colors()[pixelZ * TILE_RESOLUTION + pixelX]);
+				image.setColorArgb(pixelX, pixelZ, colors[rowOffset + pixelX]);
 			}
 		}
 
@@ -212,10 +214,11 @@ public final class ChunkTerrainCache {
 	private static int[] snapshotHeightmap(WorldChunk chunk) {
 		int[] heights = new int[TILE_PIXEL_COUNT];
 		for (int sampleZ = 0; sampleZ < TILE_RESOLUTION; sampleZ++) {
+			int localZ = (sampleZ * 16) / TILE_RESOLUTION;
+			int rowOffset = sampleZ * TILE_RESOLUTION;
 			for (int sampleX = 0; sampleX < TILE_RESOLUTION; sampleX++) {
 				int localX = (sampleX * 16) / TILE_RESOLUTION;
-				int localZ = (sampleZ * 16) / TILE_RESOLUTION;
-				heights[sampleZ * TILE_RESOLUTION + sampleX] = chunk.sampleHeightmap(Heightmap.Type.WORLD_SURFACE, localX, localZ);
+				heights[rowOffset + sampleX] = chunk.sampleHeightmap(Heightmap.Type.WORLD_SURFACE, localX, localZ);
 			}
 		}
 		return heights;
@@ -224,15 +227,18 @@ public final class ChunkTerrainCache {
 	private static int[] snapshotBlockColors(ClientWorld world, WorldChunk chunk, ChunkPos chunkPos, int[] heightmap) {
 		int[] colors = new int[TILE_PIXEL_COUNT];
 		int worldBottom = world.getBottomY();
+		int startX = chunkPos.getStartX();
+		int startZ = chunkPos.getStartZ();
 		BlockPos.Mutable pos = new BlockPos.Mutable();
 
 		for (int sampleZ = 0; sampleZ < TILE_RESOLUTION; sampleZ++) {
+			int localZ = (sampleZ * 16) / TILE_RESOLUTION;
+			int worldZ = startZ + localZ;
+			int rowOffset = sampleZ * TILE_RESOLUTION;
 			for (int sampleX = 0; sampleX < TILE_RESOLUTION; sampleX++) {
 				int localX = (sampleX * 16) / TILE_RESOLUTION;
-				int localZ = (sampleZ * 16) / TILE_RESOLUTION;
-				int worldX = chunkPos.getStartX() + localX;
-				int worldZ = chunkPos.getStartZ() + localZ;
-				int index = sampleZ * TILE_RESOLUTION + sampleX;
+				int worldX = startX + localX;
+				int index = rowOffset + sampleX;
 				int sampleY = Math.max(worldBottom, heightmap[index] - 1);
 
 				pos.set(worldX, sampleY, worldZ);

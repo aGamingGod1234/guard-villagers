@@ -284,7 +284,8 @@ public class GuardNavigation extends MobNavigation {
 	}
 
 	private boolean isFlowingWater(BlockPos pos) {
-		return this.world.getFluidState(pos).isIn(FluidTags.WATER) && !this.world.getFluidState(pos).isStill();
+		var fluid = this.world.getFluidState(pos);
+		return fluid.isIn(FluidTags.WATER) && !fluid.isStill();
 	}
 
 	private BlockPos findNearbyDryExit(ServerWorld serverWorld) {

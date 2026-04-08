@@ -55,7 +55,7 @@ public final class GuardAiController {
 			.thenComparingLong(TargetCandidate::latestTick)
 			.reversed()
 			.thenComparingDouble(TargetCandidate::distanceSq)
-			.thenComparing(candidate -> candidate.entity().getUuid().toString());
+			.thenComparing(candidate -> candidate.entity().getUuid());
 
 	private final GuardEntity guard;
 	private final List<GuardAlert> alerts = new ArrayList<>();
@@ -261,15 +261,29 @@ public final class GuardAiController {
 		this.addCandidate(candidates, this.findNearbyHostile(world), AlertReason.HOSTILE_SCAN, world.getTime(), false);
 		this.addCandidate(candidates, this.resolveOwnerHostilityTarget(world), AlertReason.OWNER_HOSTILE, world.getTime(), false);
 
-		List<TargetCandidate> sorted = candidates.values()
-				.stream()
-				.map(TargetAccumulator::freeze)
-				.sorted(TARGET_COMPARATOR)
-				.toList();
+		List<TargetCandidate> sorted = new ArrayList<>(candidates.size());
+		for (TargetAccumulator accumulator : candidates.values()) {
+			sorted.add(accumulator.freeze());
+		}
+		sorted.sort(TARGET_COMPARATOR);
 
 		TargetCandidate selected = sorted.isEmpty() ? null : sorted.getFirst();
-		TargetCandidate urgent = sorted.stream().filter(TargetCandidate::urgent).findFirst().orElse(null);
-		TargetCandidate primary = sorted.stream().filter(candidate -> !candidate.urgent()).findFirst().orElse(selected);
+		TargetCandidate urgent = null;
+		TargetCandidate primary = null;
+		for (TargetCandidate candidate : sorted) {
+			if (urgent == null && candidate.urgent()) {
+				urgent = candidate;
+			}
+			if (primary == null && !candidate.urgent()) {
+				primary = candidate;
+			}
+			if (urgent != null && primary != null) {
+				break;
+			}
+		}
+		if (primary == null) {
+			primary = selected;
+		}
 
 		LivingEntity combatTarget = selected == null || this.combatSuspended ? null : selected.entity();
 		GuardAiIntent intent = this.selectIntent(world, combatTarget, raid);
@@ -523,7 +537,7 @@ public final class GuardAiController {
 				.comparingInt((HostileEntity entity) -> this.scoreThreat(entity))
 				.reversed()
 				.thenComparingDouble((HostileEntity entity) -> this.guard.squaredDistanceTo(entity))
-				.thenComparing(entity -> entity.getUuid().toString()));
+				.thenComparing(entity -> entity.getUuid()));
 		return hostiles.getFirst();
 	}
 
@@ -540,7 +554,7 @@ public final class GuardAiController {
 		}
 		raiders.sort(Comparator
 				.comparingDouble((RaiderEntity entity) -> this.guard.squaredDistanceTo(entity))
-				.thenComparing(entity -> entity.getUuid().toString()));
+				.thenComparing(entity -> entity.getUuid()));
 		return raiders.getFirst();
 	}
 
@@ -626,6 +640,10 @@ public final class GuardAiController {
 			groupSize++;
 			if (other.getUrgentTargetUuid() != null) {
 				peeling++;
+			}
+			// Early exit: once peeling reaches the maximum possible cap (10), no need to continue
+			if (peeling >= 10) {
+				return true;
 			}
 		}
 		int peelCap = Math.max(1, Math.min(10, groupSize * 30 / 100));

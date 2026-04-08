@@ -61,9 +61,9 @@ public class SquadRouteCache {
         }
 
         CacheKey key = new CacheKey(groupId, quantize(target));
-        // Store a defensive copy so if the original creator mutates its path, the cache
-        // remains pristine
-        SQUAD_ROUTES.put(key, new CachedRoute(copyPath(path), currentTick, origin, target));
+        // Path is only read from cache via copyPath() on retrieval, so we can store
+        // the original directly and avoid a redundant copy on insert.
+        SQUAD_ROUTES.put(key, new CachedRoute(path, currentTick, origin, target));
     }
 
     public static void invalidateSquadRoute(UUID groupId, BlockPos target) {
@@ -74,30 +74,21 @@ public class SquadRouteCache {
     }
 
     /**
-     * Creates a safe defensive copy of a path.
+     * Creates a safe defensive copy of a path. PathNode instances are read-only
+     * structurally so sharing them is safe; only the Path wrapper (with its
+     * mutable currentNodeIndex) needs to be fresh.
      */
     private static Path copyPath(Path original) {
         if (original == null) {
             return null;
         }
 
-        // MC 1.21.1 Path node extraction and reconstruction
-        // Path constructor is usually Path(List<PathNode> nodes, BlockPos target,
-        // boolean reachesTarget)
-        // We can just use the indices
-        List<PathNode> nodes = new ArrayList<>();
-        for (int i = 0; i < original.getLength(); i++) {
-            PathNode originalNode = original.getNode(i);
-            // Reconstruct node so we don't share identical PathNode instances just in case,
-            // though usually shallow copying the node list is enough to get a fresh
-            // `currentNodeIndex` in the new Path.
-            // We'll just pass the same node instances since they are read-only
-            // structurally.
-            nodes.add(originalNode);
+        int length = original.getLength();
+        List<PathNode> nodes = new ArrayList<>(length);
+        for (int i = 0; i < length; i++) {
+            nodes.add(original.getNode(i));
         }
-
-        Path copiedPath = new Path(nodes, original.getTarget(), original.reachesTarget());
-        return copiedPath;
+        return new Path(nodes, original.getTarget(), original.reachesTarget());
     }
 
     private static BlockPos quantize(BlockPos pos) {

@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Random;
 
 public final class PerimeterPatrolGoal extends Goal {
 	private static final int EDGE_STEP = 6;
@@ -26,6 +27,7 @@ public final class PerimeterPatrolGoal extends Goal {
 
 	private final GuardEntity guard;
 	private final double speed;
+	private final Random shuffleRandom = new Random();
 	private VillageDescriptor village;
 	private final List<BlockPos> edgePoints = new ArrayList<>();
 	private final List<BlockPos> interiorPoints = new ArrayList<>();
@@ -77,7 +79,8 @@ public final class PerimeterPatrolGoal extends Goal {
 			this.modeSwitchTicks = MODE_SWITCH_BASE + this.guard.getRandom().nextInt(200);
 			List<BlockPos> active = this.activePoints();
 			if (!active.isEmpty()) {
-				Collections.shuffle(active, new java.util.Random(this.guard.getRandom().nextLong()));
+				this.shuffleRandom.setSeed(this.guard.getRandom().nextLong());
+				Collections.shuffle(active, this.shuffleRandom);
 			}
 		}
 
