@@ -85,11 +85,10 @@ public final class SeekAirGoal extends Goal {
     private BlockPos findAirAbove() {
         BlockPos guardPos = this.guard.getBlockPos();
         World world = this.guard.getEntityWorld();
-        for (int dy = 1; dy <= MAX_VERTICAL_SCAN; dy++) {
+        for (int dy = 0; dy <= MAX_VERTICAL_SCAN; dy++) {
             BlockPos checkPos = guardPos.up(dy);
             if (isBreathable(world, checkPos)) {
-                // Return the block below the air so the guard stands there
-                return checkPos.down();
+                return checkPos;
             }
         }
         return null;
@@ -97,6 +96,6 @@ public final class SeekAirGoal extends Goal {
 
     private static boolean isBreathable(World world, BlockPos pos) {
         BlockState state = world.getBlockState(pos);
-        return !state.isSolidBlock(world, pos) && !state.getFluidState().isStill();
+        return !state.isSolidBlock(world, pos) && state.getFluidState().isEmpty();
     }
 }

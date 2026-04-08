@@ -168,10 +168,10 @@ public final class PerimeterPatrolGoal extends Goal {
 
 		int guardSeed = this.guard.getId();
 		if (!this.edgePoints.isEmpty()) {
-			Collections.rotate(this.edgePoints, guardSeed % this.edgePoints.size());
+			Collections.rotate(this.edgePoints, Math.floorMod(guardSeed, this.edgePoints.size()));
 		}
 		if (!this.interiorPoints.isEmpty()) {
-			Collections.rotate(this.interiorPoints, guardSeed % this.interiorPoints.size());
+			Collections.rotate(this.interiorPoints, Math.floorMod(guardSeed, this.interiorPoints.size()));
 		}
 	}
 

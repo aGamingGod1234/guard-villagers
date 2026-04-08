@@ -23,6 +23,13 @@ public final class GuardOwnershipIndex {
 	private GuardOwnershipIndex() {
 	}
 
+	public static void clearAll() {
+		OWNER_TO_GUARDS.clear();
+		GUARD_TO_OWNER.clear();
+		GUARD_REFERENCES.clear();
+		lastCleanupTick = Long.MIN_VALUE;
+	}
+
 	public static void track(GuardEntity guard) {
 		if (guard == null) {
 			return;
@@ -127,6 +134,7 @@ public final class GuardOwnershipIndex {
 			WeakReference<GuardEntity> reference = GUARD_REFERENCES.get(guardId);
 			GuardEntity guard = reference == null ? null : reference.get();
 			if (guard == null || guard.isRemoved()) {
+				removeGuard(guardId);
 				continue;
 			}
 			UUID indexedOwner = GUARD_TO_OWNER.get(guardId);

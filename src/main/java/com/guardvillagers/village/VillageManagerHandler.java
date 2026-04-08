@@ -249,7 +249,7 @@ public final class VillageManagerHandler {
 	}
 
 	private static double calculateDensity(VillageDescriptor village, int villagerCount) {
-		double area = Math.max(1.0D, village.bounds().getBlockCountX() * village.bounds().getBlockCountZ());
+		double area = Math.max(1.0D, (double) village.bounds().getBlockCountX() * village.bounds().getBlockCountZ());
 		return villagerCount / (area / 256.0D);
 	}
 

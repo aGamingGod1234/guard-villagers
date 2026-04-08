@@ -57,6 +57,7 @@ public final class RaidTacticsGoal extends Goal {
 		if (this.guard.isBehaviorExecutor(GuardBehaviorExecutor.RAID_OFFENSIVE)) {
 			RaiderEntity target = findNearestRaider(world);
 			if (target != null) {
+				this.guard.setTarget(target);
 				if (this.guard.squaredDistanceTo(target) > 16.0D) {
 					this.guard.getGuardNavigation().startMovingToDynamic(this.guard.resolveCombatApproachSlot(world, target),
 							this.speed);

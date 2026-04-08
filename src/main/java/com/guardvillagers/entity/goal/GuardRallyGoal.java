@@ -41,6 +41,11 @@ public final class GuardRallyGoal extends Goal {
 			return;
 		}
 		BlockPos slot = this.guard.resolveGroundMovementSlot(world, rallyPoint, 1.75D, false);
-		this.guard.getGuardNavigation().startMovingToStatic(slot, this.speed);
+		double distanceSq = this.guard.squaredDistanceTo(slot.getX() + 0.5D, slot.getY(), slot.getZ() + 0.5D);
+		if (distanceSq > 2.25D) {
+			this.guard.getGuardNavigation().startMovingToStatic(slot, this.speed);
+		} else {
+			this.guard.getNavigation().stop();
+		}
 	}
 }

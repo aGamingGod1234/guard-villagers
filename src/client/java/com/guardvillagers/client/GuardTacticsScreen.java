@@ -828,7 +828,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		}
 		String requested = this.groupRenameField.getText();
 		if (requested == null || requested.isBlank()) {
-			requested = "Role";
+			requested = "Alpha";
 		}
 		this.dataStore.setGroupName(worldContext, this.editingRow, requested);
 
@@ -920,7 +920,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			return true;
 		}
 		String trimmed = groupName.trim();
-		return trimmed.equals("Role") || trimmed.matches("Role\\s+\\d+");
+		return trimmed.equals("Alpha") || trimmed.equals("Beta")
+			|| trimmed.matches("Group\\s+\\d+");
 	}
 
 	private String itemName(ItemStack stack) {
@@ -1024,7 +1025,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		if (maxScroll <= 0 || totalContent <= 0) {
 			return;
 		}
-		int thumbH = Math.max(10, height * height / totalContent);
+		int thumbH = Math.max(10, Math.min(height, height * height / totalContent));
 		int thumbY = y + (int) ((long) scroll * (height - thumbH) / maxScroll);
 		context.fill(x, thumbY, x + width, thumbY + thumbH, PANEL_BORDER);
 	}
@@ -1164,6 +1165,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 	private void saveAssignments() {
 		if (this.client == null || this.client.getNetworkHandler() == null) {
+			this.pendingAssignments.clear();
+			this.dirty = false;
 			return;
 		}
 		for (Map.Entry<UUID, Integer> entry : this.pendingAssignments.entrySet()) {

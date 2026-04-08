@@ -23,6 +23,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
@@ -76,6 +77,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -91,7 +93,7 @@ public class GuardVillagersMod implements ModInitializer {
 	private static final int DEBUG_SYNC_INTERVAL_TICKS = 5;
 	private static final int DEBUG_MAX_PATH_NODES = 64;
 	private static final Pattern REPUTATION_INPUT_PATTERN = Pattern.compile("^(?:0(?:\\.\\d{1,2})?|1(?:\\.0{1,2})?)$");
-	private static final Map<UUID, Map<Integer, Integer>> DEBUG_PATH_HASH_CACHE = new HashMap<>();
+	private static final Map<UUID, Map<Integer, Integer>> DEBUG_PATH_HASH_CACHE = new ConcurrentHashMap<>();
 
 	public enum GuardPurchaseResult {
 		SUCCESS,
@@ -619,7 +621,7 @@ public class GuardVillagersMod implements ModInitializer {
 	private static int addGroup(ServerPlayerEntity player) {
 		MinecraftServer server = player.getCommandSource().getServer();
 		if (server == null) {
-			return 0;
+			return -1;
 		}
 		GuardTacticsState state = GuardTacticsManager.getState(server);
 		GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUuid());
@@ -930,6 +932,11 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	private void registerEvents() {
+		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+			GuardOwnershipIndex.clearAll();
+			GuardReputationManager.clearCooldowns();
+			DEBUG_PATH_HASH_CACHE.clear();
+		});
 		AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
 			if (world.isClient() || !(player instanceof ServerPlayerEntity serverPlayer)
 					|| !(entity instanceof LivingEntity livingTarget)) {

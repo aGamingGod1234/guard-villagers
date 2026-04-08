@@ -21,6 +21,7 @@ public final class ElectLeaderGoal extends Goal {
 	@Override
 	public boolean canStart() {
 		return this.guard.hasSquad()
+			&& this.guard.age > 0
 			&& this.guard.age % 80 == 0
 			&& this.guard.getEntityWorld() instanceof ServerWorld;
 	}

@@ -345,8 +345,10 @@ public final class GuardTacticsState extends PersistentState {
 			return column >= MIN_COLUMN_INDEX && column <= MAX_COLUMN_INDEX;
 		}
 
+		private static final int MAX_ROW_INDEX = 256;
+
 		private static int normalizeRow(int row) {
-			return Math.max(MIN_ROW_INDEX, row);
+			return Math.max(MIN_ROW_INDEX, Math.min(MAX_ROW_INDEX, row));
 		}
 
 		private static int normalizeColumn(int column) {

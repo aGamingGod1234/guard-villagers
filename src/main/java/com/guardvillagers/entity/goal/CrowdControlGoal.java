@@ -47,7 +47,9 @@ public final class CrowdControlGoal extends Goal {
 			return;
 		}
 		if (this.recalculateTicks-- <= 0) {
-			this.resolveAnchor();
+			if (!this.resolveAnchor()) {
+				this.anchor = null;
+			}
 			this.recalculateTicks = 100;
 		}
 
@@ -72,7 +74,7 @@ public final class CrowdControlGoal extends Goal {
 			PointOfInterestStorage.OccupationStatus.ANY
 		);
 
-		this.anchor = meetingPoint.orElse(this.guard.getHome().orElse(this.guard.getBlockPos()));
+		this.anchor = meetingPoint.orElse(this.guard.getHome().orElse(null));
 		return this.anchor != null;
 	}
 }

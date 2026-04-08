@@ -32,7 +32,7 @@ public final class GuardBowAttackGoal extends Goal {
 
 	@Override
 	public boolean shouldContinue() {
-		return this.hasValidTarget() || !this.guard.getNavigation().isIdle();
+		return this.hasValidTarget();
 	}
 
 	@Override
@@ -64,7 +64,7 @@ public final class GuardBowAttackGoal extends Goal {
 		if (canSeeTarget) {
 			this.targetVisibleTicks++;
 		} else {
-			this.targetVisibleTicks--;
+			this.targetVisibleTicks = Math.max(this.targetVisibleTicks - 1, -60);
 		}
 
 		if (distanceSq <= (double) this.squaredRange && this.targetVisibleTicks >= 20) {

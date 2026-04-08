@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class GuardReputationManager {
 	private static final double TRUST_THRESHOLD = 0.50D;
-	private static final double HOSTILE_THRESHOLD = 0.50D;
+	private static final double HOSTILE_THRESHOLD = 0.30D;
 	private static final int LEGACY_RANGE_SPAN = 400;
 	private static final int TRADE_COOLDOWN_TICKS = 200;
 	private static final int COOLDOWN_RETENTION_TICKS = 20 * 60 * 10;
@@ -32,6 +32,11 @@ public final class GuardReputationManager {
 	private static volatile long lastCooldownCleanupTick = Long.MIN_VALUE;
 
 	private GuardReputationManager() {
+	}
+
+	public static void clearCooldowns() {
+		TRADE_REPUTATION_COOLDOWN.clear();
+		lastCooldownCleanupTick = Long.MIN_VALUE;
 	}
 
 	public static GuardReputationState getState(MinecraftServer server) {
@@ -63,7 +68,7 @@ public final class GuardReputationManager {
 	}
 
 	public static void resetReputation(ServerWorld world, UUID playerUuid) {
-		setReputation(world, playerUuid, 0.0D);
+		setReputation(world, playerUuid, GuardReputationState.DEFAULT_REPUTATION);
 	}
 
 	public static double applyReputationDelta(ServerWorld world, UUID playerUuid, int legacyDelta) {

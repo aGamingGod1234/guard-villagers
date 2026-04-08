@@ -71,7 +71,7 @@ public final class GuardDragHandler {
 
 		context.getMatrices().pushMatrix();
 		context.getMatrices().translate((float) this.dragX, (float) this.dragY);
-		context.getMatrices().scale(1.1F, 1.1F);
+		context.getMatrices().scale(1.1F, 1.1F, 1.0F);
 		context.getMatrices().translate((float) -this.dragX, (float) -this.dragY);
 
 		context.fill(x, y, x + cardW, y + cardH, 0xEE1E2A38);

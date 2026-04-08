@@ -51,9 +51,10 @@ public class GuardNavigation extends MobNavigation {
 
 	@Override
 	public Path findPathTo(BlockPos target, int distance) {
-		if (target != null) {
-			this.lastTargetPos = target.toImmutable();
+		if (target == null) {
+			return null;
 		}
+		this.lastTargetPos = target.toImmutable();
 
 		if (this.guard.getAir() < 80 || this.routeMode != RouteMode.STATIC) {
 			this.lastRecalculateTick = this.guard.getEntityWorld().getTime();

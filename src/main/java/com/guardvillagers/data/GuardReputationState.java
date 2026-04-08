@@ -79,7 +79,14 @@ public final class GuardReputationState extends PersistentState {
 		boolean changed = false;
 		for (Map.Entry<UUID, Double> entry : this.reputation.entrySet()) {
 			double current = entry.getValue();
-			double decayed = clamp(current - amount);
+			double decayed;
+			if (current > DEFAULT_REPUTATION) {
+				decayed = clamp(Math.max(DEFAULT_REPUTATION, current - amount));
+			} else if (current < DEFAULT_REPUTATION) {
+				decayed = clamp(Math.min(DEFAULT_REPUTATION, current + amount));
+			} else {
+				continue;
+			}
 			if (Double.compare(current, decayed) != 0) {
 				entry.setValue(decayed);
 				changed = true;

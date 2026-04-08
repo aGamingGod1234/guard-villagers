@@ -64,7 +64,11 @@ public class GuardShopInventory extends SimpleInventory {
 			if (this.player.getAbilities().creativeMode) {
 				requested = 64;
 			} else {
-				requested = Math.max(1, GuardEconomy.countEmeraldBlocks(this.player.getInventory()) / Math.max(1, cost));
+				requested = GuardEconomy.countEmeraldBlocks(this.player.getInventory()) / Math.max(1, cost);
+				if (requested <= 0) {
+					this.player.sendMessage(Text.literal("Need " + cost + " emerald block(s) to hire a guard."), true);
+					return;
+				}
 			}
 		} else {
 			requested = 1;

@@ -598,7 +598,7 @@ public final class GuardAiController {
 		if (this.guard.isStaying() || this.combatSuspended || this.retreating) {
 			return false;
 		}
-		return !(this.guard.getHealth() <= this.guard.getMaxHealth() * ALERT_REJECTION_HEALTH_RATIO && this.combatCooldown <= 0);
+		return !(this.guard.getHealth() <= this.guard.getMaxHealth() * ALERT_REJECTION_HEALTH_RATIO && this.combatCooldown > 0);
 	}
 
 	private int scoreThreat(LivingEntity target) {

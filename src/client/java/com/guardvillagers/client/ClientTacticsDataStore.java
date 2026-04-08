@@ -199,8 +199,6 @@ public final class ClientTacticsDataStore {
 
 		if (worldData.rowColorByGroup.put(normalizedRow, normalized.id()) != normalized.id()) {
 			this.markDirty();
-		} else {
-			this.markDirty();
 		}
 	}
 

@@ -23,22 +23,18 @@ public class GuardArrowEntity extends ArrowEntity {
 	protected void onEntityHit(EntityHitResult entityHitResult) {
 		Entity hitEntity = entityHitResult.getEntity();
 		Entity owner = this.getOwner();
-		if (hitEntity instanceof GuardEntity hitGuard && owner instanceof GuardEntity shooterGuard) {
-			if (shooterGuard.getOwnerUuid() != null && shooterGuard.getOwnerUuid().equals(hitGuard.getOwnerUuid())) {
-				if (this.getEntityWorld() instanceof ServerWorld) {
-					this.discard();
-				}
+		if (owner instanceof GuardEntity shooterGuard) {
+			// Don't hit the guard's owner player
+			if (shooterGuard.getOwnerUuid() != null && hitEntity.getUuid().equals(shooterGuard.getOwnerUuid())) {
+				return;
+			}
+			// Don't hit allied guards with the same owner
+			if (hitEntity instanceof GuardEntity hitGuard
+					&& shooterGuard.getOwnerUuid() != null
+					&& shooterGuard.getOwnerUuid().equals(hitGuard.getOwnerUuid())) {
 				return;
 			}
 		}
 		super.onEntityHit(entityHitResult);
-	}
-
-	@Override
-	protected void onHit(LivingEntity target) {
-		super.onHit(target);
-		if (this.getEntityWorld() instanceof ServerWorld) {
-			this.discard();
-		}
 	}
 }

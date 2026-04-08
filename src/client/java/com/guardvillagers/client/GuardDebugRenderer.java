@@ -296,34 +296,34 @@ public final class GuardDebugRenderer {
 		List<DebugLabelLine> lines = new ArrayList<>();
 		int hp = Math.max(0, MathHelper.floor(guard.getHealth()));
 		int maxHp = Math.max(1, MathHelper.floor(guard.getMaxHealth()));
-		lines.add(line("HP: " + hp + "/" + maxHp, 0xFF5555));
+		lines.add(line("HP: " + hp + "/" + maxHp, 0xFFFF5555));
 
 		int level = guard.getLevel();
-		lines.add(line("Level: " + level, 0x55FF55));
+		lines.add(line("Level: " + level, 0xFF55FF55));
 
 		int xp = guard.getExperience();
 		String xpLine = level >= 10 ? "XP: " + xp + "/MAX" : "XP: " + xp + "/" + (level * 120);
-		lines.add(line(xpLine, 0x55FFFF));
+		lines.add(line(xpLine, 0xFF55FFFF));
 
-		lines.add(line("Role: " + titleCase(guard.getRole().name()), 0xFFFF55));
+		lines.add(line("Role: " + titleCase(guard.getRole().name()), 0xFFFFFF55));
 
 		LivingEntity target = guard.getTarget();
 		String targetValue = target == null ? "None" : target.getName().getString();
-		lines.add(line("Target: " + targetValue, 0xFF55FF));
+		lines.add(line("Target: " + targetValue, 0xFFFF55FF));
 
 		String typeValue = guard.getRole() == GuardRole.BOWMAN ? "Bowmen" : "Swordsmen";
-		lines.add(line("Type: " + typeValue, 0xF5E6A9));
+		lines.add(line("Type: " + typeValue, 0xFFF5E6A9));
 
 		UUID ownerUuid = guard.getOwnerUuid();
 		String ownerValue = ownerUuid == null ? "Nil" : resolveOwnerName(ownerUuid, client);
-		lines.add(line("Owned: " + ownerValue, ownerUuid == null ? 0xAAAAAA : 0xFFFFFF));
+		lines.add(line("Owned: " + ownerValue, ownerUuid == null ? 0xFFAAAAAA : 0xFFFFFFFF));
 
 		RegionColor regionColor = ClientTacticsDataStore.getInstance().getRegionColor(worldContext, guard.getBlockX() >> 4, guard.getBlockZ() >> 4);
 		String zoneValue = regionColor == RegionColor.NONE ? "Nil" : regionColor.label();
-		lines.add(line("Zone: " + zoneValue, regionColor == RegionColor.NONE ? 0xAAAAAA : 0x5555FF));
+		lines.add(line("Zone: " + zoneValue, regionColor == RegionColor.NONE ? 0xFFAAAAAA : 0xFF5555FF));
 
 		String groupValue = guard.getGroupIndex() < 0 ? "Nil" : guard.getGroupName();
-		lines.add(line("Group: " + groupValue, guard.getGroupIndex() < 0 ? 0xAAAAAA : 0xFFAA00));
+		lines.add(line("Group: " + groupValue, guard.getGroupIndex() < 0 ? 0xFFAAAAAA : 0xFFFFAA00));
 		return lines;
 	}
 

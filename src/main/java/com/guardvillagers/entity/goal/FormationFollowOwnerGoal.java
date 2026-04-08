@@ -71,7 +71,10 @@ public final class FormationFollowOwnerGoal extends Goal {
 			return false;
 		}
 
-		if (!(this.owner.getEntityWorld() instanceof ServerWorld world)) {
+		if (!(this.guard.getEntityWorld() instanceof ServerWorld world)) {
+			return false;
+		}
+		if (this.guard.getEntityWorld() != this.owner.getEntityWorld()) {
 			return false;
 		}
 		Vec3d followSlot = this.guard.resolveFollowSlot(world, this.owner);
@@ -93,6 +96,7 @@ public final class FormationFollowOwnerGoal extends Goal {
 
 	@Override
 	public void start() {
+		this.resetProgressSampling();
 		this.updateCountdownTicks = 0;
 		this.settledTicks = 0;
 		if (this.owner != null && this.owner.getEntityWorld() instanceof ServerWorld world) {
@@ -133,7 +137,10 @@ public final class FormationFollowOwnerGoal extends Goal {
 			return;
 		}
 
-		if (!(this.owner.getEntityWorld() instanceof ServerWorld world)) {
+		if (!(this.guard.getEntityWorld() instanceof ServerWorld world)) {
+			return;
+		}
+		if (this.guard.getEntityWorld() != this.owner.getEntityWorld()) {
 			return;
 		}
 		Vec3d followSlot = this.guard.resolveFollowSlot(world, this.owner);

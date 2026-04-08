@@ -572,6 +572,10 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	public void setHome(BlockPos home, int patrolRadius) {
 		this.setFollowOverride(false);
+		if (home == null) {
+			this.clearHome();
+			return;
+		}
 		this.home = home.toImmutable();
 		this.setPatrolRadius(patrolRadius);
 		this.syncHomeData();
@@ -857,11 +861,14 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			};
 			ItemStack swordStack = new ItemStack(sword);
 			int sharpnessLevel = switch (weaponLevel) {
+				case 0 -> 0;
 				case 1 -> 1;
 				case 2 -> 2;
 				default -> 3;
 			};
-			this.applyEnchantment(world, swordStack, Enchantments.SHARPNESS, sharpnessLevel);
+			if (sharpnessLevel > 0) {
+				this.applyEnchantment(world, swordStack, Enchantments.SHARPNESS, sharpnessLevel);
+			}
 			this.equipStack(EquipmentSlot.MAINHAND, swordStack);
 		} else {
 			ItemStack bowStack = new ItemStack(Items.BOW);
@@ -1306,8 +1313,11 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	public boolean isSameGroup(GuardEntity other) {
-		if (other == null || other == this) {
+		if (other == this) {
 			return true;
+		}
+		if (other == null) {
+			return false;
 		}
 		if (this.ownerUuid != null && this.ownerUuid.equals(other.ownerUuid)) {
 			return true;
@@ -1930,7 +1940,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		super.readCustomData(view);
 		this.dataTracker.set(ROLE, view.getInt(ROLE_KEY, GuardRole.SWORDSMAN.getId()));
 		this.dataTracker.set(BEHAVIOR, view.getInt(BEHAVIOR_KEY, GuardBehavior.DEFENSIVE.getId()));
-		this.dataTracker.set(FORMATION, FormationType.FOLLOW.getId());
+		this.dataTracker.set(FORMATION, view.getInt(FORMATION_KEY, FormationType.FOLLOW.getId()));
 		this.staying = view.getBoolean(STAYING_KEY, false);
 		this.followOverride = view.getBoolean(FOLLOW_OVERRIDE_KEY, false);
 		this.catchUpSpeedActive = false;
@@ -1967,6 +1977,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			this.home = null;
 		}
 		this.patrolRadius = MathHelper.clamp(view.getInt(PATROL_RADIUS_KEY, 0), 0, 128);
+		this.syncHomeData();
 		// Read new keys first, fall back to legacy keys for migration
 		int readGroupIndex = view.getInt(GROUP_INDEX_KEY, Integer.MIN_VALUE);
 		if (readGroupIndex == Integer.MIN_VALUE) {
