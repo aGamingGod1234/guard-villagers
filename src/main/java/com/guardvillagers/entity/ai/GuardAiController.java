@@ -44,16 +44,11 @@ public final class GuardAiController {
 	private static final int FOLLOW_HOME_EXIT_BUFFER = 8;
 
 	private static final Comparator<TargetCandidate> TARGET_COMPARATOR = Comparator
-			.comparing(TargetCandidate::urgent)
-			.reversed()
-			.thenComparingInt(TargetCandidate::sourcePriority)
-			.reversed()
-			.thenComparingInt(TargetCandidate::threatPriority)
-			.reversed()
-			.thenComparing(TargetCandidate::sticky)
-			.reversed()
-			.thenComparingLong(TargetCandidate::latestTick)
-			.reversed()
+			.comparing(TargetCandidate::urgent, Comparator.reverseOrder())
+			.thenComparingInt(c -> -c.sourcePriority())
+			.thenComparingInt(c -> -c.threatPriority())
+			.thenComparing(TargetCandidate::sticky, Comparator.reverseOrder())
+			.thenComparingLong(c -> -c.latestTick())
 			.thenComparingDouble(TargetCandidate::distanceSq)
 			.thenComparing(candidate -> candidate.entity().getUuid().toString());
 

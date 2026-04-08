@@ -233,6 +233,10 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	private static final Map<UUID, Set<String>> OWNER_USED_NAMES = new HashMap<>();
 
+	public static void clearStaticCaches() {
+		OWNER_USED_NAMES.clear();
+	}
+
 	private static final Map<Item, Integer> SWORD_SCORE = Map.ofEntries(
 			Map.entry(Items.WOODEN_SWORD, 1),
 			Map.entry(Items.STONE_SWORD, 2),
@@ -1715,7 +1719,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		super.onDeath(damageSource);
 		if (this.ownerUuid != null && this.getEntityWorld() instanceof ServerWorld world) {
 			ServerPlayerEntity owner = this.resolveOwner(world);
-			boolean showDeathMessages = Boolean.TRUE.equals(world.getGameRules().getValue(GameRules.SHOW_DEATH_MESSAGES));
+			boolean showDeathMessages = world.getGameRules().getBoolean(GameRules.SHOW_DEATH_MESSAGES);
 			if (owner != null && showDeathMessages) {
 				owner.sendMessage(damageSource.getDeathMessage(this));
 			}
@@ -2017,7 +2021,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	@Override
 	public void remove(Entity.RemovalReason reason) {
-		if (reason == null || reason.shouldDestroy()) {
+		if (reason != null && reason.shouldDestroy()) {
 			if (!this.lastRegisteredOwnerName.isBlank()) {
 				unregisterOwnerName(this.lastRegisteredOwner != null ? this.lastRegisteredOwner : this.ownerUuid,
 						this.lastRegisteredOwnerName);

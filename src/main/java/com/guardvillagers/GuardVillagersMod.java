@@ -935,6 +935,7 @@ public class GuardVillagersMod implements ModInitializer {
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
 			GuardOwnershipIndex.clearAll();
 			GuardReputationManager.clearCooldowns();
+			GuardEntity.clearStaticCaches();
 			DEBUG_PATH_HASH_CACHE.clear();
 		});
 		AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
