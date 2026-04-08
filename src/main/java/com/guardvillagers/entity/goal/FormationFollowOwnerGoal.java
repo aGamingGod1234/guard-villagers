@@ -28,6 +28,8 @@ public final class FormationFollowOwnerGoal extends Goal {
 	private double sampledDistanceBlocks = Double.MAX_VALUE;
 	private double lastDistanceBlocks = Double.MAX_VALUE;
 	private float oldWaterPathfindingPenalty;
+	private Vec3d cachedFollowSlot;
+	private double cachedDistanceBlocks;
 
 	public FormationFollowOwnerGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
@@ -53,12 +55,15 @@ public final class FormationFollowOwnerGoal extends Goal {
 		}
 
 		Vec3d followSlot = this.guard.resolveFollowSlot(world, resolvedOwner);
-		double distanceBlocks = Math.sqrt(this.guard.squaredDistanceTo(followSlot));
+		double distanceSq = this.guard.squaredDistanceTo(followSlot);
+		double distanceBlocks = Math.sqrt(distanceSq);
 		if (!this.shouldEnterCatchUp(distanceBlocks)) {
 			return false;
 		}
 
 		this.owner = resolvedOwner;
+		this.cachedFollowSlot = followSlot;
+		this.cachedDistanceBlocks = distanceBlocks;
 		return true;
 	}
 
@@ -95,12 +100,7 @@ public final class FormationFollowOwnerGoal extends Goal {
 	public void start() {
 		this.updateCountdownTicks = 0;
 		this.settledTicks = 0;
-		if (this.owner != null && this.owner.getEntityWorld() instanceof ServerWorld world) {
-			Vec3d followSlot = this.guard.resolveFollowSlot(world, this.owner);
-			this.lastDistanceBlocks = Math.sqrt(this.guard.squaredDistanceTo(followSlot));
-		} else {
-			this.lastDistanceBlocks = Double.MAX_VALUE;
-		}
+		this.lastDistanceBlocks = this.cachedDistanceBlocks != 0.0D ? this.cachedDistanceBlocks : Double.MAX_VALUE;
 		this.oldWaterPathfindingPenalty = this.guard.getPathfindingPenalty(PathNodeType.WATER);
 		this.guard.setPathfindingPenalty(PathNodeType.WATER, 0.0F);
 		this.guard.setCatchUpSpeedActive(true);
@@ -112,6 +112,8 @@ public final class FormationFollowOwnerGoal extends Goal {
 		this.updateCountdownTicks = 0;
 		this.settledTicks = 0;
 		this.lastDistanceBlocks = Double.MAX_VALUE;
+		this.cachedFollowSlot = null;
+		this.cachedDistanceBlocks = 0.0D;
 		this.guard.getNavigation().stop();
 		this.guard.setPathfindingPenalty(PathNodeType.WATER, this.oldWaterPathfindingPenalty);
 		this.guard.setCatchUpSpeedActive(false);

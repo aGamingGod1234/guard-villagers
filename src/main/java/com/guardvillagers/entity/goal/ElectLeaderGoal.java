@@ -30,6 +30,11 @@ public final class ElectLeaderGoal extends Goal {
 		return false;
 	}
 
+	private static final Comparator<GuardEntity> LEADER_COMPARATOR = Comparator
+			.comparingInt(GuardEntity::getLevel)
+			.thenComparingInt(GuardEntity::getExperience)
+			.thenComparing(entity -> entity.getUuid());
+
 	@Override
 	public void start() {
 		if (!(this.guard.getEntityWorld() instanceof ServerWorld world) || !this.guard.hasSquad()) {
@@ -45,17 +50,18 @@ public final class ElectLeaderGoal extends Goal {
 			return;
 		}
 
-		boolean hasLeader = squad.stream().anyMatch(GuardEntity::isSquadLeader);
-		if (hasLeader) {
-			return;
+		GuardEntity leader = null;
+		for (GuardEntity member : squad) {
+			if (member.isSquadLeader()) {
+				return;
+			}
+			if (leader == null || LEADER_COMPARATOR.compare(member, leader) > 0) {
+				leader = member;
+			}
 		}
-
-		GuardEntity leader = squad.stream()
-			.max(Comparator
-				.comparingInt(GuardEntity::getLevel)
-				.thenComparingInt(GuardEntity::getExperience)
-				.thenComparing(entity -> entity.getUuid().toString()))
-			.orElse(this.guard);
+		if (leader == null) {
+			leader = this.guard;
+		}
 
 		for (GuardEntity member : squad) {
 			member.setSquadLeader(member == leader);

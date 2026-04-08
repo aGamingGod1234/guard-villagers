@@ -8,8 +8,11 @@ import net.minecraft.util.math.BlockPos;
 import java.util.EnumSet;
 
 public final class GuardRallyGoal extends Goal {
+	private static final int REPATH_INTERVAL_TICKS = 10;
+
 	private final GuardEntity guard;
 	private final double speed;
+	private int repathTicks;
 
 	public GuardRallyGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
@@ -30,12 +33,22 @@ public final class GuardRallyGoal extends Goal {
 	}
 
 	@Override
+	public void start() {
+		this.repathTicks = 0;
+	}
+
+	@Override
 	public void stop() {
 		this.guard.getNavigation().stop();
+		this.repathTicks = 0;
 	}
 
 	@Override
 	public void tick() {
+		if (this.repathTicks-- > 0) {
+			return;
+		}
+		this.repathTicks = REPATH_INTERVAL_TICKS;
 		BlockPos rallyPoint = this.guard.getRallyPoint().orElse(null);
 		if (rallyPoint == null || !(this.guard.getEntityWorld() instanceof net.minecraft.server.world.ServerWorld world)) {
 			return;

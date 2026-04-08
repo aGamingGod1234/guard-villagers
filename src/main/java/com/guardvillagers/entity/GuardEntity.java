@@ -1349,7 +1349,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	@Override
 	protected void mobTick(ServerWorld world) {
 		super.mobTick(world);
-		this.syncRegisteredOwnerName();
+		if (this.age % 20 == 0) {
+			this.syncRegisteredOwnerName();
+		}
 		if (this.age % 40 == 0 || this.ownerUuid == null) {
 			GuardOwnershipIndex.track(this);
 		}
@@ -1480,17 +1482,18 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			return;
 		}
 		Text current = this.getCustomName();
-		String currentText = current == null ? "" : current.getString();
-		if (currentText.startsWith(DEBUG_NAME_PREFIX)) {
+		if (current != null && current.getString().startsWith(DEBUG_NAME_PREFIX)) {
 			return;
 		}
 
 		if (!this.hasOwner()) {
-			this.setCustomNameVisible(false);
+			if (this.isCustomNameVisible()) {
+				this.setCustomNameVisible(false);
+			}
 			return;
 		}
 
-		if (this.getCustomName() == null && !this.generatedName.isBlank()) {
+		if (current == null && !this.generatedName.isBlank()) {
 			this.setCustomName(Text.literal(this.generatedName));
 		}
 		if (!this.isCustomNameVisible()) {
@@ -2006,13 +2009,13 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	@Override
 	public void remove(Entity.RemovalReason reason) {
+		if (!this.lastRegisteredOwnerName.isBlank()) {
+			unregisterOwnerName(this.lastRegisteredOwner != null ? this.lastRegisteredOwner : this.ownerUuid,
+					this.lastRegisteredOwnerName);
+			this.lastRegisteredOwnerName = "";
+			this.lastRegisteredOwner = null;
+		}
 		if (reason == null || reason.shouldDestroy()) {
-			if (!this.lastRegisteredOwnerName.isBlank()) {
-				unregisterOwnerName(this.lastRegisteredOwner != null ? this.lastRegisteredOwner : this.ownerUuid,
-						this.lastRegisteredOwnerName);
-				this.lastRegisteredOwnerName = "";
-				this.lastRegisteredOwner = null;
-			}
 			GuardOwnershipIndex.untrack(this);
 		}
 		super.remove(reason);
