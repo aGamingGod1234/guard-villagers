@@ -1,6 +1,7 @@
 package com.guardvillagers.client;
 
 import com.guardvillagers.GuardVillagersMod;
+import com.mojang.blaze3d.opengl.GlStateManager;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.MapColor;
 import net.minecraft.client.MinecraftClient;
@@ -14,6 +15,7 @@ import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.WorldChunk;
+import org.lwjgl.opengl.GL11;
 
 import java.util.HashMap;
 import java.util.Iterator;
@@ -25,12 +27,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class ChunkTerrainCache {
-	private static final int MAX_TILES_PER_WORLD_DIMENSION = 2_048;
+	private static final int MAX_TILES_PER_WORLD_DIMENSION = 4_096;
 	private static final int FALLBACK_COLOR = 0xFF161C25;
-	private static final int TILE_RESOLUTION = 64;
+	private static final int TILE_RESOLUTION = 16;
 	private static final int TILE_PIXEL_COUNT = TILE_RESOLUTION * TILE_RESOLUTION;
-	private static final int MAX_SYNC_VISIBLE_GENERATIONS_PER_FRAME = 4;
-	private static final int MAX_ASYNC_VISIBLE_QUEUES_PER_FRAME = 8;
+	private static final int MAX_SYNC_VISIBLE_GENERATIONS_PER_FRAME = 8;
+	private static final int MAX_ASYNC_VISIBLE_QUEUES_PER_FRAME = 16;
 
 	private final Map<String, LinkedHashMap<Long, TerrainTile>> tilesByWorldDimension = new HashMap<>();
 	private final ConcurrentHashMap<TileKey, Long> pendingGeneration = new ConcurrentHashMap<>();
@@ -187,6 +189,12 @@ public final class ChunkTerrainCache {
 		TextureManager textureManager = MinecraftClient.getInstance().getTextureManager();
 		textureManager.registerTexture(textureId, texture);
 		texture.upload();
+		// Set nearest-neighbor filtering for crisp pixel-art rendering (1 block = 1 pixel).
+		if (texture.getGlTexture() instanceof net.minecraft.client.texture.GlTexture glTex) {
+			GlStateManager._bindTexture(glTex.getGlId());
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+		}
 		return new TerrainTile(snapshot.averageColor(), textureId, texture);
 	}
 
@@ -213,12 +221,10 @@ public final class ChunkTerrainCache {
 
 	private static int[] snapshotHeightmap(WorldChunk chunk) {
 		int[] heights = new int[TILE_PIXEL_COUNT];
-		for (int sampleZ = 0; sampleZ < TILE_RESOLUTION; sampleZ++) {
-			int localZ = (sampleZ * 16) / TILE_RESOLUTION;
-			int rowOffset = sampleZ * TILE_RESOLUTION;
-			for (int sampleX = 0; sampleX < TILE_RESOLUTION; sampleX++) {
-				int localX = (sampleX * 16) / TILE_RESOLUTION;
-				heights[rowOffset + sampleX] = chunk.sampleHeightmap(Heightmap.Type.WORLD_SURFACE, localX, localZ);
+		for (int localZ = 0; localZ < TILE_RESOLUTION; localZ++) {
+			int rowOffset = localZ * TILE_RESOLUTION;
+			for (int localX = 0; localX < TILE_RESOLUTION; localX++) {
+				heights[rowOffset + localX] = chunk.sampleHeightmap(Heightmap.Type.WORLD_SURFACE, localX, localZ);
 			}
 		}
 		return heights;
@@ -231,14 +237,12 @@ public final class ChunkTerrainCache {
 		int startZ = chunkPos.getStartZ();
 		BlockPos.Mutable pos = new BlockPos.Mutable();
 
-		for (int sampleZ = 0; sampleZ < TILE_RESOLUTION; sampleZ++) {
-			int localZ = (sampleZ * 16) / TILE_RESOLUTION;
+		for (int localZ = 0; localZ < TILE_RESOLUTION; localZ++) {
 			int worldZ = startZ + localZ;
-			int rowOffset = sampleZ * TILE_RESOLUTION;
-			for (int sampleX = 0; sampleX < TILE_RESOLUTION; sampleX++) {
-				int localX = (sampleX * 16) / TILE_RESOLUTION;
+			int rowOffset = localZ * TILE_RESOLUTION;
+			for (int localX = 0; localX < TILE_RESOLUTION; localX++) {
 				int worldX = startX + localX;
-				int index = rowOffset + sampleX;
+				int index = rowOffset + localX;
 				int sampleY = Math.max(worldBottom, heightmap[index] - 1);
 
 				pos.set(worldX, sampleY, worldZ);

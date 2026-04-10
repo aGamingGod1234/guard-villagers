@@ -487,7 +487,9 @@ public class GuardVillagersMod implements ModInitializer {
 					spawnedNames.add(spawnedGuard.getName().getString());
 					continue;
 				}
-				GuardEconomy.refundEmeraldBlocks(player, costPerGuard);
+				if (!creativeMode) {
+					GuardEconomy.refundEmeraldBlocks(player, costPerGuard);
+				}
 				break;
 			}
 			if (spawned > 0) {

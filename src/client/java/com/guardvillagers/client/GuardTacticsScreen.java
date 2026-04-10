@@ -54,8 +54,9 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private static final int GUARD_CARD_GAP = 6;
 	private static final int LEFT_PANE_RATIO = 55;
 	private static final int PANE_GAP = 8;
-	private static final int GROUP_BOX_HEIGHT = 60;
+	private static final int GROUP_BOX_HEIGHT = 74;
 	private static final int GROUP_BOX_GAP = 4;
+	private static final int MINI_CARD_HEIGHT = 38;
 	private static final int UNASSIGNED_CARD_HEIGHT = 26;
 	private static final int UNASSIGNED_CARD_GAP = 2;
 	private static final int SAVE_BUTTON_WIDTH = 60;
@@ -624,7 +625,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 				ClientGuardRosterStore.GuardRosterEntry guard = rowGuards.get(i);
 				int cx = cardX + i * (GUARD_CARD_WIDTH + GUARD_CARD_GAP);
 				this.renderGuardMiniCard(context, guard, cx, cardsY);
-				this.guardCards.add(new GuardCardHitbox(guard, cx, cardsY, GUARD_CARD_WIDTH, 22, row));
+				this.guardCards.add(new GuardCardHitbox(guard, cx, cardsY, GUARD_CARD_WIDTH, MINI_CARD_HEIGHT, row));
 			}
 			if (rowGuards.size() > cardsToDraw) {
 				int overflowX = cardX + cardsToDraw * (GUARD_CARD_WIDTH + GUARD_CARD_GAP);
@@ -1000,8 +1001,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	}
 
 	private void renderGuardMiniCard(DrawContext context, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y) {
-		context.fill(x, y, x + GUARD_CARD_WIDTH, y + 22, CARD_BACKGROUND);
-		this.drawBorder(context, x, y, GUARD_CARD_WIDTH, 22, CARD_BORDER);
+		context.fill(x, y, x + GUARD_CARD_WIDTH, y + MINI_CARD_HEIGHT, CARD_BACKGROUND);
+		this.drawBorder(context, x, y, GUARD_CARD_WIDTH, MINI_CARD_HEIGHT, CARD_BORDER);
 		context.drawItem(GUARD_HEAD_ICON, x + 2, y + 3);
 		String name = guard.displayName();
 		if (name.length() > 8) {
@@ -1009,6 +1010,25 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		}
 		context.drawText(this.textRenderer, Text.literal(name), x + 20, y + 3, TEXT_PRIMARY, false);
 		context.drawText(this.textRenderer, Text.literal("Lv" + guard.level()), x + 20, y + 12, TEXT_SECONDARY, false);
+
+		// Armor icons row
+		int armorY = y + 22;
+		this.drawMiniArmorIcon(context, guard.helmet(), x + 4, armorY);
+		this.drawMiniArmorIcon(context, guard.chest(), x + 22, armorY);
+		this.drawMiniArmorIcon(context, guard.legs(), x + 40, armorY);
+		this.drawMiniArmorIcon(context, guard.boots(), x + 58, armorY);
+	}
+
+	private void drawMiniArmorIcon(DrawContext context, ItemStack stack, int x, int y) {
+		if (stack == null || stack.isEmpty()) {
+			context.fill(x + 2, y + 2, x + 12, y + 12, 0x444D5F72);
+			return;
+		}
+		context.getMatrices().pushMatrix();
+		context.getMatrices().translate((float) x, (float) y);
+		context.getMatrices().scale(0.875F, 0.875F);
+		context.drawItem(stack, 0, 0);
+		context.getMatrices().popMatrix();
 	}
 
 	private void renderUnassignedCard(DrawContext context, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int width) {

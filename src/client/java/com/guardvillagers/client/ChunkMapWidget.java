@@ -10,10 +10,10 @@ import java.util.List;
 
 public final class ChunkMapWidget {
 	private static final double MIN_ZOOM = 0.05D;
-	private static final double MAX_ZOOM = 16.0D;
+	private static final double MAX_ZOOM = 32.0D;
 	private static final double ZOOM_STEP_BASE = 1.1D;
-	private static final double BASE_CHUNK_PIXELS = 24.0D;
-	private static final double DETAILED_TEXTURE_MIN_CHUNK_PIXELS = 18.0D;
+	private static final double BASE_CHUNK_PIXELS = 16.0D;
+	private static final double DETAILED_TEXTURE_MIN_CHUNK_PIXELS = 4.0D;
 
 	private static final int MAP_BACKGROUND = 0xFF10161D;
 	private static final int SELECTION_OVERLAY = 0x446FD3FF;

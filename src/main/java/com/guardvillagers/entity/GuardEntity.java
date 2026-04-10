@@ -169,6 +169,11 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private static final String LAST_LAND_X_KEY = "LastLandX";
 	private static final String LAST_LAND_Y_KEY = "LastLandY";
 	private static final String LAST_LAND_Z_KEY = "LastLandZ";
+	private static final String HAS_STAY_ORIGIN_KEY = "HasStayOrigin";
+	private static final String STAY_ORIGIN_X_KEY = "StayOriginX";
+	private static final String STAY_ORIGIN_Y_KEY = "StayOriginY";
+	private static final String STAY_ORIGIN_Z_KEY = "StayOriginZ";
+	public static final int STAY_RADIUS = 3;
 	private static final String HAS_LAST_LAND_KEY = "HasLastLand";
 	private static final int MIN_GROUP_INDEX = -1;
 	private static final int MAX_GROUP_INDEX = Integer.MAX_VALUE / 2;
@@ -274,6 +279,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	private UUID ownerUuid;
 	private UUID squadId;
 	private boolean staying;
+	private BlockPos stayOrigin;
 	private boolean followOverride;
 	private BlockPos home;
 	private int patrolRadius = 0;
@@ -538,9 +544,16 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	public void setStaying(boolean staying) {
 		this.staying = staying;
 		if (staying) {
+			this.stayOrigin = this.getBlockPos();
 			this.setFollowOverride(false);
 			this.clearCombatTarget();
+		} else {
+			this.stayOrigin = null;
 		}
+	}
+
+	public BlockPos getStayOrigin() {
+		return this.stayOrigin;
 	}
 
 	public boolean hasFollowOverride() {
@@ -1890,6 +1903,13 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		view.putInt(BEHAVIOR_KEY, this.dataTracker.get(BEHAVIOR));
 		view.putInt(FORMATION_KEY, this.dataTracker.get(FORMATION));
 		view.putBoolean(STAYING_KEY, this.staying);
+		boolean hasStayOrigin = this.stayOrigin != null;
+		view.putBoolean(HAS_STAY_ORIGIN_KEY, hasStayOrigin);
+		if (hasStayOrigin) {
+			view.putInt(STAY_ORIGIN_X_KEY, this.stayOrigin.getX());
+			view.putInt(STAY_ORIGIN_Y_KEY, this.stayOrigin.getY());
+			view.putInt(STAY_ORIGIN_Z_KEY, this.stayOrigin.getZ());
+		}
 		view.putBoolean(FOLLOW_OVERRIDE_KEY, this.followOverride);
 		view.putString(OWNER_KEY, this.ownerUuid == null ? "" : this.ownerUuid.toString());
 		view.putString(SQUAD_ID_KEY, this.squadId == null ? "" : this.squadId.toString());
@@ -1935,6 +1955,14 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		this.dataTracker.set(BEHAVIOR, view.getInt(BEHAVIOR_KEY, GuardBehavior.DEFENSIVE.getId()));
 		this.dataTracker.set(FORMATION, FormationType.FOLLOW.getId());
 		this.staying = view.getBoolean(STAYING_KEY, false);
+		if (view.getBoolean(HAS_STAY_ORIGIN_KEY, false)) {
+			this.stayOrigin = new BlockPos(
+					view.getInt(STAY_ORIGIN_X_KEY, 0),
+					view.getInt(STAY_ORIGIN_Y_KEY, 0),
+					view.getInt(STAY_ORIGIN_Z_KEY, 0));
+		} else {
+			this.stayOrigin = null;
+		}
 		this.followOverride = view.getBoolean(FOLLOW_OVERRIDE_KEY, false);
 		this.catchUpSpeedActive = false;
 		this.ownerUuid = parseUuid(view.getString(OWNER_KEY, ""));

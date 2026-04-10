@@ -33,19 +33,19 @@ public final class GuardDebugRenderer {
 	private static final float LABEL_SCALE = 0.020F;
 	private static final float LINE_HALF_WIDTH = 0.015F;
 	private static final int PATH_TRAIL_KEEP_BEHIND = 3;
-	private static final double PATH_FILL_Y_OFFSET = 0.016D;
-	private static final double PATH_OUTLINE_Y_OFFSET = 0.018D;
+	private static final double PATH_FILL_Y_OFFSET = 0.02D;
+	private static final double PATH_OUTLINE_Y_OFFSET = 0.022D;
 	private static final double PATH_OUTLINE_THICKNESS = 0.065D;
 	private static final float PATH_CURRENT_R = 0.42F;
 	private static final float PATH_CURRENT_G = 1.00F;
 	private static final float PATH_CURRENT_B = 0.34F;
-	private static final float PATH_NODE_R = 0.34F;
-	private static final float PATH_NODE_G = 0.72F;
-	private static final float PATH_NODE_B = 1.00F;
+	private static final float PATH_NODE_R = 0.95F;
+	private static final float PATH_NODE_G = 0.95F;
+	private static final float PATH_NODE_B = 0.20F;
 	private static final float PATH_DESTINATION_R = 1.00F;
 	private static final float PATH_DESTINATION_G = 0.38F;
 	private static final float PATH_DESTINATION_B = 0.34F;
-	private static final float PATH_FILL_ALPHA = 0.30F;
+	private static final float PATH_FILL_ALPHA = 0.50F;
 	private static final float PATH_OUTLINE_ALPHA = 0.82F;
 	private static final float[][] CIRCLE_POINTS = buildCirclePoints();
 	private static final List<GuardEntity> CACHED_GUARDS = new ArrayList<>();
@@ -461,7 +461,11 @@ public final class GuardDebugRenderer {
 		float a
 	) {
 		Matrix4f matrix = matrices.peek().getPositionMatrix();
+		// Draw both winding orders so the quad is visible regardless of backface culling.
+		// CCW face (normal up):
 		quad(consumer, matrix, minX, y, minZ, maxX, y, minZ, maxX, y, maxZ, minX, y, maxZ, r, g, b, a);
+		// CW face (normal down — visible if the render layer culls the CCW face):
+		quad(consumer, matrix, minX, y, maxZ, maxX, y, maxZ, maxX, y, minZ, minX, y, minZ, r, g, b, a);
 	}
 
 	private static void quad(
