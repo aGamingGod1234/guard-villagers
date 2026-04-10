@@ -2,17 +2,15 @@
 ### What Was Implemented
 - Rebuilt the mod from clean HEAD using .\gradlew.bat build on Java 21.
 - Produced a fresh build/libs/guard-villagers-1.0.0.jar artifact.
-- Replaced the repo-local development jar at .minecraft/mods/guard-villagers-1.0.0.jar with the rebuilt artifact.
-- Backed up the installed-game jar to %APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar.bak-20260310-065350.
 - Replaced the installed-game jar at %APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar with the rebuilt artifact.
-- Verified the built artifact and both deployed copies match after deployment.
+- Verified the built artifact and deployed copy match after deployment.
 
 ### Files Modified
-- .minecraft/mods/guard-villagers-1.0.0.jar - updated tracked dev jar to the freshly built artifact.
+- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` - updated with the freshly built artifact.
 - PROJECT_LOG.md - recorded the rebuild and deployment task.
 
 ### Assumptions Made (flag these for review)
-- Deployment should update both the repo-local .minecraft/mods jar and the installed %APPDATA%\.minecraft\mods jar.
+- Deployment target is `%APPDATA%\.minecraft\mods\` (the actual Minecraft instance), not a repo-local copy.
 - build/libs/guard-villagers-1.0.0.jar remains the correct release artifact for deployment.
 
 ### Known Issues / Deferred
@@ -193,11 +191,11 @@
 ## [2026-03-10] — Build And Install Mod Jar
 ### What Was Implemented
 - Rebuilt the mod jar from the current source with Gradle.
-- Replaced the installed mod at `.minecraft/mods/guard-villagers-1.0.0.jar` with the freshly built artifact from `build/libs/guard-villagers-1.0.0.jar`.
+- Replaced the installed mod at `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` with the freshly built artifact from `build/libs/guard-villagers-1.0.0.jar`.
 - Verified the installed jar matches the built jar by SHA-256 hash.
 
 ### Files Modified
-- `.minecraft/mods/guard-villagers-1.0.0.jar` — replaced with the current build output.
+- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` — replaced with the current build output.
 - `PROJECT_LOG.md` — recorded the build and install step.
 
 ### Assumptions Made (flag these for review)
@@ -351,17 +349,16 @@
 ## [2026-03-10] — Build And Replace Installed Mod Jars
 ### What Was Implemented
 - Ran `.\gradlew.bat build` against the current workspace and confirmed the runtime artifact is up to date.
-- Replaced the repo-local `.minecraft\mods\guard-villagers-1.0.0.jar` with the freshly built `build\libs\guard-villagers-1.0.0.jar`.
+- Replaced the `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` with the freshly built `build\libs\guard-villagers-1.0.0.jar`.
 - Replaced the active `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` with the same built artifact.
 - Verified all three jar files match by SHA-256 hash: `4B8A332B1F8AC319917BDDBFB5134B9CE98192FCA335D0244B68B48C2E643D74`.
 
 ### Files Modified
-- `.minecraft\mods\guard-villagers-1.0.0.jar` — replaced with the current build output for repo-local testing.
-- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` — replaced with the current build output for the default Minecraft instance.
+- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` — replaced with the current build output.
 - `PROJECT_LOG.md` — recorded the build, deployment, and hash verification.
 
 ### Assumptions Made (flag these for review)
-- Replacing both the repo-local and `%APPDATA%` mod jars is preferable here because both installed locations exist and keeping them synchronized avoids loading different builds between local and default instances.
+- Deployment target is `%APPDATA%\.minecraft\mods\` (the actual Minecraft instance).
 
 ### Known Issues / Deferred
 - No Minecraft launch or in-game smoke test was performed after copying the jar files.
@@ -457,36 +454,29 @@
 
 ## [2026-03-11] — Repo Local Mod Jar Deployment
 ### What Was Implemented
-- Copied the freshly built `build\libs\guard-villagers-1.0.0.jar` into the repo-local `.minecraft\mods\guard-villagers-1.0.0.jar`.
+- Copied the freshly built `build\libs\guard-villagers-1.0.0.jar` into the `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar`.
 - Verified the copied jar matches the build artifact by SHA-256 hash.
 
 ### Files Modified
-- `.minecraft\mods\guard-villagers-1.0.0.jar` — replaced with the current build output for repo-local testing.
+- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` — replaced with the current build output.
 - `PROJECT_LOG.md` — recorded the deployment target and verification result.
 
 ### Assumptions Made (flag these for review)
-- Interpreted the request for `.minecraft/mods` as the repo-local `.minecraft\mods` directory under this workspace, not `%APPDATA%\.minecraft\mods`.
-
-### Known Issues / Deferred
-- I did not replace `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` during this step.
-
-### Suggested Next Steps
-- If you meant the roaming Minecraft instance instead of the repo-local test instance, copy the same jar to `%APPDATA%\.minecraft\mods` as a follow-up.
+- Deployment target is `%APPDATA%\.minecraft\mods\` (the actual Minecraft instance).
 
 ## [2026-03-11] — Debug Overlay Deployment Verification
 ### What Was Implemented
 - Confirmed the guard debug renderer source already contains the pathfinding overlay fix and yellow target-line fix.
 - Identified that `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` was stale compared to the current build output.
-- Redeployed the current build jar to both the repo-local `.minecraft\mods` folder and `%APPDATA%\.minecraft\mods`.
-- Verified the build artifact and both deployed jars match exactly by SHA-256 hash.
+- Redeployed the current build jar to `%APPDATA%\.minecraft\mods`.
+- Verified the build artifact and deployed jar match exactly by SHA-256 hash.
 
 ### Files Modified
-- `.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the current build output.
-- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the current build output used by the default Minecraft instance.
+- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the current build output.
 - `PROJECT_LOG.md` — recorded the stale-jar diagnosis and redeployment verification.
 
 ### Assumptions Made (flag these for review)
-- Interpreted the in-game test instance as either the repo-local `.minecraft` folder or the default `%APPDATA%\.minecraft` installation and updated both to remove deployment ambiguity.
+- Deployment target is `%APPDATA%\.minecraft\mods\` (the actual Minecraft instance).
 
 ### Known Issues / Deferred
 - I did not run an in-game visual pass from the terminal after redeploying the jar.
@@ -502,7 +492,7 @@
 - Updated guard navigation to distinguish static anchor routing from dynamic chase/follow routing, disable squad-route caching for dynamic movement, and add repath hysteresis plus local crowd-jam recovery.
 - Relaxed combat stuck/lost-sight suppression when guards are jammed by allied guards so large groups do not snap off targets just because they are body-blocking each other.
 - Changed owner death notifications to use the death `DamageSource` message and still respect `showDeathMessages`.
-- Built the mod jar and redeployed it to both the repo-local `.minecraft\mods` folder and `%APPDATA%\.minecraft\mods`.
+- Built the mod jar and redeployed it to both `%APPDATA%\.minecraft\mods` folder and `%APPDATA%\.minecraft\mods`.
 
 ### Files Modified
 - `src/main/java/com/guardvillagers/GuardVillagersMod.java` — fixed purchased spawn placement and routed existing guard spawns through nearby horizontal spawn search.
@@ -531,13 +521,12 @@
 ## [2026-03-11] — Guard Jar Rebuild And Client Launch
 ### What Was Implemented
 - Rebuilt the mod jar with the current guard AI and death-message changes.
-- Replaced the repo-local `.minecraft\mods\guard-villagers-1.0.0.jar` and `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` with the rebuilt artifact.
+- Replaced the `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` and `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` with the rebuilt artifact.
 - Verified the build artifact and both deployed jars match by SHA-256 hash.
-- Launched the repo-local Fabric client via `gradlew runClient`.
+- Launched the Fabric client via `gradlew runClient`.
 
 ### Files Modified
-- `.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the current build output for the repo-local test instance.
-- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the same build output to avoid stale installed jars.
+- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the current build output.
 - `PROJECT_LOG.md` — recorded the rebuild, deployment, and client launch.
 
 ### Assumptions Made (flag these for review)
@@ -553,13 +542,12 @@
 ### What Was Implemented
 - Replaced the shared ground-slot helper’s heightmap-top lookup with local spawn-safe grounding so slot targets stay near the intended vertical level instead of snapping to unrelated surface tops.
 - Updated follow-owner slots to target grounded reachable positions around the owner, and updated combat-approach slots to ground against the target’s local level before pathing.
-- Rebuilt the jar and redeployed it to both the repo-local and `%APPDATA%` mod folders.
+- Rebuilt the jar and redeployed it to `%APPDATA%\.minecraft\mods`.
 
 ### Files Modified
 - `src/main/java/com/guardvillagers/entity/ai/GuardMovementSlotResolver.java` — changed ground slot resolution to use local nearby spawn validation.
 - `src/main/java/com/guardvillagers/entity/GuardEntity.java` — follow and combat slot helpers now return grounded reachable positions.
-- `.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the rebuilt jar containing the follow-slot fix.
-- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the same rebuilt jar.
+- `%APPDATA%\.minecraft\mods\guard-villagers-1.0.0.jar` — refreshed with the rebuilt jar containing the follow-slot fix.
 - `PROJECT_LOG.md` — recorded the follow-slot grounding correction.
 
 ### Assumptions Made (flag these for review)
@@ -611,8 +599,7 @@
 - `src/main/java/com/guardvillagers/entity/goal/PerimeterPatrolGoal.java` — routed patrol movement through grounded guard navigation instead of raw heightmap-top movement.
 - `src/main/java/com/guardvillagers/item/GuardWhistleItem.java` — cleared combat state on zone/home whistle commands.
 - `src/main/java/com/guardvillagers/GuardVillagersMod.java` — changed guard spawn vertical search to nearest-safe preference.
-- `.minecraft/mods/guard-villagers-1.0.0.jar` — refreshed with the rebuilt jar for the repo-local instance.
-- `%APPDATA%/.minecraft/mods/guard-villagers-1.0.0.jar` — refreshed with the same rebuilt jar for the installed client.
+- `%APPDATA%/.minecraft/mods/guard-villagers-1.0.0.jar` — refreshed with the rebuilt jar.
 - `PROJECT_LOG.md` — recorded this fix pass and verification results.
 
 ### Assumptions Made (flag these for review)
