@@ -33,9 +33,15 @@ public final class GuardDebugRenderer {
 	private static final float LABEL_SCALE = 0.020F;
 	private static final float LINE_HALF_WIDTH = 0.015F;
 	private static final int PATH_TRAIL_KEEP_BEHIND = 3;
-	private static final double PATH_FILL_Y_OFFSET = 0.02D;
-	private static final double PATH_OUTLINE_Y_OFFSET = 0.022D;
-	private static final double PATH_OUTLINE_THICKNESS = 0.065D;
+	// Path nodes snap to integer block Y. When a guard walks on partial blocks (slabs,
+	// stairs, carpets) the actual ground surface is above pos.getY(), so the fill must
+	// float high enough to stay above those surfaces. Height adds a thin slab body so the
+	// marker is visible from any camera angle instead of collapsing to zero area edge-on.
+	private static final double PATH_FILL_Y_BASE = 0.06D;
+	private static final double PATH_FILL_HEIGHT = 0.09D;
+	private static final double PATH_OUTLINE_Y_BASE = 0.055D;
+	private static final double PATH_OUTLINE_HEIGHT = 0.1D;
+	private static final double PATH_OUTLINE_THICKNESS = 0.075D;
 	private static final float PATH_CURRENT_R = 0.42F;
 	private static final float PATH_CURRENT_G = 1.00F;
 	private static final float PATH_CURRENT_B = 0.34F;
@@ -370,90 +376,47 @@ public final class GuardDebugRenderer {
 		double minZ = pos.getZ();
 		double maxZ = minZ + 1.0D;
 
-		drawHorizontalQuad(
-			matrices,
-			consumer,
-			minX,
-			pos.getY() + PATH_FILL_Y_OFFSET,
-			minZ,
-			maxX,
-			maxZ,
-			r,
-			g,
-			b,
-			PATH_FILL_ALPHA
-		);
+		double fillMinY = pos.getY() + PATH_FILL_Y_BASE;
+		double fillMaxY = fillMinY + PATH_FILL_HEIGHT;
+		drawFilledSlab(matrices, consumer, minX, fillMinY, minZ, maxX, fillMaxY, maxZ, r, g, b, PATH_FILL_ALPHA);
 
 		float outlineR = brightenChannel(r);
 		float outlineG = brightenChannel(g);
 		float outlineB = brightenChannel(b);
-		double outlineY = pos.getY() + PATH_OUTLINE_Y_OFFSET;
+		double outlineMinY = pos.getY() + PATH_OUTLINE_Y_BASE;
+		double outlineMaxY = outlineMinY + PATH_OUTLINE_HEIGHT;
 
-		drawHorizontalQuad(
-			matrices,
-			consumer,
-			minX,
-			outlineY,
-			minZ,
-			maxX,
-			minZ + PATH_OUTLINE_THICKNESS,
-			outlineR,
-			outlineG,
-			outlineB,
-			PATH_OUTLINE_ALPHA
-		);
-		drawHorizontalQuad(
-			matrices,
-			consumer,
-			minX,
-			outlineY,
-			maxZ - PATH_OUTLINE_THICKNESS,
-			maxX,
-			maxZ,
-			outlineR,
-			outlineG,
-			outlineB,
-			PATH_OUTLINE_ALPHA
-		);
-		drawHorizontalQuad(
-			matrices,
-			consumer,
-			minX,
-			outlineY,
-			minZ + PATH_OUTLINE_THICKNESS,
-			minX + PATH_OUTLINE_THICKNESS,
-			maxZ - PATH_OUTLINE_THICKNESS,
-			outlineR,
-			outlineG,
-			outlineB,
-			PATH_OUTLINE_ALPHA
-		);
-		drawHorizontalQuad(
-			matrices,
-			consumer,
-			maxX - PATH_OUTLINE_THICKNESS,
-			outlineY,
-			minZ + PATH_OUTLINE_THICKNESS,
-			maxX,
-			maxZ - PATH_OUTLINE_THICKNESS,
-			outlineR,
-			outlineG,
-			outlineB,
-			PATH_OUTLINE_ALPHA
-		);
+		drawFilledSlab(matrices, consumer, minX, outlineMinY, minZ, maxX, outlineMaxY, minZ + PATH_OUTLINE_THICKNESS,
+			outlineR, outlineG, outlineB, PATH_OUTLINE_ALPHA);
+		drawFilledSlab(matrices, consumer, minX, outlineMinY, maxZ - PATH_OUTLINE_THICKNESS, maxX, outlineMaxY, maxZ,
+			outlineR, outlineG, outlineB, PATH_OUTLINE_ALPHA);
+		drawFilledSlab(matrices, consumer, minX, outlineMinY, minZ + PATH_OUTLINE_THICKNESS,
+			minX + PATH_OUTLINE_THICKNESS, outlineMaxY, maxZ - PATH_OUTLINE_THICKNESS,
+			outlineR, outlineG, outlineB, PATH_OUTLINE_ALPHA);
+		drawFilledSlab(matrices, consumer, maxX - PATH_OUTLINE_THICKNESS, outlineMinY, minZ + PATH_OUTLINE_THICKNESS,
+			maxX, outlineMaxY, maxZ - PATH_OUTLINE_THICKNESS,
+			outlineR, outlineG, outlineB, PATH_OUTLINE_ALPHA);
 	}
 
 	private static float brightenChannel(float channel) {
 		return Math.min(1.0F, channel + 0.24F);
 	}
 
-	private static void drawHorizontalQuad(
+	/**
+	 * Draws a thin 3D box so debug markers stay visible from any camera angle. Flat quads
+	 * collapse to zero screen area when the camera is level with the surface they sit on,
+	 * and their Y can also fall inside partial blocks (slabs, carpets, stairs) that raise
+	 * the walk surface above the PathNode's integer Y. Emitting all six faces with both
+	 * windings guarantees the marker renders regardless of cull state or view direction.
+	 */
+	private static void drawFilledSlab(
 		MatrixStack matrices,
 		VertexConsumer consumer,
 		double minX,
-		double y,
+		double minY,
 		double minZ,
 		double maxX,
+		double maxY,
 		double maxZ,
 		float r,
 		float g,
@@ -461,11 +424,24 @@ public final class GuardDebugRenderer {
 		float a
 	) {
 		Matrix4f matrix = matrices.peek().getPositionMatrix();
-		// Draw both winding orders so the quad is visible regardless of backface culling.
-		// CCW face (normal up):
-		quad(consumer, matrix, minX, y, minZ, maxX, y, minZ, maxX, y, maxZ, minX, y, maxZ, r, g, b, a);
-		// CW face (normal down — visible if the render layer culls the CCW face):
-		quad(consumer, matrix, minX, y, maxZ, maxX, y, maxZ, maxX, y, minZ, minX, y, minZ, r, g, b, a);
+		// Top (normal +Y)
+		quad(consumer, matrix, minX, maxY, maxZ, maxX, maxY, maxZ, maxX, maxY, minZ, minX, maxY, minZ, r, g, b, a);
+		quad(consumer, matrix, minX, maxY, minZ, maxX, maxY, minZ, maxX, maxY, maxZ, minX, maxY, maxZ, r, g, b, a);
+		// Bottom (normal -Y)
+		quad(consumer, matrix, minX, minY, minZ, maxX, minY, minZ, maxX, minY, maxZ, minX, minY, maxZ, r, g, b, a);
+		quad(consumer, matrix, minX, minY, maxZ, maxX, minY, maxZ, maxX, minY, minZ, minX, minY, minZ, r, g, b, a);
+		// North (-Z face)
+		quad(consumer, matrix, minX, minY, minZ, minX, maxY, minZ, maxX, maxY, minZ, maxX, minY, minZ, r, g, b, a);
+		quad(consumer, matrix, maxX, minY, minZ, maxX, maxY, minZ, minX, maxY, minZ, minX, minY, minZ, r, g, b, a);
+		// South (+Z face)
+		quad(consumer, matrix, maxX, minY, maxZ, maxX, maxY, maxZ, minX, maxY, maxZ, minX, minY, maxZ, r, g, b, a);
+		quad(consumer, matrix, minX, minY, maxZ, minX, maxY, maxZ, maxX, maxY, maxZ, maxX, minY, maxZ, r, g, b, a);
+		// West (-X face)
+		quad(consumer, matrix, minX, minY, maxZ, minX, maxY, maxZ, minX, maxY, minZ, minX, minY, minZ, r, g, b, a);
+		quad(consumer, matrix, minX, minY, minZ, minX, maxY, minZ, minX, maxY, maxZ, minX, minY, maxZ, r, g, b, a);
+		// East (+X face)
+		quad(consumer, matrix, maxX, minY, minZ, maxX, maxY, minZ, maxX, maxY, maxZ, maxX, minY, maxZ, r, g, b, a);
+		quad(consumer, matrix, maxX, minY, maxZ, maxX, maxY, maxZ, maxX, maxY, minZ, maxX, minY, minZ, r, g, b, a);
 	}
 
 	private static void quad(
