@@ -19,7 +19,10 @@ import java.util.Set;
 import java.util.UUID;
 
 public final class GuardTacticsState extends PersistentState {
-	private static final Codec<Map<String, Integer>> STRING_INT_MAP_CODEC = Codec.unboundedMap(Codec.STRING, Codec.intRange(0, 4));
+	// Codec's upper bound must match PlayerTactics.MAX_COLOR_ID (10); the earlier
+	// bound of 4 caused colour IDs 5-10 to fail decoder validation and drop
+	// persisted group colours silently on load.
+	private static final Codec<Map<String, Integer>> STRING_INT_MAP_CODEC = Codec.unboundedMap(Codec.STRING, Codec.intRange(0, 10));
 	private static final Codec<List<String>> GROUP_LIST_CODEC = Codec.STRING.listOf();
 	private static final Codec<Map<UUID, PlayerTactics>> TACTICS_MAP_CODEC = Codec.unboundedMap(Uuids.STRING_CODEC, PlayerTactics.CODEC);
 
@@ -249,7 +252,10 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		public void ensureGroupCount(int count) {
-			int normalizedCount = Math.max(0, count);
+			// Hard-cap the requested count so a caller that wires an unbounded
+			// argument through cannot force an arbitrarily large list allocation
+			// here. MAX_GROUPS mirrors the command-layer bound.
+			int normalizedCount = Math.max(0, Math.min(count, MAX_GROUPS));
 			if (normalizedCount <= this.groupNames.size()) {
 				return;
 			}
@@ -259,6 +265,8 @@ public final class GuardTacticsState extends PersistentState {
 				this.groupNames.add(name);
 			}
 		}
+
+		public static final int MAX_GROUPS = 64;
 
 		private static int defaultZoneForColumn(int column) {
 			return switch (column) {

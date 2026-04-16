@@ -76,6 +76,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -90,8 +91,21 @@ public class GuardVillagersMod implements ModInitializer {
 
 	private static final int DEBUG_SYNC_INTERVAL_TICKS = 5;
 	private static final int DEBUG_MAX_PATH_NODES = 64;
+	/**
+	 * Upper bound on the group-row index exposed through /guards groups rename/assign.
+	 * Prevents an unbounded IntegerArgumentType from forcing the server to allocate a
+	 * multi-billion-entry group list (GuardTacticsState.ensureGroupCount).
+	 */
+	private static final int MAX_GROUP_ROW = 64;
 	private static final Pattern REPUTATION_INPUT_PATTERN = Pattern.compile("^(?:0(?:\\.\\d{1,2})?|1(?:\\.0{1,2})?)$");
-	private static final Map<UUID, Map<Integer, Integer>> DEBUG_PATH_HASH_CACHE = new HashMap<>();
+	/**
+	 * Touched from END_WORLD_TICK, which fires per-world and may run concurrently
+	 * across dimensions on servers with multiple loaded worlds. A plain HashMap
+	 * would corrupt under concurrent put/remove; use a ConcurrentHashMap so the
+	 * outer lookup is thread-safe. Inner per-player maps are only mutated for
+	 * the owning player's map at a time, so they remain plain HashMaps.
+	 */
+	private static final Map<UUID, Map<Integer, Integer>> DEBUG_PATH_HASH_CACHE = new ConcurrentHashMap<>();
 
 	public enum GuardPurchaseResult {
 		SUCCESS,
@@ -319,7 +333,9 @@ public class GuardVillagersMod implements ModInitializer {
 									return row + 1;
 								}))
 						.then(CommandManager.literal("rename")
-								.then(CommandManager.argument("row", IntegerArgumentType.integer(1))
+								// Upper bound prevents an ensureGroupCount() balloon-allocation OOM if a
+								// non-operator player invokes this with Integer.MAX_VALUE.
+								.then(CommandManager.argument("row", IntegerArgumentType.integer(1, MAX_GROUP_ROW))
 										.then(CommandManager.argument("name", StringArgumentType.greedyString())
 												.executes(context -> {
 													ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
@@ -339,7 +355,9 @@ public class GuardVillagersMod implements ModInitializer {
 												}))))
 						.then(CommandManager.literal("assign")
 								.then(CommandManager.argument("guardUuid", StringArgumentType.string())
-										.then(CommandManager.argument("groupRow", IntegerArgumentType.integer(0))
+										// 0 means "unassign"; positive values are a row index clamped to the same
+										// upper bound as rename to keep group-list allocation bounded.
+										.then(CommandManager.argument("groupRow", IntegerArgumentType.integer(0, MAX_GROUP_ROW))
 												.executes(context -> {
 													ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
 													String uuidStr = StringArgumentType.getString(context, "guardUuid");

@@ -92,6 +92,7 @@ import com.guardvillagers.navigation.GuardNavigation;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -236,7 +237,14 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			"Wheeler", "White", "Williams", "Wilson", "Wood", "Woods", "Wright", "Young"
 	};
 
-	private static final Map<UUID, Set<String>> OWNER_USED_NAMES = new HashMap<>();
+	/**
+	 * Guards in different dimensions (Overworld / Nether / End) tick on separate
+	 * threads, and hire-identity registration hooks are called from each thread's
+	 * entity tick and from NBT load. A plain HashMap would be corrupted by
+	 * concurrent put/remove. Both the outer map and the inner Set must be
+	 * thread-safe.
+	 */
+	private static final Map<UUID, Set<String>> OWNER_USED_NAMES = new ConcurrentHashMap<>();
 
 	private static final Map<Item, Integer> SWORD_SCORE = Map.ofEntries(
 			Map.entry(Items.WOODEN_SWORD, 1),
@@ -1570,7 +1578,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	}
 
 	private GuardNameRoll rollUniqueGuardName(ServerWorld world, UUID ownerUuid) {
-		Set<String> usedNames = OWNER_USED_NAMES.computeIfAbsent(ownerUuid, ignored -> new HashSet<>());
+		Set<String> usedNames = OWNER_USED_NAMES.computeIfAbsent(ownerUuid, ignored -> ConcurrentHashMap.newKeySet());
 		for (int i = 0; i < 4096; i++) {
 			GuardNameRoll roll = this.rollNameCandidate(world);
 			if (!usedNames.contains(roll.name())) {
@@ -1626,7 +1634,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		if (ownerUuid == null || name == null || name.isBlank()) {
 			return;
 		}
-		OWNER_USED_NAMES.computeIfAbsent(ownerUuid, ignored -> new HashSet<>()).add(name);
+		OWNER_USED_NAMES.computeIfAbsent(ownerUuid, ignored -> ConcurrentHashMap.newKeySet()).add(name);
 	}
 
 	private static void unregisterOwnerName(UUID ownerUuid, String name) {
@@ -1953,7 +1961,10 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		super.readCustomData(view);
 		this.dataTracker.set(ROLE, view.getInt(ROLE_KEY, GuardRole.SWORDSMAN.getId()));
 		this.dataTracker.set(BEHAVIOR, view.getInt(BEHAVIOR_KEY, GuardBehavior.DEFENSIVE.getId()));
-		this.dataTracker.set(FORMATION, FormationType.FOLLOW.getId());
+		// Previously this unconditionally reset to FOLLOW, silently dropping any
+		// formation the player had configured on every server restart. Read the
+		// stored value and fall back to FOLLOW only when absent.
+		this.dataTracker.set(FORMATION, view.getInt(FORMATION_KEY, FormationType.FOLLOW.getId()));
 		this.staying = view.getBoolean(STAYING_KEY, false);
 		if (view.getBoolean(HAS_STAY_ORIGIN_KEY, false)) {
 			this.stayOrigin = new BlockPos(
