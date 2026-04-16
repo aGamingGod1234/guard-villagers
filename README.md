@@ -1,6 +1,24 @@
 # Guard Villagers
 
-Guard Villagers is a Fabric mod for Minecraft `1.21.11` that adds recruitable guards, naturally maintained village defenders, player ownership, upgrades, tactics controls, zoning, and a tactical overview screen.
+Guard Villagers is a Fabric mod for Minecraft `1.21.11` (Java 21) that turns passive villagers into an active village-defence system. Villages grow their own guard garrison based on resident density, players can hire and train personal guards with emerald blocks, and every guard can be issued orders — follow, stay, patrol a zone, fall into a formation, defend the perimeter, or concentrate on crowd control — from an in-game tactics screen.
+
+## Summary
+
+- **Two kinds of guards.** Natural village guards spawn around populated villages and patrol in response to local threats; personal guards are hired from villagers that trust you, are bound to your UUID, and follow you across dimensions.
+- **Roles and loadouts.** Each guard is one of two combat roles (`Swordsman`, `Bowman`), each with its own AI goal stack. Gear is account-level — upgrades persist for all of a player's future guards instead of being applied to individual entities.
+- **Behaviours and formations.** Four behaviours (`Defensive`, `Offensive`, `Perimeter`, `Crowd Control`) and named formations control how the guard prioritises targets, how it moves relative to the owner, and how it shares intent with the rest of its squad.
+- **Tactics screen.** A top-down, discovered-chunk map lets you paint chunk zones, bind colours to groups, and view a synced roster with live health, XP, and distance readouts. Groups can be named, coloured, and used to issue squad-level commands (assign, rename, deploy, recall).
+- **Perimeter and patrol logic.** Villages expose their door/POI density to the guard AI so patrol goals, recovery-stall fallback, and crowd-unsticking all respect real village bounds rather than fixed hard-coded boxes.
+- **Reputation system.** Per-player village reputation gates whether unowned guards will defend you, whether you can claim them, and whether trades feed the guard pool. Operators can inspect and set reputation values via `/guards reputation`.
+- **Operator debug tooling.** `/guards debug` (operator-only) turns on a live overlay of pathfinding nodes, combat targets, and intent decisions for every visible guard, syncing to the client only for the player who enabled it.
+
+## Design highlights
+
+- **Central AI coordinator.** Each guard runs a thin `GuardAiController` that computes a `Decision` (main target, urgent target, intent, cooldowns) once per tick; the goals read that decision instead of re-deriving it, which keeps goal logic deterministic and cheap to tune.
+- **Per-squad route cache.** Path computations are shared across a squad heading to the same quantised target for a bounded TTL (2s) and soft-capped size, so a 10-guard squad only triggers one pathfind, not ten.
+- **Concurrent-safe statics.** The cross-world static caches (`OWNER_USED_NAMES`, `DEBUG_PATH_HASH_CACHE`, `SquadRouteCache.SQUAD_ROUTES`) use `ConcurrentHashMap` so per-dimension tick threads and NBT load hooks can mutate them without the `HashMap` corruption seen in earlier revisions.
+- **Bounded command surface.** `/guards groups rename/assign` clamp their row index to `MAX_GROUP_ROW` (64) and `GuardTacticsState.ensureGroupCount` mirrors the cap, so an unprivileged player can't force a multi-billion-entry group list.
+- **Save/load round-trip.** The guard's formation type is now read back from NBT on load (previously it was always reset to `FOLLOW`), so player-configured formations survive restarts. Tactics group-colour codec range covers the full supported palette (0..10) instead of silently dropping colour IDs above 4.
 
 ## Contents
 

@@ -4,14 +4,20 @@ import net.minecraft.entity.ai.pathing.Path;
 import net.minecraft.entity.ai.pathing.PathNode;
 import net.minecraft.util.math.BlockPos;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class SquadRouteCache {
-    private static final Map<CacheKey, CachedRoute> SQUAD_ROUTES = new HashMap<>();
+    /**
+     * Accessed from pathfinder callbacks on each world's tick thread, so multiple
+     * loaded dimensions can write here concurrently. ConcurrentHashMap prevents
+     * the HashMap corruption seen under that pattern while keeping reads lock-free.
+     */
+    private static final Map<CacheKey, CachedRoute> SQUAD_ROUTES = new ConcurrentHashMap<>();
     private static final int MAX_CACHE_AGE_TICKS = 40; // 2 seconds
+    private static final int MAX_CACHE_ENTRIES = 256;
     private static final double MAX_TARGET_DRIFT_SQR = 0.0; // exact static target only
     private static final double MAX_ORIGIN_DRIFT_SQR = 144.0; // 12 blocks
 
@@ -64,6 +70,14 @@ public class SquadRouteCache {
         // Path is only read from cache via copyPath() on retrieval, so we can store
         // the original directly and avoid a redundant copy on insert.
         SQUAD_ROUTES.put(key, new CachedRoute(path, currentTick, origin, target));
+
+        // Bounded eviction: if the cache has grown past the soft cap (which can
+        // happen on long-running servers with many distinct squad/target pairs),
+        // drop any entry older than MAX_CACHE_AGE_TICKS. This prevents an
+        // unbounded retention loop without adding a dedicated tick subscriber.
+        if (SQUAD_ROUTES.size() > MAX_CACHE_ENTRIES) {
+            SQUAD_ROUTES.values().removeIf(route -> currentTick - route.computeTick > MAX_CACHE_AGE_TICKS);
+        }
     }
 
     public static void invalidateSquadRoute(UUID groupId, BlockPos target) {
