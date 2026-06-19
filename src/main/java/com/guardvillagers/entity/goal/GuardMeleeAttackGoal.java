@@ -34,7 +34,7 @@ public final class GuardMeleeAttackGoal extends Goal {
 
 	@Override
 	public boolean shouldContinue() {
-		return this.hasValidTarget() || !this.guard.getNavigation().isIdle();
+		return this.hasValidTarget();
 	}
 
 	@Override
