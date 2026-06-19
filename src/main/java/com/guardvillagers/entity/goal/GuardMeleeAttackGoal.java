@@ -52,6 +52,11 @@ public final class GuardMeleeAttackGoal extends Goal {
 
 	@Override
 	public void tick() {
+		if (!this.hasValidTarget()) {
+			this.guard.getNavigation().stop();
+			return;
+		}
+
 		if (this.attackCooldown > 0) {
 			this.attackCooldown--;
 		}
