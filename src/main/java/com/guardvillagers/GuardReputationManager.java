@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class GuardReputationManager {
 	private static final double TRUST_THRESHOLD = 0.50D;
-	private static final double HOSTILE_THRESHOLD = 0.50D;
+	private static final double HOSTILE_THRESHOLD = 0.25D;
 	private static final int LEGACY_RANGE_SPAN = 400;
 	private static final int TRADE_COOLDOWN_TICKS = 200;
 	private static final int COOLDOWN_RETENTION_TICKS = 20 * 60 * 10;
@@ -78,7 +78,7 @@ public final class GuardReputationManager {
 		return Math.max(1, baseCost);
 	}
 
-	public static void recordTradeInteraction(ServerPlayerEntity player, VillagerEntity villager) {
+	public static void recordCompletedTrade(ServerPlayerEntity player, VillagerEntity villager) {
 		long now = player.getEntityWorld().getTime();
 		cleanupTradeCooldown(now);
 		UUID key = mix(player.getUuid(), villager.getUuid());

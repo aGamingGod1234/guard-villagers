@@ -133,6 +133,9 @@ public final class GuardTacticsState extends PersistentState {
 			}
 			this.groupNames = new ArrayList<>();
 			for (String name : effectiveNames) {
+				if (this.groupNames.size() >= MAX_GROUPS) {
+					break;
+				}
 				String sanitized = sanitizeGroupName(name);
 				if (!sanitized.isEmpty()) {
 					this.groupNames.add(sanitized);
@@ -214,13 +217,16 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		public String getGroupName(int row) {
+			if (!isValidGroupRow(row)) {
+				return "Alpha";
+			}
 			int normalizedRow = normalizeRow(row);
 			this.ensureGroupCount(normalizedRow + 1);
 			return this.groupNames.get(normalizedRow);
 		}
 
 		public void setGroupName(int row, String name) {
-			if (row < 0) {
+			if (!isValidGroupRow(row)) {
 				return;
 			}
 			int normalizedRow = normalizeRow(row);
@@ -229,6 +235,9 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		public int addGroup() {
+			if (this.groupNames.size() >= MAX_GROUPS) {
+				return MAX_GROUPS - 1;
+			}
 			int index = this.groupNames.size();
 			String name = index < GROUP_NAME_CYCLE.size() ? GROUP_NAME_CYCLE.get(index) : "Group " + (index + 1);
 			this.groupNames.add(name);
@@ -236,7 +245,7 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		public int cycleGroupName(int row) {
-			if (row < 0) {
+			if (!isValidGroupRow(row)) {
 				return -1;
 			}
 			int normalizedRow = normalizeRow(row);
@@ -347,6 +356,10 @@ public final class GuardTacticsState extends PersistentState {
 
 		private static boolean isValidRow(int row) {
 			return row >= MIN_ROW_INDEX;
+		}
+
+		private static boolean isValidGroupRow(int row) {
+			return row >= MIN_ROW_INDEX && row < MAX_GROUPS;
 		}
 
 		private static boolean isValidColumn(int column) {

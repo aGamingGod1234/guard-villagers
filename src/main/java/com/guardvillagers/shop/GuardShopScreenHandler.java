@@ -40,7 +40,7 @@ public class GuardShopScreenHandler extends GenericContainerScreenHandler {
 		}
 
 		if (!this.getCursorStack().isEmpty()) {
-			this.setCursorStack(ItemStack.EMPTY);
+			return;
 		}
 
 		if (slotIndex >= 0 && slotIndex < SHOP_SLOT_COUNT) {

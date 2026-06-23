@@ -71,7 +71,7 @@ public final class GuardOwnershipIndex {
 		}
 
 		Set<UUID> indexedIds = OWNER_TO_GUARDS.get(ownerUuid);
-		return indexedIds == null ? 0 : indexedIds.size();
+		return indexedIds == null ? 0 : resolveIndexedGuards(server, ownerUuid).size();
 	}
 
 	private static List<GuardEntity> resolveIndexedGuards(MinecraftServer server, UUID ownerUuid) {
@@ -85,6 +85,7 @@ public final class GuardOwnershipIndex {
 		for (UUID guardId : List.copyOf(indexedIds)) {
 			GuardEntity guard = resolveGuard(server, guardId);
 			if (guard == null) {
+				staleIds.add(guardId);
 				continue;
 			}
 			if (guard.isRemoved() || !ownerUuid.equals(guard.getOwnerUuid())) {
@@ -127,6 +128,7 @@ public final class GuardOwnershipIndex {
 			WeakReference<GuardEntity> reference = GUARD_REFERENCES.get(guardId);
 			GuardEntity guard = reference == null ? null : reference.get();
 			if (guard == null || guard.isRemoved()) {
+				removeGuard(guardId);
 				continue;
 			}
 			UUID indexedOwner = GUARD_TO_OWNER.get(guardId);

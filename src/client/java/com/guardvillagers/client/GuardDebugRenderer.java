@@ -124,7 +124,6 @@ public final class GuardDebugRenderer {
 			GuardEntity.class,
 			client.player.getBoundingBox().expand(range),
 			guard -> guard.isAlive()
-				&& (guard.getOwnerUuid() == null || guard.isOwnedBy(client.player.getUuid()))
 				&& guard.squaredDistanceTo(client.player) <= rangeSq
 		));
 	}

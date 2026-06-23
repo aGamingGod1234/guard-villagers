@@ -6,6 +6,7 @@ import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.projectile.ArrowEntity;
 import net.minecraft.item.ItemStack;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.world.World;
@@ -23,15 +24,22 @@ public class GuardArrowEntity extends ArrowEntity {
 	protected void onEntityHit(EntityHitResult entityHitResult) {
 		Entity hitEntity = entityHitResult.getEntity();
 		Entity owner = this.getOwner();
-		if (hitEntity instanceof GuardEntity hitGuard && owner instanceof GuardEntity shooterGuard) {
-			if (shooterGuard.getOwnerUuid() != null && shooterGuard.getOwnerUuid().equals(hitGuard.getOwnerUuid())) {
-				if (this.getEntityWorld() instanceof ServerWorld) {
-					this.discard();
-				}
-				return;
+		if (owner instanceof GuardEntity shooterGuard
+				&& shooterGuard.isAlly(hitEntity)
+				&& !this.isActiveHostileOwnerTarget(shooterGuard, hitEntity)) {
+			if (this.getEntityWorld() instanceof ServerWorld) {
+				this.discard();
 			}
+			return;
 		}
 		super.onEntityHit(entityHitResult);
+	}
+
+	private boolean isActiveHostileOwnerTarget(GuardEntity shooterGuard, Entity hitEntity) {
+		return hitEntity instanceof ServerPlayerEntity player
+				&& shooterGuard.getOwnerUuid() != null
+				&& shooterGuard.getOwnerUuid().equals(player.getUuid())
+				&& shooterGuard.getTarget() == hitEntity;
 	}
 
 	@Override

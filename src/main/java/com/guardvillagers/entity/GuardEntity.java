@@ -84,6 +84,7 @@ import net.minecraft.village.VillagerProfession;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.LocalDifficulty;
 import net.minecraft.world.ServerWorldAccess;
+import net.minecraft.world.TeleportTarget;
 import net.minecraft.world.rule.GameRules;
 import net.minecraft.world.poi.PointOfInterestStorage;
 import net.minecraft.world.poi.PointOfInterestTypes;
@@ -459,7 +460,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 	public void setOwnerUuid(UUID ownerUuid) {
 		UUID previousOwner = this.ownerUuid;
 		this.ownerUuid = ownerUuid;
-		if (ownerUuid != null && this.squadId == null) {
+		if (ownerUuid != null && !ownerUuid.equals(previousOwner)) {
 			this.squadId = ownerUuid;
 		}
 		if (previousOwner != null && !previousOwner.equals(ownerUuid) && !this.lastRegisteredOwnerName.isBlank()) {
@@ -833,11 +834,43 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 		if (!this.hasOwner()) {
 			return null;
 		}
-		ServerPlayerEntity owner = world.getServer().getPlayerManager().getPlayer(this.ownerUuid);
+		ServerPlayerEntity owner = this.resolveOnlineOwner(world);
 		if (owner == null || owner.getEntityWorld() != world) {
 			return null;
 		}
 		return owner;
+	}
+
+	public ServerPlayerEntity resolveOnlineOwner(ServerWorld world) {
+		if (!this.hasOwner()) {
+			return null;
+		}
+		return world.getServer().getPlayerManager().getPlayer(this.ownerUuid);
+	}
+
+	public boolean tryTeleportToOwnerWorld(ServerWorld currentWorld) {
+		ServerPlayerEntity owner = this.resolveOnlineOwner(currentWorld);
+		if (owner == null || owner.isSpectator() || !(owner.getEntityWorld() instanceof ServerWorld ownerWorld)) {
+			return false;
+		}
+		if (ownerWorld == currentWorld || this.isLeashed() || this.hasVehicle() || this.hasPassengers()) {
+			return false;
+		}
+
+		BlockPos destination = GuardVillagersMod.findNearbyGuardSpawnPos(ownerWorld, owner.getBlockPos(), 8);
+		if (destination == null) {
+			return false;
+		}
+
+		this.getNavigation().stop();
+		Entity teleported = this.teleportTo(new TeleportTarget(
+				ownerWorld,
+				Vec3d.ofBottomCenter(destination),
+				Vec3d.ZERO,
+				owner.getYaw(),
+				owner.getPitch(),
+				TeleportTarget.NO_OP));
+		return teleported != null;
 	}
 
 	public void assignRandomRole(ServerWorld world) {
@@ -878,11 +911,14 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			};
 			ItemStack swordStack = new ItemStack(sword);
 			int sharpnessLevel = switch (weaponLevel) {
-				case 1 -> 1;
-				case 2 -> 2;
-				default -> 3;
+				case 3 -> 3;
+				case 4 -> 4;
+				case 5 -> 5;
+				default -> 0;
 			};
-			this.applyEnchantment(world, swordStack, Enchantments.SHARPNESS, sharpnessLevel);
+			if (sharpnessLevel > 0) {
+				this.applyEnchantment(world, swordStack, Enchantments.SHARPNESS, sharpnessLevel);
+			}
 			this.equipStack(EquipmentSlot.MAINHAND, swordStack);
 		} else {
 			ItemStack bowStack = new ItemStack(Items.BOW);
@@ -1678,6 +1714,9 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 				return true;
 			}
 			if (this.ownerUuid != null && this.getEntityWorld() instanceof ServerWorld world) {
+				if (GuardDiplomacyManager.isBlacklisted(world.getServer(), this.ownerUuid, player.getUuid())) {
+					return false;
+				}
 				return GuardDiplomacyManager.isWhitelisted(world.getServer(), this.ownerUuid, player.getUuid());
 			}
 		}
@@ -1690,6 +1729,14 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			target = null;
 		}
 		super.setTarget(target);
+	}
+
+	public void setHostileOwnerTarget(LivingEntity target) {
+		if (target instanceof ServerPlayerEntity player
+				&& this.ownerUuid != null
+				&& this.ownerUuid.equals(player.getUuid())) {
+			super.setTarget(target);
+		}
 	}
 
 	private void keepBowRange() {
@@ -2009,6 +2056,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			this.home = null;
 		}
 		this.patrolRadius = MathHelper.clamp(view.getInt(PATROL_RADIUS_KEY, 0), 0, 128);
+		this.syncHomeData();
 		// Read new keys first, fall back to legacy keys for migration
 		int readGroupIndex = view.getInt(GROUP_INDEX_KEY, Integer.MIN_VALUE);
 		if (readGroupIndex == Integer.MIN_VALUE) {

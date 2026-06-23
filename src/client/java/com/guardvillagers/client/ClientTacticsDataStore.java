@@ -18,6 +18,7 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ServerInfo;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.util.math.ChunkPos;
+import net.minecraft.util.math.MathHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,6 +39,7 @@ public final class ClientTacticsDataStore {
 	private static final int FILE_VERSION = 1;
 	private static final long SAVE_DEBOUNCE_MILLIS = 1_200L;
 	private static final int MAX_ROLE_NAME_LENGTH = 24;
+	public static final int MAX_GROUPS = 64;
 	private static final Path SAVE_PATH = FabricLoader.getInstance().getConfigDir().resolve("guardvillagers_client_tactics.json");
 	private static final List<String> DEFAULT_GROUP_NAMES = List.of();
 	private static final ClientTacticsDataStore INSTANCE = new ClientTacticsDataStore();
@@ -121,7 +123,7 @@ public final class ClientTacticsDataStore {
 	}
 
 	public void ensureGroupCount(WorldContext context, int groupCount) {
-		int targetCount = Math.max(0, groupCount);
+		int targetCount = MathHelper.clamp(groupCount, 0, MAX_GROUPS);
 		WorldData worldData = this.world(context);
 		if (targetCount <= worldData.groupNames.size()) {
 			return;
@@ -133,13 +135,13 @@ public final class ClientTacticsDataStore {
 	}
 
 	public String getGroupName(WorldContext context, int row) {
-		int normalizedRow = Math.max(0, row);
+		int normalizedRow = MathHelper.clamp(row, 0, MAX_GROUPS - 1);
 		this.ensureGroupCount(context, normalizedRow + 1);
 		return this.world(context).groupNames.get(normalizedRow);
 	}
 
 	public void setGroupName(WorldContext context, int row, String roleName) {
-		int normalizedRow = Math.max(0, row);
+		int normalizedRow = MathHelper.clamp(row, 0, MAX_GROUPS - 1);
 		this.ensureGroupCount(context, normalizedRow + 1);
 		String sanitized = sanitizeGroupName(roleName);
 		WorldData worldData = this.world(context);
@@ -156,7 +158,7 @@ public final class ClientTacticsDataStore {
 
 		List<String> sanitizedNames = groupNames == null
 				? List.of()
-				: groupNames.stream().map(ClientTacticsDataStore::sanitizeGroupName).toList();
+				: groupNames.stream().limit(MAX_GROUPS).map(ClientTacticsDataStore::sanitizeGroupName).toList();
 		WorldData worldData = this.world(context);
 		if (worldData.groupNames.equals(sanitizedNames)) {
 			return;

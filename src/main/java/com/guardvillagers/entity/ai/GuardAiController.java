@@ -379,7 +379,7 @@ public final class GuardAiController {
 		if (!this.guard.hasOwner() || this.guard.isStaying()) {
 			return false;
 		}
-		ServerPlayerEntity owner = this.guard.resolveOwner(world);
+		ServerPlayerEntity owner = this.guard.resolveOnlineOwner(world);
 		if (owner == null || owner.isSpectator()) {
 			return false;
 		}
@@ -394,7 +394,11 @@ public final class GuardAiController {
 			this.guard.setTarget(null);
 			return;
 		}
-		this.guard.setTarget(target);
+		if (this.isHostileOwnerTarget(target)) {
+			this.guard.setHostileOwnerTarget(target);
+		} else {
+			this.guard.setTarget(target);
+		}
 		if (this.lastProgressPos == Vec3d.ZERO) {
 			this.lastProgressPos = this.guard.getEntityPos();
 		}
@@ -517,7 +521,7 @@ public final class GuardAiController {
 	}
 
 	private void addCandidate(Map<UUID, TargetAccumulator> candidates, LivingEntity entity, AlertReason reason, long tick, boolean sticky) {
-		if (!this.isValidCombatTarget(entity, reason.requiresSight())) {
+		if (!this.isValidCombatTarget(entity, reason)) {
 			return;
 		}
 		TargetAccumulator accumulator = candidates.computeIfAbsent(entity.getUuid(), uuid -> new TargetAccumulator(entity));
@@ -592,12 +596,39 @@ public final class GuardAiController {
 		return suppressedUntil == null || suppressedUntil <= this.currentWorldTime();
 	}
 
+	private boolean isHostileOwnerTarget(LivingEntity target) {
+		return target instanceof ServerPlayerEntity player
+				&& this.guard.getOwnerUuid() != null
+				&& this.guard.getOwnerUuid().equals(player.getUuid())
+				&& target.isAlive()
+				&& !target.isRemoved()
+				&& this.guard.canTargetWithinZone(target.getBlockPos());
+	}
+
 	private boolean isTargetStillTrackable(LivingEntity target) {
 		return target != null
 				&& target.isAlive()
 				&& !target.isRemoved()
 				&& !this.guard.isAlly(target)
 				&& this.guard.canTargetWithinZone(target.getBlockPos());
+	}
+
+	private boolean isTargetStillTrackable(LivingEntity target, AlertReason reason) {
+		if (reason == AlertReason.OWNER_HOSTILE && this.isHostileOwnerTarget(target)) {
+			return true;
+		}
+		return this.isTargetStillTrackable(target);
+	}
+
+	private boolean isValidCombatTarget(LivingEntity target, AlertReason reason) {
+		if (!this.isTargetStillTrackable(target, reason)) {
+			return false;
+		}
+		if (reason.requiresSight() && !this.guard.canSee(target)) {
+			return false;
+		}
+		Long suppressedUntil = this.suppressedTargets.get(target.getUuid());
+		return suppressedUntil == null || suppressedUntil <= this.currentWorldTime();
 	}
 
 	private LivingEntity resolveEntity(ServerWorld world, UUID uuid) {
