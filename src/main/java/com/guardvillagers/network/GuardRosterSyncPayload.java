@@ -48,11 +48,14 @@ public record GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary>
 
 	private static List<String> readGroupNames(RegistryByteBuf buf) {
 		int rawGroupCount = buf.readInt();
+		if (rawGroupCount < 0) {
+			throw new IllegalArgumentException("Guard roster group count cannot be negative: " + rawGroupCount);
+		}
 		if (rawGroupCount > WIRE_MAX_GROUPS) {
 			throw new IllegalArgumentException("Guard roster group count exceeds wire cap: " + rawGroupCount);
 		}
 
-		int groupCount = Math.max(0, Math.min(MAX_GROUPS, rawGroupCount));
+		int groupCount = Math.min(MAX_GROUPS, rawGroupCount);
 		List<String> groupNames = new ArrayList<>(groupCount);
 		for (int i = 0; i < groupCount; i++) {
 			groupNames.add(buf.readString(MAX_GROUP_NAME_LENGTH));
@@ -65,11 +68,14 @@ public record GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary>
 
 	private static List<GuardSummary> readGuardSummaries(RegistryByteBuf buf) {
 		int rawGuardCount = buf.readInt();
+		if (rawGuardCount < 0) {
+			throw new IllegalArgumentException("Guard roster guard count cannot be negative: " + rawGuardCount);
+		}
 		if (rawGuardCount > WIRE_MAX_GUARDS) {
 			throw new IllegalArgumentException("Guard roster guard count exceeds wire cap: " + rawGuardCount);
 		}
 
-		int guardCount = Math.max(0, rawGuardCount);
+		int guardCount = rawGuardCount;
 		List<GuardSummary> guards = new ArrayList<>(guardCount);
 		for (int i = 0; i < guardCount; i++) {
 			guards.add(GuardSummary.read(buf));

@@ -85,7 +85,6 @@ public final class GuardOwnershipIndex {
 		for (UUID guardId : List.copyOf(indexedIds)) {
 			GuardEntity guard = resolveGuard(server, guardId);
 			if (guard == null) {
-				staleIds.add(guardId);
 				continue;
 			}
 			if (guard.isRemoved() || !ownerUuid.equals(guard.getOwnerUuid())) {
@@ -127,7 +126,10 @@ public final class GuardOwnershipIndex {
 		for (UUID guardId : List.copyOf(GUARD_TO_OWNER.keySet())) {
 			WeakReference<GuardEntity> reference = GUARD_REFERENCES.get(guardId);
 			GuardEntity guard = reference == null ? null : reference.get();
-			if (guard == null || guard.isRemoved()) {
+			if (guard == null) {
+				continue;
+			}
+			if (guard.isRemoved()) {
 				removeGuard(guardId);
 				continue;
 			}

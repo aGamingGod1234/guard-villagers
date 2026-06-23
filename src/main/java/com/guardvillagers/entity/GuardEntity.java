@@ -15,6 +15,7 @@ import com.guardvillagers.entity.goal.FormationFollowOwnerGoal;
 import com.guardvillagers.entity.goal.GuardBowAttackGoal;
 import com.guardvillagers.entity.goal.GuardHomeAnchorGoal;
 import com.guardvillagers.entity.goal.GuardIdleGoal;
+import com.guardvillagers.entity.goal.GuardMeleeAttackGoal;
 import com.guardvillagers.entity.goal.GuardRallyGoal;
 import com.guardvillagers.entity.goal.PerimeterPatrolGoal;
 import com.guardvillagers.entity.goal.RaidTacticsGoal;
@@ -34,7 +35,6 @@ import net.minecraft.entity.ai.RangedAttackMob;
 import net.minecraft.entity.ai.goal.LookAroundGoal;
 import net.minecraft.entity.ai.goal.LookAtEntityGoal;
 import net.minecraft.entity.ai.goal.LongDoorInteractGoal;
-import net.minecraft.entity.ai.goal.MeleeAttackGoal;
 import net.minecraft.entity.ai.goal.SwimGoal;
 import net.minecraft.entity.ai.pathing.Path;
 import net.minecraft.entity.ai.pathing.PathNode;
@@ -281,7 +281,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 			Map.entry(Items.DIAMOND_BOOTS, new ArmorDefinition(EquipmentSlot.FEET, 4)),
 			Map.entry(Items.NETHERITE_BOOTS, new ArmorDefinition(EquipmentSlot.FEET, 5)));
 
-	private MeleeAttackGoal meleeGoal;
+	private GuardMeleeAttackGoal meleeGoal;
 	private GuardBowAttackGoal rangedGoal;
 	private final GuardAiController aiController;
 
@@ -350,7 +350,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 
 	@Override
 	protected void initGoals() {
-		this.meleeGoal = new MeleeAttackGoal(this, 1.2D, true);
+		this.meleeGoal = new GuardMeleeAttackGoal(this, 1.2D);
 		this.rangedGoal = new GuardBowAttackGoal(this, 1.0D, 15.0F);
 
 		this.goalSelector.add(0, new SwimGoal(this));

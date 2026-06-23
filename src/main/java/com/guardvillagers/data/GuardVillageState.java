@@ -106,14 +106,14 @@ public final class GuardVillageState extends PersistentState {
 
 	public record VillageData(int initialSpawnCount, long lastSpawnTick, int maxGuardCount) {
 		public static final Codec<VillageData> CODEC = RecordCodecBuilder.create(instance -> instance.group(
-			Codec.intRange(1, 10_000).fieldOf("initial_spawn_count").forGetter(VillageData::initialSpawnCount),
+			Codec.INT.fieldOf("initial_spawn_count").forGetter(VillageData::initialSpawnCount),
 			Codec.LONG.optionalFieldOf("last_spawn_tick", Long.MIN_VALUE).forGetter(VillageData::lastSpawnTick),
-			Codec.intRange(1, 10_000).optionalFieldOf("max_guard_count", 1).forGetter(VillageData::maxGuardCount)
+			Codec.INT.optionalFieldOf("max_guard_count", 1).forGetter(VillageData::maxGuardCount)
 		).apply(instance, VillageData::new));
 
 		public VillageData {
 			initialSpawnCount = clampGuardCount(initialSpawnCount);
-			maxGuardCount = clampGuardCount(maxGuardCount);
+			maxGuardCount = Math.max(initialSpawnCount, clampGuardCount(maxGuardCount));
 		}
 	}
 }

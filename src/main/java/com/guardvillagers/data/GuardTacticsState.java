@@ -236,7 +236,7 @@ public final class GuardTacticsState extends PersistentState {
 
 		public int addGroup() {
 			if (this.groupNames.size() >= MAX_GROUPS) {
-				return MAX_GROUPS - 1;
+				return -1;
 			}
 			int index = this.groupNames.size();
 			String name = index < GROUP_NAME_CYCLE.size() ? GROUP_NAME_CYCLE.get(index) : "Group " + (index + 1);

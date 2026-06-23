@@ -727,7 +727,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			addGroupHovered ? 0xFF3B5771 : 0xFF2A3E54
 		);
 		this.drawBorder(context, this.addGroupButtonX, this.addGroupButtonY, ADD_GROUP_BUTTON_WIDTH, ADD_GROUP_BUTTON_HEIGHT - 2, 0xFF6C95BC);
-		context.drawText(this.textRenderer, Text.literal(canCreateGroup ? "Add Group" : "64 Groups"), this.addGroupButtonX + 12, this.addGroupButtonY + 4, canCreateGroup ? TEXT_PRIMARY : TEXT_SECONDARY, false);
+		context.drawText(this.textRenderer, Text.literal(canCreateGroup ? "Add Group" : ClientTacticsDataStore.MAX_GROUPS + " Groups"), this.addGroupButtonX + 12, this.addGroupButtonY + 4, canCreateGroup ? TEXT_PRIMARY : TEXT_SECONDARY, false);
 		String groupHelpText = rosterLoaded
 			? "Drag guards to assign or unassign | Shift+RMB header: rename"
 			: "Syncing guard roster from server...";

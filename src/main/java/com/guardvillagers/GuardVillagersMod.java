@@ -327,6 +327,10 @@ public class GuardVillagersMod implements ModInitializer {
 								.executes(context -> {
 									ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
 									int row = addGroup(player);
+									if (row < 0) {
+										context.getSource().sendError(Text.literal("Group limit reached."));
+										return 0;
+									}
 									refreshOpenTacticsScreen(player);
 									context.getSource()
 											.sendFeedback(() -> Text.literal("Added group " + (row + 1) + "."), false);
@@ -651,11 +655,14 @@ public class GuardVillagersMod implements ModInitializer {
 	private static int addGroup(ServerPlayerEntity player) {
 		MinecraftServer server = player.getCommandSource().getServer();
 		if (server == null) {
-			return 0;
+			return -1;
 		}
 		GuardTacticsState state = GuardTacticsManager.getState(server);
 		GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUuid());
 		int row = tactics.addGroup();
+		if (row < 0) {
+			return -1;
+		}
 		state.markDirty();
 		syncOwnedGuardRoster(player);
 		return row;
@@ -802,6 +809,9 @@ public class GuardVillagersMod implements ModInitializer {
 			GuardEntity guard = ownedGuards.get(i);
 			int groupIndex = guard.getGroupIndex();
 			String groupName = resolveRosterGroupName(groupNames, guard, groupIndex);
+			double distance = guard.getEntityWorld() == player.getEntityWorld()
+					? Math.sqrt(guard.squaredDistanceTo(player))
+					: -1.0D;
 			guards.add(new GuardRosterSyncPayload.GuardSummary(
 					guard.getUuid(),
 					guard.getName().getString(),
@@ -809,7 +819,7 @@ public class GuardVillagersMod implements ModInitializer {
 					guard.getHealth(),
 					guard.getMaxHealth(),
 					guard.getExperience(),
-					Math.sqrt(guard.squaredDistanceTo(player)),
+					distance,
 					groupIndex,
 					groupName,
 					guard.getMainHandStack(),
