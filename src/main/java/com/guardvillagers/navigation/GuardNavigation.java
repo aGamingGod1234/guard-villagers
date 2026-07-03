@@ -61,7 +61,12 @@ public class GuardNavigation extends MobNavigation {
 		}
 
 		long currentTick = this.guard.getEntityWorld().getTime();
-		Path cached = SquadRouteCache.getSquadRoute(this.guard.getSquadId(), this.guard.getBlockPos(), target, currentTick);
+		Path cached = SquadRouteCache.getSquadRoute(
+				this.world.getRegistryKey(),
+				this.guard.getSquadId(),
+				this.guard.getBlockPos(),
+				target,
+				currentTick);
 		if (cached != null) {
 			this.lastRecalculateTick = currentTick;
 			return cached;
@@ -69,7 +74,13 @@ public class GuardNavigation extends MobNavigation {
 
 		Path newPath = super.findPathTo(target, distance);
 		if (newPath != null) {
-			SquadRouteCache.cacheSquadRoute(this.guard.getSquadId(), this.guard.getBlockPos(), target, newPath, currentTick);
+			SquadRouteCache.cacheSquadRoute(
+					this.world.getRegistryKey(),
+					this.guard.getSquadId(),
+					this.guard.getBlockPos(),
+					target,
+					newPath,
+					currentTick);
 		}
 		this.lastRecalculateTick = currentTick;
 		return newPath;
@@ -176,7 +187,7 @@ public class GuardNavigation extends MobNavigation {
 		this.stop();
 
 		if (this.routeMode == RouteMode.STATIC && cachedTarget != null) {
-			SquadRouteCache.invalidateSquadRoute(this.guard.getSquadId(), cachedTarget);
+			SquadRouteCache.invalidateSquadRoute(this.world.getRegistryKey(), this.guard.getSquadId(), cachedTarget);
 		}
 
 		if (crowdRecoveryTarget != null) {

@@ -1,5 +1,6 @@
 package com.guardvillagers.data;
 
+import com.guardvillagers.GuardSecurityLimits;
 import com.guardvillagers.entity.FormationType;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
@@ -11,6 +12,8 @@ import net.minecraft.world.PersistentStateType;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -44,21 +47,49 @@ public final class GuardTacticsState extends PersistentState {
 	}
 
 	private GuardTacticsState(Map<UUID, PlayerTactics> entries) {
-		this.entries = new HashMap<>();
+		this.entries = new LinkedHashMap<>(Math.max(16, entries.size()), 0.75F, true);
 		for (Map.Entry<UUID, PlayerTactics> entry : entries.entrySet()) {
-			this.entries.put(entry.getKey(), entry.getValue().copy());
+			this.putBounded(entry.getKey(), entry.getValue().copy());
 		}
 	}
 
 	public PlayerTactics getOrCreate(UUID ownerId) {
-		return this.entries.computeIfAbsent(ownerId, ignored -> {
-			this.markDirty();
-			return new PlayerTactics();
-		});
+		PlayerTactics existing = this.entries.get(ownerId);
+		if (existing != null) {
+			return existing;
+		}
+		PlayerTactics created = new PlayerTactics();
+		this.putBounded(ownerId, created);
+		this.markDirty();
+		return created;
+	}
+
+	public PlayerTactics getOrDefault(UUID ownerId) {
+		PlayerTactics existing = this.entries.get(ownerId);
+		return existing == null ? new PlayerTactics() : existing.copy();
+	}
+
+	public int trackedPlayerCount() {
+		return this.entries.size();
 	}
 
 	private Map<UUID, PlayerTactics> entriesForCodec() {
 		return Collections.unmodifiableMap(this.entries);
+	}
+
+	private void putBounded(UUID ownerId, PlayerTactics tactics) {
+		if (!this.entries.containsKey(ownerId) && this.entries.size() >= GuardSecurityLimits.MAX_TACTICS_PLAYERS) {
+			this.evictEldest();
+		}
+		this.entries.put(ownerId, tactics);
+	}
+
+	private void evictEldest() {
+		Iterator<UUID> iterator = this.entries.keySet().iterator();
+		if (iterator.hasNext()) {
+			iterator.next();
+			iterator.remove();
+		}
 	}
 
 	public static final class PlayerTactics {
@@ -133,6 +164,9 @@ public final class GuardTacticsState extends PersistentState {
 			}
 			this.groupNames = new ArrayList<>();
 			for (String name : effectiveNames) {
+				if (this.groupNames.size() >= MAX_GROUPS) {
+					break;
+				}
 				String sanitized = sanitizeGroupName(name);
 				if (!sanitized.isEmpty()) {
 					this.groupNames.add(sanitized);
@@ -214,13 +248,16 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		public String getGroupName(int row) {
+			if (!isValidGroupRow(row)) {
+				return "Alpha";
+			}
 			int normalizedRow = normalizeRow(row);
 			this.ensureGroupCount(normalizedRow + 1);
 			return this.groupNames.get(normalizedRow);
 		}
 
 		public void setGroupName(int row, String name) {
-			if (row < 0) {
+			if (!isValidGroupRow(row)) {
 				return;
 			}
 			int normalizedRow = normalizeRow(row);
@@ -229,6 +266,9 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		public int addGroup() {
+			if (this.groupNames.size() >= MAX_GROUPS) {
+				return -1;
+			}
 			int index = this.groupNames.size();
 			String name = index < GROUP_NAME_CYCLE.size() ? GROUP_NAME_CYCLE.get(index) : "Group " + (index + 1);
 			this.groupNames.add(name);
@@ -236,7 +276,7 @@ public final class GuardTacticsState extends PersistentState {
 		}
 
 		public int cycleGroupName(int row) {
-			if (row < 0) {
+			if (!isValidGroupRow(row)) {
 				return -1;
 			}
 			int normalizedRow = normalizeRow(row);
@@ -347,6 +387,10 @@ public final class GuardTacticsState extends PersistentState {
 
 		private static boolean isValidRow(int row) {
 			return row >= MIN_ROW_INDEX;
+		}
+
+		private static boolean isValidGroupRow(int row) {
+			return row >= MIN_ROW_INDEX && row < MAX_GROUPS;
 		}
 
 		private static boolean isValidColumn(int column) {

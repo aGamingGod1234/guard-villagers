@@ -4,6 +4,7 @@
   "screen.guardvillagers.shop": "Guard Shop",
   "screen.guardvillagers.tactics": "Guard Tactics",
   "screen.guardvillagers.hierarchy": "Guard Hierarchy",
+  "screen.guardvillagers.groups": "Guard Groups",
   "item.guardvillagers.guard_whistle": "Guard Whistle",
   "itemGroup.guardvillagers.guards": "Guards"
 }

@@ -44,12 +44,14 @@ public final class FormationFollowOwnerGoal extends Goal {
 			return false;
 		}
 
-		ServerPlayerEntity resolvedOwner = this.guard.resolveOwner(world);
-		if (resolvedOwner == null || resolvedOwner.isSpectator()) {
+		if (!this.guard.canFollowOwnerFormation()) {
 			this.resetProgressSampling();
 			return false;
 		}
-		if (!this.guard.canFollowOwnerFormation()) {
+
+		ServerPlayerEntity resolvedOwner = this.guard.resolveOwner(world);
+		if (resolvedOwner == null || resolvedOwner.isSpectator()) {
+			this.guard.tryTeleportToOwnerWorld(world);
 			this.resetProgressSampling();
 			return false;
 		}

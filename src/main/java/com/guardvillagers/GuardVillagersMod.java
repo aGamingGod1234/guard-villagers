@@ -27,7 +27,6 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
-import net.fabricmc.fabric.api.event.player.UseEntityCallback;
 import net.fabricmc.fabric.api.itemgroup.v1.FabricItemGroup;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
 import net.minecraft.block.DispenserBlock;
@@ -42,6 +41,7 @@ import net.minecraft.entity.TypedEntityData;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.SpawnGroup;
 import net.minecraft.entity.SpawnReason;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.passive.IronGolemEntity;
 import net.minecraft.entity.passive.VillagerEntity;
 import net.minecraft.nbt.NbtCompound;
@@ -91,6 +91,7 @@ public class GuardVillagersMod implements ModInitializer {
 
 	private static final int DEBUG_SYNC_INTERVAL_TICKS = 5;
 	private static final int DEBUG_MAX_PATH_NODES = 64;
+	private static final int DEBUG_MAX_GUARD_DELTAS = 256;
 	/**
 	 * Upper bound on the group-row index exposed through /guards groups rename/assign.
 	 * Prevents an unbounded IntegerArgumentType from forcing the server to allocate a
@@ -110,6 +111,7 @@ public class GuardVillagersMod implements ModInitializer {
 	public enum GuardPurchaseResult {
 		SUCCESS,
 		NOT_TRUSTED,
+		LIMIT_REACHED,
 		INSUFFICIENT_FUNDS,
 		SPAWN_FAILED,
 		INTERNAL_ERROR
@@ -240,22 +242,35 @@ public class GuardVillagersMod implements ModInitializer {
 		return state.getOrCreate(playerUuid);
 	}
 
+	public static GuardPlayerUpgrades getUpgradesView(ServerPlayerEntity player) {
+		return getUpgradesView(player.getCommandSource().getServer(), player.getUuid());
+	}
+
+	public static GuardPlayerUpgrades getUpgradesView(ServerWorld world, UUID playerUuid) {
+		return getUpgradesView(world.getServer(), playerUuid);
+	}
+
+	public static GuardPlayerUpgrades getUpgradesView(MinecraftServer server, UUID playerUuid) {
+		GuardUpgradeState state = server.getOverworld().getPersistentStateManager().getOrCreate(GuardUpgradeState.TYPE);
+		return state.getOrDefault(playerUuid);
+	}
+
 	public static float getHealingAmount(ServerWorld world, UUID ownerUuid) {
 		if (ownerUuid == null) {
 			return 1.0F;
 		}
-		return getUpgrades(world, ownerUuid).getHealingPerCycle();
+		return getUpgradesView(world, ownerUuid).getHealingPerCycle();
 	}
 
 	public static int getHealingIntervalTicks(ServerWorld world, UUID ownerUuid) {
 		if (ownerUuid == null) {
 			return 100;
 		}
-		return getUpgrades(world, ownerUuid).getHealingIntervalTicks();
+		return getUpgradesView(world, ownerUuid).getHealingIntervalTicks();
 	}
 
 	public static boolean hasShieldUpgrade(ServerWorld world, UUID ownerUuid) {
-		return ownerUuid != null && getUpgrades(world, ownerUuid).hasShieldUpgrade();
+		return ownerUuid != null && getUpgradesView(world, ownerUuid).hasShieldUpgrade();
 	}
 
 	private void registerCommands() {
@@ -327,6 +342,10 @@ public class GuardVillagersMod implements ModInitializer {
 								.executes(context -> {
 									ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
 									int row = addGroup(player);
+									if (row < 0) {
+										context.getSource().sendError(Text.literal("Group limit reached."));
+										return 0;
+									}
 									refreshOpenTacticsScreen(player);
 									context.getSource()
 											.sendFeedback(() -> Text.literal("Added group " + (row + 1) + "."), false);
@@ -406,6 +425,7 @@ public class GuardVillagersMod implements ModInitializer {
 									return setReputationValue(admin, admin, input);
 								})))
 				.then(CommandManager.literal("debug")
+						.requires(GuardVillagersMod::hasOperatorPermission)
 						.executes(context -> toggleDebug(context.getSource().getPlayerOrThrow(), -1))
 						.then(CommandManager.argument("range", IntegerArgumentType.integer(1))
 								.executes(context -> toggleDebug(
@@ -452,7 +472,7 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	public static int getAdjustedGuardCost(ServerPlayerEntity player) {
-		GuardPlayerUpgrades upgrades = getUpgrades(player);
+		GuardPlayerUpgrades upgrades = getUpgradesView(player);
 		int basePrice = upgrades.getGuardCost();
 		double reputation = getReputation(player);
 		double modifier = 1.5D - (reputation * 0.75D);
@@ -475,7 +495,7 @@ public class GuardVillagersMod implements ModInitializer {
 		}
 
 		int normalizedCount = Math.max(1, requestedCount);
-		GuardPlayerUpgrades upgrades = getUpgrades(player);
+		GuardPlayerUpgrades upgrades = getUpgradesView(player);
 		int costPerGuard = getAdjustedGuardCost(player);
 		boolean creativeMode = player.getAbilities().creativeMode;
 		int toSpawn = normalizedCount;
@@ -490,23 +510,36 @@ public class GuardVillagersMod implements ModInitializer {
 
 		ServerWorld world = player.getEntityWorld();
 		int spawned = 0;
+		int refundableDebit = 0;
 		List<String> spawnedNames = new ArrayList<>();
 		try {
-			int startRoleIndex = countOwnedGuards(player.getCommandSource().getServer(), player.getUuid())
-					% GuardRole.values().length;
+			int ownedGuardCount = countOwnedGuards(player.getCommandSource().getServer(), player.getUuid());
+			int remainingSlots = GuardSecurityLimits.remainingPersonalGuardSlots(ownedGuardCount);
+			if (remainingSlots <= 0) {
+				return new PurchaseBatchResult(GuardPurchaseResult.LIMIT_REACHED, 0, List.of());
+			}
+			toSpawn = Math.min(toSpawn, remainingSlots);
+			int startRoleIndex = ownedGuardCount % GuardRole.values().length;
 			for (int i = 0; i < toSpawn; i++) {
 				if (!GuardEconomy.spendEmeraldBlocks(player, costPerGuard)) {
 					break;
 				}
+				if (!creativeMode) {
+					refundableDebit += costPerGuard;
+				}
 				GuardRole roleForSpawn = GuardRole.values()[(startRoleIndex + i) % GuardRole.values().length];
 				GuardEntity spawnedGuard = trySpawnPurchasedGuard(world, player, upgrades, roleForSpawn);
 				if (spawnedGuard != null) {
+					if (!creativeMode) {
+						refundableDebit -= costPerGuard;
+					}
 					spawned++;
 					spawnedNames.add(spawnedGuard.getName().getString());
 					continue;
 				}
 				if (!creativeMode) {
 					GuardEconomy.refundEmeraldBlocks(player, costPerGuard);
+					refundableDebit -= costPerGuard;
 				}
 				break;
 			}
@@ -517,6 +550,9 @@ public class GuardVillagersMod implements ModInitializer {
 					world.getRegistryKey().getValue());
 			return new PurchaseBatchResult(GuardPurchaseResult.SPAWN_FAILED, 0, List.of());
 		} catch (RuntimeException exception) {
+			if (!creativeMode && refundableDebit > 0) {
+				GuardEconomy.refundEmeraldBlocks(player, refundableDebit);
+			}
 			LOGGER.error("Guard purchase crashed for {}", player.getName().getString(), exception);
 			return new PurchaseBatchResult(GuardPurchaseResult.INTERNAL_ERROR, spawned, List.copyOf(spawnedNames));
 		}
@@ -639,11 +675,14 @@ public class GuardVillagersMod implements ModInitializer {
 	private static int addGroup(ServerPlayerEntity player) {
 		MinecraftServer server = player.getCommandSource().getServer();
 		if (server == null) {
-			return 0;
+			return -1;
 		}
 		GuardTacticsState state = GuardTacticsManager.getState(server);
 		GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUuid());
 		int row = tactics.addGroup();
+		if (row < 0) {
+			return -1;
+		}
 		state.markDirty();
 		syncOwnedGuardRoster(player);
 		return row;
@@ -771,22 +810,36 @@ public class GuardVillagersMod implements ModInitializer {
 		if (server == null) {
 			return;
 		}
+		if (!ServerPlayNetworking.canSend(player, GuardRosterSyncPayload.ID)) {
+			return;
+		}
 
 		GuardTacticsState state = GuardTacticsManager.getState(server);
-		GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUuid());
-		List<String> groupNames = new ArrayList<>(tactics.groupCount());
-		for (int row = 0; row < tactics.groupCount(); row++) {
+		GuardTacticsState.PlayerTactics tactics = state.getOrDefault(player.getUuid());
+		int groupCount = Math.min(tactics.groupCount(), GuardRosterSyncPayload.MAX_GROUPS);
+		List<String> groupNames = new ArrayList<>(groupCount);
+		for (int row = 0; row < groupCount; row++) {
 			groupNames.add(tactics.getGroupName(row));
 		}
 
-		List<GuardRosterSyncPayload.GuardSummary> guards = new ArrayList<>();
-		for (GuardEntity guard : getOwnedGuards(server, player.getUuid())) {
+		List<GuardEntity> ownedGuards = getOwnedGuards(server, player.getUuid());
+		int guardCount = Math.min(ownedGuards.size(), GuardRosterSyncPayload.MAX_GUARDS);
+		List<GuardRosterSyncPayload.GuardSummary> guards = new ArrayList<>(guardCount);
+		for (int i = 0; i < guardCount; i++) {
+			GuardEntity guard = ownedGuards.get(i);
 			int groupIndex = guard.getGroupIndex();
 			String groupName = resolveRosterGroupName(groupNames, guard, groupIndex);
+			double distance = guard.getEntityWorld() == player.getEntityWorld()
+					? Math.sqrt(guard.squaredDistanceTo(player))
+					: -1.0D;
 			guards.add(new GuardRosterSyncPayload.GuardSummary(
 					guard.getUuid(),
 					guard.getName().getString(),
 					guard.getLevel(),
+					guard.getHealth(),
+					guard.getMaxHealth(),
+					guard.getExperience(),
+					distance,
 					groupIndex,
 					groupName,
 					guard.getMainHandStack(),
@@ -964,6 +1017,9 @@ public class GuardVillagersMod implements ModInitializer {
 			if (livingTarget instanceof GuardEntity targetGuard && targetGuard.isOwnedBy(serverPlayer.getUuid())) {
 				return ActionResult.PASS;
 			}
+			if (!canOwnerDirectGuardAt(serverPlayer, livingTarget)) {
+				return ActionResult.PASS;
+			}
 
 			try {
 				List<GuardEntity> ownedGuards = GuardOwnershipIndex
@@ -984,16 +1040,6 @@ public class GuardVillagersMod implements ModInitializer {
 				LOGGER.error("Failed to dispatch manual target from {}", serverPlayer.getName().getString(), exception);
 			}
 
-			return ActionResult.PASS;
-		});
-
-		UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
-			if (world.isClient() || !(player instanceof ServerPlayerEntity serverPlayer)) {
-				return ActionResult.PASS;
-			}
-			if (entity instanceof VillagerEntity villager) {
-				GuardReputationManager.recordTradeInteraction(serverPlayer, villager);
-			}
 			return ActionResult.PASS;
 		});
 
@@ -1057,6 +1103,9 @@ public class GuardVillagersMod implements ModInitializer {
 				if (target instanceof GuardEntity guardTarget && guardTarget.isOwnedBy(ownerAttacker.getUuid())) {
 					return; // Don't target own guards
 				}
+				if (!canOwnerDirectGuardAt(ownerAttacker, target)) {
+					return;
+				}
 				try {
 					List<GuardEntity> guards = GuardOwnershipIndex
 							.getOwnedGuards(ownerAttacker.getCommandSource().getServer(), ownerAttacker.getUuid());
@@ -1080,6 +1129,21 @@ public class GuardVillagersMod implements ModInitializer {
 		});
 	}
 
+	private static boolean canOwnerDirectGuardAt(ServerPlayerEntity owner, LivingEntity target) {
+		if (owner == null || target == null || target == owner) {
+			return false;
+		}
+		if (target instanceof PlayerEntity targetPlayer) {
+			if (!owner.getEntityWorld().isPvpEnabled()) {
+				return false;
+			}
+			if (!owner.shouldDamagePlayer(targetPlayer)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	private static void syncGuardDebug(ServerWorld world) {
 		if (world.getTime() % DEBUG_SYNC_INTERVAL_TICKS != 0) {
 			return;
@@ -1091,26 +1155,33 @@ public class GuardVillagersMod implements ModInitializer {
 			if (!GuardDebugManager.isEnabled(server, playerId)) {
 				continue;
 			}
+			if (!hasOperatorPermission(player.getCommandSource())) {
+				GuardDebugManager.setEnabled(server, playerId, false);
+				DEBUG_PATH_HASH_CACHE.remove(playerId);
+				sendDebugSync(player, false, 0.0D);
+				clearDebugData(player);
+				continue;
+			}
 
 			double effectiveRange = GuardDebugManager.getEffectiveRange(player);
 			sendDebugSync(player, true, effectiveRange);
 			double maxDistanceSq = effectiveRange * effectiveRange;
 			Map<Integer, Integer> previousHashes = DEBUG_PATH_HASH_CACHE.getOrDefault(playerId, Map.of());
-			Map<Integer, Integer> nextHashes = new HashMap<>(previousHashes.size());
-			List<GuardDebugDataPayload.GuardDebugEntry> changedEntries = new ArrayList<>(previousHashes.size());
+			Map<Integer, Integer> observedHashes = new HashMap<>(previousHashes.size());
+			Map<Integer, GuardDebugDataPayload.GuardDebugEntry> updatedEntries = new HashMap<>();
+			List<GuardDebugDataPayload.GuardDebugEntry> removedEntries = new ArrayList<>();
 
 			for (GuardEntity guard : world.getEntitiesByClass(
 					GuardEntity.class,
 					player.getBoundingBox().expand(effectiveRange),
-					entity -> (entity.getOwnerUuid() == null || entity.isOwnedBy(playerId))
-							&& entity.squaredDistanceTo(player) <= maxDistanceSq)) {
+					entity -> entity.squaredDistanceTo(player) <= maxDistanceSq)) {
 				int guardId = guard.getId();
 				GuardEntity.GuardDebugSnapshot snapshot = guard.getDebugSnapshot(DEBUG_MAX_PATH_NODES);
 				int hash = hashDebugSnapshot(snapshot);
-				nextHashes.put(guardId, hash);
+				observedHashes.put(guardId, hash);
 				Integer previousHash = previousHashes.get(guardId);
 				if (previousHash == null || previousHash != hash) {
-					changedEntries.add(new GuardDebugDataPayload.GuardDebugEntry(
+					updatedEntries.put(guardId, new GuardDebugDataPayload.GuardDebugEntry(
 							guardId,
 							snapshot.pathNodes(),
 							snapshot.currentPathIndex(),
@@ -1119,8 +1190,28 @@ public class GuardVillagersMod implements ModInitializer {
 			}
 
 			for (Integer previousGuardId : previousHashes.keySet()) {
-				if (!nextHashes.containsKey(previousGuardId)) {
-					changedEntries.add(new GuardDebugDataPayload.GuardDebugEntry(previousGuardId, List.of(), -1, -1));
+				if (!observedHashes.containsKey(previousGuardId)) {
+					removedEntries.add(new GuardDebugDataPayload.GuardDebugEntry(previousGuardId, List.of(), -1, -1));
+				}
+			}
+
+			Map<Integer, Integer> nextHashes = new HashMap<>(previousHashes);
+			List<GuardDebugDataPayload.GuardDebugEntry> changedEntries = new ArrayList<>(DEBUG_MAX_GUARD_DELTAS);
+			for (GuardDebugDataPayload.GuardDebugEntry removedEntry : removedEntries) {
+				if (changedEntries.size() >= DEBUG_MAX_GUARD_DELTAS) {
+					break;
+				}
+				changedEntries.add(removedEntry);
+				nextHashes.remove(removedEntry.entityId());
+			}
+			for (GuardDebugDataPayload.GuardDebugEntry updatedEntry : updatedEntries.values()) {
+				if (changedEntries.size() >= DEBUG_MAX_GUARD_DELTAS) {
+					break;
+				}
+				changedEntries.add(updatedEntry);
+				Integer observedHash = observedHashes.get(updatedEntry.entityId());
+				if (observedHash != null) {
+					nextHashes.put(updatedEntry.entityId(), observedHash);
 				}
 			}
 

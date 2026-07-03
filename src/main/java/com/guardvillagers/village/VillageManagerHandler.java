@@ -20,9 +20,11 @@ import net.minecraft.world.poi.PointOfInterestTypes;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -35,6 +37,7 @@ public final class VillageManagerHandler {
 	private static final int NATURAL_GUARD_SCAN_EXPANSION = 16;
 	private static final int DOOR_COUNT_CACHE_TICKS = 20 * 60;
 	private static final int DOOR_COUNT_CACHE_MAX_ENTRIES = 4096;
+	private static final long VILLAGE_RETENTION_TICKS = 20L * 60L * 60L * 6L;
 	private static final Map<String, DoorCountCache> DOOR_COUNT_CACHE = new ConcurrentHashMap<>();
 	private static final GuardBehavior[] VILLAGE_BEHAVIOR_PATTERN = {
 		GuardBehavior.DEFENSIVE,
@@ -55,16 +58,20 @@ public final class VillageManagerHandler {
 		}
 
 		List<VillagerEntity> villagers = collectLoadedVillagers(world);
+		GuardVillageState state = world.getPersistentStateManager().getOrCreate(GuardVillageState.TYPE);
 		if (villagers.isEmpty()) {
+			state.retireStale(world.getTime(), Set.of(), VILLAGE_RETENTION_TICKS);
 			return;
 		}
 
 		Map<String, VillageAggregation> villages = aggregateVillages(world, villagers);
 		if (villages.isEmpty()) {
+			state.retireStale(world.getTime(), Set.of(), VILLAGE_RETENTION_TICKS);
 			return;
 		}
 
-		GuardVillageState state = world.getPersistentStateManager().getOrCreate(GuardVillageState.TYPE);
+		long now = world.getTime();
+		Set<String> observedVillageIds = new HashSet<>();
 		for (VillageAggregation aggregation : villages.values()) {
 			VillageDescriptor village = aggregation.descriptor;
 			int villagerCount = aggregation.villagerCount;
@@ -83,10 +90,11 @@ public final class VillageManagerHandler {
 			if (deterministicCap <= 0) {
 				continue;
 			}
+			observedVillageIds.add(village.id());
 
-			GuardVillageState.VillageData data = state.getOrCreate(village.id(), deterministicCap);
+			GuardVillageState.VillageData data = state.getOrCreate(village.id(), deterministicCap, now);
 			state.updateInitial(village.id(), Math.max(deterministicCap, data.initialSpawnCount()));
-			int initial = state.getOrCreate(village.id(), deterministicCap).initialSpawnCount();
+			int initial = state.getOrCreate(village.id(), deterministicCap, now).initialSpawnCount();
 			int regrowthCap = Math.max(initial, (int) Math.floor(initial * 1.5D));
 			int dynamicCap = Math.max(1, Math.min(MAX_GUARDS_PER_VILLAGE, Math.min(deterministicCap, regrowthCap)));
 
@@ -102,7 +110,6 @@ public final class VillageManagerHandler {
 				continue;
 			}
 
-			long now = world.getTime();
 			long lastSpawnTick = state.getLastSpawnTick(village.id());
 			if (lastSpawnTick != Long.MIN_VALUE && now - lastSpawnTick < RESPAWN_COOLDOWN_TICKS) {
 				continue;
@@ -117,6 +124,7 @@ public final class VillageManagerHandler {
 				state.setLastSpawnTick(village.id(), now);
 			}
 		}
+		state.retireStale(now, observedVillageIds, VILLAGE_RETENTION_TICKS);
 	}
 
 	public static Optional<VillageDescriptor> findVillageDescriptor(ServerWorld world, BlockPos origin) {

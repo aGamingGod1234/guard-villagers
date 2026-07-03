@@ -1,5 +1,6 @@
 package com.guardvillagers.data;
 
+import com.guardvillagers.GuardSecurityLimits;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.datafixer.DataFixTypes;
@@ -9,6 +10,8 @@ import net.minecraft.world.PersistentStateType;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -42,7 +45,10 @@ public final class GuardReputationState extends PersistentState {
 	}
 
 	private GuardReputationState(int schemaVersion, Map<UUID, Double> reputation) {
-		this.reputation = new HashMap<>(reputation);
+		this.reputation = new LinkedHashMap<>(Math.max(16, reputation.size()), 0.75F, true);
+		for (Map.Entry<UUID, Double> entry : reputation.entrySet()) {
+			this.putBounded(entry.getKey(), entry.getValue());
+		}
 	}
 
 	public double get(UUID playerId) {
@@ -54,22 +60,26 @@ public final class GuardReputationState extends PersistentState {
 		if (existing != null) {
 			return existing;
 		}
-		this.reputation.put(playerId, DEFAULT_REPUTATION);
+		this.putBounded(playerId, DEFAULT_REPUTATION);
 		this.markDirty();
 		return DEFAULT_REPUTATION;
 	}
 
 	public double add(UUID playerId, double delta) {
-		double updated = clamp(this.ensureTracked(playerId) + delta);
-		this.reputation.put(playerId, updated);
+		double updated = clamp(this.get(playerId) + delta);
+		this.putBounded(playerId, updated);
 		this.markDirty();
 		return updated;
 	}
 
 	public void set(UUID playerId, double value) {
 		double clamped = clamp(value);
-		this.reputation.put(playerId, clamped);
+		this.putBounded(playerId, clamped);
 		this.markDirty();
+	}
+
+	public int trackedPlayerCount() {
+		return this.reputation.size();
 	}
 
 	public void decayAll(double amount) {
@@ -135,5 +145,20 @@ public final class GuardReputationState extends PersistentState {
 
 	private static double clamp(double value) {
 		return Math.max(MIN_REPUTATION, Math.min(MAX_REPUTATION, value));
+	}
+
+	private void putBounded(UUID playerId, double value) {
+		if (!this.reputation.containsKey(playerId) && this.reputation.size() >= GuardSecurityLimits.MAX_REPUTATION_PLAYERS) {
+			this.evictEldest();
+		}
+		this.reputation.put(playerId, value);
+	}
+
+	private void evictEldest() {
+		Iterator<UUID> iterator = this.reputation.keySet().iterator();
+		if (iterator.hasNext()) {
+			iterator.next();
+			iterator.remove();
+		}
 	}
 }

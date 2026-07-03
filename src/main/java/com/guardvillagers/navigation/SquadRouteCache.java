@@ -2,7 +2,9 @@ package com.guardvillagers.navigation;
 
 import net.minecraft.entity.ai.pathing.Path;
 import net.minecraft.entity.ai.pathing.PathNode;
+import net.minecraft.registry.RegistryKey;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.World;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -26,12 +28,12 @@ public class SquadRouteCache {
      * Starts from the guard's current position and ensures validity.
      * Returns a DEFENSIVE COPY so consumers don't mutate each other's Path state.
      */
-    public static Path getSquadRoute(UUID groupId, BlockPos origin, BlockPos target, long currentTick) {
-        if (groupId == null || target == null) {
+    public static Path getSquadRoute(RegistryKey<World> worldKey, UUID groupId, BlockPos origin, BlockPos target, long currentTick) {
+        if (worldKey == null || groupId == null || target == null) {
             return null;
         }
 
-        CacheKey key = new CacheKey(groupId, quantize(target));
+        CacheKey key = new CacheKey(worldKey, groupId, quantize(target));
         CachedRoute entry = SQUAD_ROUTES.get(key);
 
         if (entry == null) {
@@ -61,12 +63,12 @@ public class SquadRouteCache {
     /**
      * Caches a successfully computed route for a squad.
      */
-    public static void cacheSquadRoute(UUID groupId, BlockPos origin, BlockPos target, Path path, long currentTick) {
-        if (groupId == null || target == null || path == null) {
+    public static void cacheSquadRoute(RegistryKey<World> worldKey, UUID groupId, BlockPos origin, BlockPos target, Path path, long currentTick) {
+        if (worldKey == null || groupId == null || target == null || path == null) {
             return;
         }
 
-        CacheKey key = new CacheKey(groupId, quantize(target));
+        CacheKey key = new CacheKey(worldKey, groupId, quantize(target));
         // Path is only read from cache via copyPath() on retrieval, so we can store
         // the original directly and avoid a redundant copy on insert.
         SQUAD_ROUTES.put(key, new CachedRoute(path, currentTick, origin, target));
@@ -80,11 +82,11 @@ public class SquadRouteCache {
         }
     }
 
-    public static void invalidateSquadRoute(UUID groupId, BlockPos target) {
-        if (groupId == null || target == null) {
+    public static void invalidateSquadRoute(RegistryKey<World> worldKey, UUID groupId, BlockPos target) {
+        if (worldKey == null || groupId == null || target == null) {
             return;
         }
-        SQUAD_ROUTES.remove(new CacheKey(groupId, quantize(target)));
+        SQUAD_ROUTES.remove(new CacheKey(worldKey, groupId, quantize(target)));
     }
 
     /**
@@ -109,7 +111,7 @@ public class SquadRouteCache {
         return pos.toImmutable();
     }
 
-    private record CacheKey(UUID groupId, BlockPos quantizedTarget) {
+    private record CacheKey(RegistryKey<World> worldKey, UUID groupId, BlockPos quantizedTarget) {
     }
 
     private record CachedRoute(Path path, long computeTick, BlockPos originPos, BlockPos targetPos) {

@@ -72,6 +72,7 @@ public final class GuardDebugRenderer {
 		}
 		if (!ClientDebugState.isEnabled()) {
 			CACHED_GUARDS.clear();
+			ClientGuardDebugData.clear();
 			return;
 		}
 
@@ -124,7 +125,6 @@ public final class GuardDebugRenderer {
 			GuardEntity.class,
 			client.player.getBoundingBox().expand(range),
 			guard -> guard.isAlive()
-				&& (guard.getOwnerUuid() == null || guard.isOwnedBy(client.player.getUuid()))
 				&& guard.squaredDistanceTo(client.player) <= rangeSq
 		));
 	}

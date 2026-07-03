@@ -44,3 +44,7 @@ replay_*.log
 *.jfr
 .gradle.zip
 .gradle/
+
+# local agent/workflow state
+.claude/
+nimbalyst-local/

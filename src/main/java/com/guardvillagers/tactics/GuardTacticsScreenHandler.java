@@ -58,7 +58,7 @@ public final class GuardTacticsScreenHandler extends GenericContainerScreenHandl
 		}
 
 		if (!this.getCursorStack().isEmpty()) {
-			this.setCursorStack(ItemStack.EMPTY);
+			return;
 		}
 
 		if (slotIndex >= 0 && slotIndex < TACTICS_SLOT_COUNT) {

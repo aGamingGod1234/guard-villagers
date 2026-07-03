@@ -14,6 +14,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.registry.Registries;
 import net.minecraft.text.Text;
+import net.minecraft.text.TranslatableTextContent;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.MathHelper;
@@ -73,6 +74,7 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 	private static final int LEFT_PANE_SCROLL_STEP = GROUP_BOX_HEIGHT + GROUP_BOX_GAP;
 	private static final int RIGHT_PANE_SCROLL_STEP = UNASSIGNED_CARD_HEIGHT + UNASSIGNED_CARD_GAP;
 	private static final int SCROLLBAR_TRACK_COLOR = 0x55394656;
+	private static final int UNASSIGNED_DROP_HEIGHT = 30;
 
 	private static final ItemStack GUARD_HEAD_ICON = new ItemStack(Items.PLAYER_HEAD);
 
@@ -141,8 +143,16 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 	public GuardTacticsScreen(GuardTacticsScreenHandler handler, PlayerInventory inventory, Text title) {
 		super(handler, inventory, title);
+		this.mode = isGroupsTitle(title) ? ViewMode.GROUPS : ViewMode.TACTICS;
+	}
+
+	private static boolean isGroupsTitle(Text title) {
+		if (title.getContent() instanceof TranslatableTextContent content) {
+			String key = content.getKey();
+			return "screen.guardvillagers.groups".equals(key) || "screen.guardvillagers.hierarchy".equals(key);
+		}
 		String normalized = title.getString().toLowerCase(Locale.ROOT);
-		this.mode = normalized.contains("group") || normalized.contains("hierarchy") ? ViewMode.GROUPS : ViewMode.TACTICS;
+		return normalized.contains("group") || normalized.contains("hierarchy");
 	}
 
 	@Override
@@ -547,8 +557,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			groupGuards.sort(guardSorter);
 		}
 		unassigned.sort(guardSorter);
+		List<ClientGuardRosterStore.GuardRosterEntry> rightPaneGuards = new ArrayList<>(allGuards);
+		rightPaneGuards.sort(guardSorter);
 
-		int groupCount = Math.max(0, Math.max(maxGroupRow + 1, this.dataStore.groupCount(worldContext)));
+		int groupCount = MathHelper.clamp(Math.max(maxGroupRow + 1, this.dataStore.groupCount(worldContext)), 0, ClientTacticsDataStore.MAX_GROUPS);
 		this.dataStore.ensureGroupCount(worldContext, groupCount);
 
 		// Two-pane layout
@@ -573,7 +585,8 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 		int leftContentY = this.leftPaneY + 16;
 		int leftContentH = this.leftPaneH - 16;
-		int totalLeftContent = (groupCount + 1) * (GROUP_BOX_HEIGHT + GROUP_BOX_GAP);
+		boolean canCreateGroup = groupCount < ClientTacticsDataStore.MAX_GROUPS;
+		int totalLeftContent = groupCount * (GROUP_BOX_HEIGHT + GROUP_BOX_GAP) + (canCreateGroup ? GROUP_BOX_HEIGHT + GROUP_BOX_GAP : 0);
 		this.leftPaneMaxScroll = Math.max(0, totalLeftContent - leftContentH);
 		this.leftPaneScrollTarget = MathHelper.clamp(this.leftPaneScrollTarget, 0, this.leftPaneMaxScroll);
 		this.leftPaneScrollAnimated = this.lerpPaneScroll(this.leftPaneScrollAnimated, this.leftPaneScrollTarget);
@@ -633,16 +646,17 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			}
 		}
 
-		// "Create new group" drop target
-		int createY = leftContentY + groupCount * (GROUP_BOX_HEIGHT + GROUP_BOX_GAP) - this.leftPaneScroll;
-		int createX = this.leftPaneX + 4;
-		int createW = this.leftPaneW - 8;
-		boolean createHighlighted = this.dragHandler.isActive() && this.contains(createX, createY, createW, GROUP_BOX_HEIGHT, mouseX, mouseY);
-		int createBg = createHighlighted ? 0xCC253545 : 0x66131B25;
-		context.fill(createX, createY, createX + createW, createY + GROUP_BOX_HEIGHT, createBg);
-		this.drawBorder(context, createX, createY, createW, GROUP_BOX_HEIGHT, createHighlighted ? 0xFF5A8ABF : 0xFF2A3548);
-		context.drawText(this.textRenderer, Text.literal("+ Drag guards here to create group"), createX + 10, createY + 24, TEXT_SECONDARY, false);
-		this.dropTargets.add(new DropTarget(groupCount, createX, createY, createW, GROUP_BOX_HEIGHT, true));
+		if (canCreateGroup) {
+			int createY = leftContentY + groupCount * (GROUP_BOX_HEIGHT + GROUP_BOX_GAP) - this.leftPaneScroll;
+			int createX = this.leftPaneX + 4;
+			int createW = this.leftPaneW - 8;
+			boolean createHighlighted = this.dragHandler.isActive() && this.contains(createX, createY, createW, GROUP_BOX_HEIGHT, mouseX, mouseY);
+			int createBg = createHighlighted ? 0xCC253545 : 0x66131B25;
+			context.fill(createX, createY, createX + createW, createY + GROUP_BOX_HEIGHT, createBg);
+			this.drawBorder(context, createX, createY, createW, GROUP_BOX_HEIGHT, createHighlighted ? 0xFF5A8ABF : 0xFF2A3548);
+			context.drawText(this.textRenderer, Text.literal("+ Drag guards here to create group"), createX + 10, createY + 24, TEXT_SECONDARY, false);
+			this.dropTargets.add(new DropTarget(groupCount, createX, createY, createW, GROUP_BOX_HEIGHT, true));
+		}
 
 		context.disableScissor();
 
@@ -660,22 +674,31 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		String guardHeader = rosterLoaded ? "All Guards (" + allGuards.size() + ")" : "All Guards (syncing...)";
 		context.drawText(this.textRenderer, Text.literal(guardHeader), this.rightPaneX + 6, this.rightPaneY + 4, SUBTITLE_GROUPS, false);
 
-		int rightContentY = this.rightPaneY + 16;
-		int rightContentH = this.rightPaneH - 16;
-		int totalRightContent = unassigned.size() * (UNASSIGNED_CARD_HEIGHT + UNASSIGNED_CARD_GAP);
+		int unassignedDropY = this.rightPaneY + 16;
+		int unassignedDropX = this.rightPaneX + 4;
+		int unassignedDropW = this.rightPaneW - 12;
+		boolean unassignedHighlighted = this.dragHandler.isActive() && this.contains(unassignedDropX, unassignedDropY, unassignedDropW, UNASSIGNED_DROP_HEIGHT, mouseX, mouseY);
+		context.fill(unassignedDropX, unassignedDropY, unassignedDropX + unassignedDropW, unassignedDropY + UNASSIGNED_DROP_HEIGHT, unassignedHighlighted ? 0xCC253545 : 0x66131B25);
+		this.drawBorder(context, unassignedDropX, unassignedDropY, unassignedDropW, UNASSIGNED_DROP_HEIGHT, unassignedHighlighted ? 0xFF5A8ABF : 0xFF2A3548);
+		context.drawText(this.textRenderer, Text.literal("Drop here to unassign"), unassignedDropX + 8, unassignedDropY + 10, TEXT_SECONDARY, false);
+		this.dropTargets.add(new DropTarget(-1, unassignedDropX, unassignedDropY, unassignedDropW, UNASSIGNED_DROP_HEIGHT, false));
+
+		int rightContentY = this.rightPaneY + 16 + UNASSIGNED_DROP_HEIGHT + 4;
+		int rightContentH = this.rightPaneH - 16 - UNASSIGNED_DROP_HEIGHT - 4;
+		int totalRightContent = rightPaneGuards.size() * (UNASSIGNED_CARD_HEIGHT + UNASSIGNED_CARD_GAP);
 		this.rightPaneMaxScroll = Math.max(0, totalRightContent - rightContentH);
 		this.rightPaneScrollTarget = MathHelper.clamp(this.rightPaneScrollTarget, 0, this.rightPaneMaxScroll);
 		this.rightPaneScrollAnimated = this.lerpPaneScroll(this.rightPaneScrollAnimated, this.rightPaneScrollTarget);
 		this.rightPaneScroll = MathHelper.clamp((int) Math.round(this.rightPaneScrollAnimated), 0, this.rightPaneMaxScroll);
 
 		context.enableScissor(this.rightPaneX + 1, rightContentY, this.rightPaneX + this.rightPaneW - 1, rightContentY + rightContentH);
-		for (int i = 0; i < unassigned.size(); i++) {
-			ClientGuardRosterStore.GuardRosterEntry guard = unassigned.get(i);
+		for (int i = 0; i < rightPaneGuards.size(); i++) {
+			ClientGuardRosterStore.GuardRosterEntry guard = rightPaneGuards.get(i);
 			int cardY = rightContentY + i * (UNASSIGNED_CARD_HEIGHT + UNASSIGNED_CARD_GAP) - this.rightPaneScroll;
 			int cardX = this.rightPaneX + 4;
 			int cardW = this.rightPaneW - 12;
 			this.renderUnassignedCard(context, guard, cardX, cardY, cardW);
-			this.guardCards.add(new GuardCardHitbox(guard, cardX, cardY, cardW, UNASSIGNED_CARD_HEIGHT, -1));
+			this.guardCards.add(new GuardCardHitbox(guard, cardX, cardY, cardW, UNASSIGNED_CARD_HEIGHT, this.getEffectiveGroup(guard)));
 		}
 		context.disableScissor();
 
@@ -704,9 +727,9 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 			addGroupHovered ? 0xFF3B5771 : 0xFF2A3E54
 		);
 		this.drawBorder(context, this.addGroupButtonX, this.addGroupButtonY, ADD_GROUP_BUTTON_WIDTH, ADD_GROUP_BUTTON_HEIGHT - 2, 0xFF6C95BC);
-		context.drawText(this.textRenderer, Text.literal("Add Group"), this.addGroupButtonX + 12, this.addGroupButtonY + 4, TEXT_PRIMARY, false);
+		context.drawText(this.textRenderer, Text.literal(canCreateGroup ? "Add Group" : ClientTacticsDataStore.MAX_GROUPS + " Groups"), this.addGroupButtonX + 12, this.addGroupButtonY + 4, canCreateGroup ? TEXT_PRIMARY : TEXT_SECONDARY, false);
 		String groupHelpText = rosterLoaded
-			? "Drag guards to assign | Shift+RMB header: rename | Click swatch: cycle color"
+			? "Drag guards to assign or unassign | Shift+RMB header: rename"
 			: "Syncing guard roster from server...";
 		context.drawText(
 			this.textRenderer,
@@ -750,12 +773,12 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 
 		if (button == 0 && this.contains(this.addGroupButtonX, this.addGroupButtonY, ADD_GROUP_BUTTON_WIDTH, ADD_GROUP_BUTTON_HEIGHT - 2, mouseX, mouseY)) {
 			ClientTacticsDataStore.WorldContext worldContext = this.resolveWorldContext();
-			if (worldContext != null) {
+			if (worldContext != null && this.dataStore.groupCount(worldContext) < ClientTacticsDataStore.MAX_GROUPS) {
 				int nextRow = this.dataStore.groupCount(worldContext);
 				this.dataStore.ensureGroupCount(worldContext, nextRow + 1);
-			}
-			if (this.client != null && this.client.getNetworkHandler() != null) {
-				this.client.getNetworkHandler().sendChatCommand("guards groups add");
+				if (this.client != null && this.client.getNetworkHandler() != null) {
+					this.client.getNetworkHandler().sendChatCommand("guards groups add");
+				}
 			}
 			return true;
 		}
@@ -1010,7 +1033,6 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		}
 		context.drawText(this.textRenderer, Text.literal(name), x + 20, y + 3, TEXT_PRIMARY, false);
 		context.drawText(this.textRenderer, Text.literal("Lv" + guard.level()), x + 20, y + 12, TEXT_SECONDARY, false);
-
 		// Armor icons row
 		int armorY = y + 22;
 		this.drawMiniArmorIcon(context, guard.helmet(), x + 4, armorY);
@@ -1036,7 +1058,15 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		this.drawBorder(context, x, y, width, UNASSIGNED_CARD_HEIGHT, CARD_BORDER);
 		context.drawItem(GUARD_HEAD_ICON, x + 2, y + 5);
 		context.drawText(this.textRenderer, Text.literal(guard.displayName()), x + 20, y + 4, TEXT_PRIMARY, false);
-		context.drawText(this.textRenderer, Text.literal("Lv " + guard.level() + " | " + guard.groupName()), x + 20, y + 14, TEXT_SECONDARY, false);
+		String stats = "Lv " + guard.level();
+		if (guard.maxHealth() > 0.0F) {
+			stats += " | HP " + MathHelper.ceil(guard.health()) + "/" + MathHelper.ceil(guard.maxHealth());
+		}
+		if (guard.distance() >= 0.0D) {
+			stats += " | " + String.format(Locale.ROOT, "%.0fm", guard.distance());
+		}
+		stats += " | " + guard.groupName();
+		context.drawText(this.textRenderer, Text.literal(stats), x + 20, y + 14, TEXT_SECONDARY, false);
 	}
 
 	private void renderScrollbar(DrawContext context, int x, int y, int width, int height, int scroll, int maxScroll, int totalContent) {
@@ -1065,8 +1095,18 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 		ItemStack legs = guard.legs();
 		ItemStack boots = guard.boots();
 		int totalArmor = this.armorPoints(helmet) + this.armorPoints(chest) + this.armorPoints(legs) + this.armorPoints(boots);
+		if (guard.maxHealth() > 0.0F) {
+			tooltip.add(Text.literal("\u00A77Health: \u00A7f" + MathHelper.ceil(guard.health()) + "/" + MathHelper.ceil(guard.maxHealth())));
+		}
 		tooltip.add(Text.literal("\u00A77Weapon: \u00A7f" + this.itemName(weapon) + " (" + this.weaponDamage(weapon) + " dmg)"));
 		tooltip.add(Text.literal("\u00A77Armor: \u00A7f" + totalArmor + " | Level: " + guard.level()));
+		if (guard.experience() >= 0) {
+			String xp = guard.level() >= 10 ? guard.experience() + "/MAX" : guard.experience() + "/" + (guard.level() * 120);
+			tooltip.add(Text.literal("\u00A77XP: \u00A7f" + xp));
+		}
+		if (guard.distance() >= 0.0D) {
+			tooltip.add(Text.literal("\u00A77Distance: \u00A7f" + String.format(Locale.ROOT, "%.1f blocks", guard.distance())));
+		}
 		tooltip.add(Text.literal("\u00A77Group: \u00A7f" + guard.groupName()));
 		context.drawTooltip(this.textRenderer, tooltip, mouseX, mouseY);
 	}
@@ -1159,8 +1199,10 @@ public final class GuardTacticsScreen extends HandledScreen<GuardTacticsScreenHa
 				int targetGroup = target.groupIndex();
 				if (target.isCreateNew()) {
 					ClientTacticsDataStore.WorldContext worldContext = this.resolveWorldContext();
-					if (worldContext != null) {
+					if (worldContext != null && targetGroup < ClientTacticsDataStore.MAX_GROUPS) {
 						this.dataStore.ensureGroupCount(worldContext, targetGroup + 1);
+					} else {
+						return;
 					}
 				}
 				UUID guardId = result.guard().guardUuid();
