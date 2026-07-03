@@ -72,6 +72,7 @@ public final class GuardDebugRenderer {
 		}
 		if (!ClientDebugState.isEnabled()) {
 			CACHED_GUARDS.clear();
+			ClientGuardDebugData.clear();
 			return;
 		}
 

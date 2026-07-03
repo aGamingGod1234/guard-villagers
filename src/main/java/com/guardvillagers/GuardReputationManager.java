@@ -39,7 +39,7 @@ public final class GuardReputationManager {
 	}
 
 	public static double getEffectiveReputation(ServerWorld world, UUID playerUuid, BlockPos reference, int radius) {
-		return getState(world.getServer()).ensureTracked(playerUuid);
+		return getState(world.getServer()).get(playerUuid);
 	}
 
 	public static double getEffectiveReputation(ServerPlayerEntity player) {
@@ -55,7 +55,7 @@ public final class GuardReputationManager {
 	}
 
 	public static double getStoredReputation(ServerWorld world, UUID playerUuid) {
-		return getState(world.getServer()).ensureTracked(playerUuid);
+		return getState(world.getServer()).get(playerUuid);
 	}
 
 	public static void setReputation(ServerWorld world, UUID playerUuid, double value) {

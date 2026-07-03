@@ -1,5 +1,6 @@
 package com.guardvillagers.data;
 
+import com.guardvillagers.GuardSecurityLimits;
 import com.guardvillagers.entity.FormationType;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
@@ -11,6 +12,8 @@ import net.minecraft.world.PersistentStateType;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -44,21 +47,49 @@ public final class GuardTacticsState extends PersistentState {
 	}
 
 	private GuardTacticsState(Map<UUID, PlayerTactics> entries) {
-		this.entries = new HashMap<>();
+		this.entries = new LinkedHashMap<>(Math.max(16, entries.size()), 0.75F, true);
 		for (Map.Entry<UUID, PlayerTactics> entry : entries.entrySet()) {
-			this.entries.put(entry.getKey(), entry.getValue().copy());
+			this.putBounded(entry.getKey(), entry.getValue().copy());
 		}
 	}
 
 	public PlayerTactics getOrCreate(UUID ownerId) {
-		return this.entries.computeIfAbsent(ownerId, ignored -> {
-			this.markDirty();
-			return new PlayerTactics();
-		});
+		PlayerTactics existing = this.entries.get(ownerId);
+		if (existing != null) {
+			return existing;
+		}
+		PlayerTactics created = new PlayerTactics();
+		this.putBounded(ownerId, created);
+		this.markDirty();
+		return created;
+	}
+
+	public PlayerTactics getOrDefault(UUID ownerId) {
+		PlayerTactics existing = this.entries.get(ownerId);
+		return existing == null ? new PlayerTactics() : existing.copy();
+	}
+
+	public int trackedPlayerCount() {
+		return this.entries.size();
 	}
 
 	private Map<UUID, PlayerTactics> entriesForCodec() {
 		return Collections.unmodifiableMap(this.entries);
+	}
+
+	private void putBounded(UUID ownerId, PlayerTactics tactics) {
+		if (!this.entries.containsKey(ownerId) && this.entries.size() >= GuardSecurityLimits.MAX_TACTICS_PLAYERS) {
+			this.evictEldest();
+		}
+		this.entries.put(ownerId, tactics);
+	}
+
+	private void evictEldest() {
+		Iterator<UUID> iterator = this.entries.keySet().iterator();
+		if (iterator.hasNext()) {
+			iterator.next();
+			iterator.remove();
+		}
 	}
 
 	public static final class PlayerTactics {

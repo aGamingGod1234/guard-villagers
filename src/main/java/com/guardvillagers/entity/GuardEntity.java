@@ -2039,7 +2039,7 @@ public class GuardEntity extends PathAwareEntity implements RangedAttackMob {
 				|| storedWeaponLevel == MISSING_LOADOUT_LEVEL
 				|| storedSupportLevel == MISSING_LOADOUT_LEVEL) {
 			if (this.ownerUuid != null && this.getEntityWorld() instanceof ServerWorld world) {
-				this.storeLoadoutUpgrades(GuardVillagersMod.getUpgrades(world, this.ownerUuid));
+				this.storeLoadoutUpgrades(GuardVillagersMod.getUpgradesView(world, this.ownerUuid));
 			} else {
 				this.setStoredLoadoutLevels(0, 0, 0);
 			}

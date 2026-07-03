@@ -41,6 +41,7 @@ import net.minecraft.entity.TypedEntityData;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.SpawnGroup;
 import net.minecraft.entity.SpawnReason;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.passive.IronGolemEntity;
 import net.minecraft.entity.passive.VillagerEntity;
 import net.minecraft.nbt.NbtCompound;
@@ -110,6 +111,7 @@ public class GuardVillagersMod implements ModInitializer {
 	public enum GuardPurchaseResult {
 		SUCCESS,
 		NOT_TRUSTED,
+		LIMIT_REACHED,
 		INSUFFICIENT_FUNDS,
 		SPAWN_FAILED,
 		INTERNAL_ERROR
@@ -240,22 +242,35 @@ public class GuardVillagersMod implements ModInitializer {
 		return state.getOrCreate(playerUuid);
 	}
 
+	public static GuardPlayerUpgrades getUpgradesView(ServerPlayerEntity player) {
+		return getUpgradesView(player.getCommandSource().getServer(), player.getUuid());
+	}
+
+	public static GuardPlayerUpgrades getUpgradesView(ServerWorld world, UUID playerUuid) {
+		return getUpgradesView(world.getServer(), playerUuid);
+	}
+
+	public static GuardPlayerUpgrades getUpgradesView(MinecraftServer server, UUID playerUuid) {
+		GuardUpgradeState state = server.getOverworld().getPersistentStateManager().getOrCreate(GuardUpgradeState.TYPE);
+		return state.getOrDefault(playerUuid);
+	}
+
 	public static float getHealingAmount(ServerWorld world, UUID ownerUuid) {
 		if (ownerUuid == null) {
 			return 1.0F;
 		}
-		return getUpgrades(world, ownerUuid).getHealingPerCycle();
+		return getUpgradesView(world, ownerUuid).getHealingPerCycle();
 	}
 
 	public static int getHealingIntervalTicks(ServerWorld world, UUID ownerUuid) {
 		if (ownerUuid == null) {
 			return 100;
 		}
-		return getUpgrades(world, ownerUuid).getHealingIntervalTicks();
+		return getUpgradesView(world, ownerUuid).getHealingIntervalTicks();
 	}
 
 	public static boolean hasShieldUpgrade(ServerWorld world, UUID ownerUuid) {
-		return ownerUuid != null && getUpgrades(world, ownerUuid).hasShieldUpgrade();
+		return ownerUuid != null && getUpgradesView(world, ownerUuid).hasShieldUpgrade();
 	}
 
 	private void registerCommands() {
@@ -457,7 +472,7 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	public static int getAdjustedGuardCost(ServerPlayerEntity player) {
-		GuardPlayerUpgrades upgrades = getUpgrades(player);
+		GuardPlayerUpgrades upgrades = getUpgradesView(player);
 		int basePrice = upgrades.getGuardCost();
 		double reputation = getReputation(player);
 		double modifier = 1.5D - (reputation * 0.75D);
@@ -480,7 +495,7 @@ public class GuardVillagersMod implements ModInitializer {
 		}
 
 		int normalizedCount = Math.max(1, requestedCount);
-		GuardPlayerUpgrades upgrades = getUpgrades(player);
+		GuardPlayerUpgrades upgrades = getUpgradesView(player);
 		int costPerGuard = getAdjustedGuardCost(player);
 		boolean creativeMode = player.getAbilities().creativeMode;
 		int toSpawn = normalizedCount;
@@ -498,8 +513,13 @@ public class GuardVillagersMod implements ModInitializer {
 		int refundableDebit = 0;
 		List<String> spawnedNames = new ArrayList<>();
 		try {
-			int startRoleIndex = countOwnedGuards(player.getCommandSource().getServer(), player.getUuid())
-					% GuardRole.values().length;
+			int ownedGuardCount = countOwnedGuards(player.getCommandSource().getServer(), player.getUuid());
+			int remainingSlots = GuardSecurityLimits.remainingPersonalGuardSlots(ownedGuardCount);
+			if (remainingSlots <= 0) {
+				return new PurchaseBatchResult(GuardPurchaseResult.LIMIT_REACHED, 0, List.of());
+			}
+			toSpawn = Math.min(toSpawn, remainingSlots);
+			int startRoleIndex = ownedGuardCount % GuardRole.values().length;
 			for (int i = 0; i < toSpawn; i++) {
 				if (!GuardEconomy.spendEmeraldBlocks(player, costPerGuard)) {
 					break;
@@ -795,7 +815,7 @@ public class GuardVillagersMod implements ModInitializer {
 		}
 
 		GuardTacticsState state = GuardTacticsManager.getState(server);
-		GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUuid());
+		GuardTacticsState.PlayerTactics tactics = state.getOrDefault(player.getUuid());
 		int groupCount = Math.min(tactics.groupCount(), GuardRosterSyncPayload.MAX_GROUPS);
 		List<String> groupNames = new ArrayList<>(groupCount);
 		for (int row = 0; row < groupCount; row++) {
@@ -997,6 +1017,9 @@ public class GuardVillagersMod implements ModInitializer {
 			if (livingTarget instanceof GuardEntity targetGuard && targetGuard.isOwnedBy(serverPlayer.getUuid())) {
 				return ActionResult.PASS;
 			}
+			if (!canOwnerDirectGuardAt(serverPlayer, livingTarget)) {
+				return ActionResult.PASS;
+			}
 
 			try {
 				List<GuardEntity> ownedGuards = GuardOwnershipIndex
@@ -1080,6 +1103,9 @@ public class GuardVillagersMod implements ModInitializer {
 				if (target instanceof GuardEntity guardTarget && guardTarget.isOwnedBy(ownerAttacker.getUuid())) {
 					return; // Don't target own guards
 				}
+				if (!canOwnerDirectGuardAt(ownerAttacker, target)) {
+					return;
+				}
 				try {
 					List<GuardEntity> guards = GuardOwnershipIndex
 							.getOwnedGuards(ownerAttacker.getCommandSource().getServer(), ownerAttacker.getUuid());
@@ -1101,6 +1127,21 @@ public class GuardVillagersMod implements ModInitializer {
 				}
 			}
 		});
+	}
+
+	private static boolean canOwnerDirectGuardAt(ServerPlayerEntity owner, LivingEntity target) {
+		if (owner == null || target == null || target == owner) {
+			return false;
+		}
+		if (target instanceof PlayerEntity targetPlayer) {
+			if (!owner.getEntityWorld().isPvpEnabled()) {
+				return false;
+			}
+			if (!owner.shouldDamagePlayer(targetPlayer)) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private static void syncGuardDebug(ServerWorld world) {

@@ -44,7 +44,7 @@ public class GuardVillagersClient implements ClientModInitializer {
 			})
 		);
 		ClientPlayNetworking.registerGlobalReceiver(GuardDebugDataPayload.ID, (payload, context) ->
-			context.client().execute(() -> ClientGuardDebugData.applyPayload(payload))
+			context.client().execute(() -> ClientGuardDebugData.applyPayload(payload, context.client().world))
 		);
 
 		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_LAYER, GuardEntityModel::getTexturedModelData);

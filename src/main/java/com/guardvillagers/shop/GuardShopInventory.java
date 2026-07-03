@@ -79,6 +79,7 @@ public class GuardShopInventory extends SimpleInventory {
 				}
 			}
 			case NOT_TRUSTED -> this.player.sendMessage(Text.literal("Village trust is too low to hire guards."), true);
+			case LIMIT_REACHED -> this.player.sendMessage(Text.literal("Personal guard limit reached."), true);
 			case INSUFFICIENT_FUNDS -> this.player.sendMessage(Text.literal("Need " + cost + " emerald block(s) to hire a guard."), true);
 			case SPAWN_FAILED -> this.player.sendMessage(Text.literal("Could not find space to spawn a guard. Move to open ground."), true);
 			case INTERNAL_ERROR -> this.player.sendMessage(Text.literal("Guard purchase failed due to an internal error. Check logs."), true);
@@ -86,7 +87,7 @@ public class GuardShopInventory extends SimpleInventory {
 	}
 
 	private void upgradeArmor() {
-		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgrades(this.player);
+		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgradesView(this.player);
 		if (upgrades.getArmorLevel() >= GuardPlayerUpgrades.MAX_ARMOR_LEVEL) {
 			this.player.sendMessage(Text.literal("Armor upgrades are already maxed."), true);
 			return;

@@ -26,8 +26,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -39,12 +41,15 @@ public final class ClientTacticsDataStore {
 	private static final int FILE_VERSION = 1;
 	private static final long SAVE_DEBOUNCE_MILLIS = 1_200L;
 	private static final int MAX_ROLE_NAME_LENGTH = 24;
+	private static final int MAX_WORLDS = 16;
+	private static final int MAX_DIMENSIONS_PER_WORLD = 8;
+	private static final int MAX_DISCOVERED_CHUNKS_PER_DIMENSION = 8192;
 	public static final int MAX_GROUPS = 64;
 	private static final Path SAVE_PATH = FabricLoader.getInstance().getConfigDir().resolve("guardvillagers_client_tactics.json");
 	private static final List<String> DEFAULT_GROUP_NAMES = List.of();
 	private static final ClientTacticsDataStore INSTANCE = new ClientTacticsDataStore();
 
-	private final Map<String, WorldData> worlds = new HashMap<>();
+	private final Map<String, WorldData> worlds = new LinkedHashMap<>(16, 0.75F, true);
 
 	private boolean dirty;
 	private long dirtyAtMillis;
@@ -61,8 +66,7 @@ public final class ClientTacticsDataStore {
 	public void markDiscovered(WorldContext context, int chunkX, int chunkZ) {
 		DimensionData dimensionData = this.dimension(context);
 		long chunkKey = ChunkPos.toLong(chunkX, chunkZ);
-		if (dimensionData.discovered.add(chunkKey)) {
-			this.indexDiscoveredChunk(dimensionData, chunkKey);
+		if (this.addDiscoveredChunk(dimensionData, chunkKey)) {
 			this.markDirty();
 		}
 	}
@@ -252,13 +256,82 @@ public final class ClientTacticsDataStore {
 		dimensionData.discoveredByChunkX.computeIfAbsent(chunkX, ignored -> new IntOpenHashSet()).add(chunkZ);
 	}
 
+	private void unindexDiscoveredChunk(DimensionData dimensionData, long chunkKey) {
+		int chunkX = ChunkPos.getPackedX(chunkKey);
+		int chunkZ = ChunkPos.getPackedZ(chunkKey);
+		IntOpenHashSet zValues = dimensionData.discoveredByChunkX.get(chunkX);
+		if (zValues == null) {
+			return;
+		}
+		zValues.remove(chunkZ);
+		if (zValues.isEmpty()) {
+			dimensionData.discoveredByChunkX.remove(chunkX);
+		}
+	}
+
+	private boolean addDiscoveredChunk(DimensionData dimensionData, long chunkKey) {
+		if (dimensionData.discovered.contains(chunkKey)) {
+			dimensionData.discoveryOrder.remove(chunkKey);
+			dimensionData.discoveryOrder.addLast(chunkKey);
+			return false;
+		}
+		dimensionData.discovered.add(chunkKey);
+		dimensionData.discoveryOrder.addLast(chunkKey);
+		this.indexDiscoveredChunk(dimensionData, chunkKey);
+		this.evictDiscoveredOverflow(dimensionData);
+		return true;
+	}
+
+	private void evictDiscoveredOverflow(DimensionData dimensionData) {
+		while (dimensionData.discovered.size() > MAX_DISCOVERED_CHUNKS_PER_DIMENSION && !dimensionData.discoveryOrder.isEmpty()) {
+			long evicted = dimensionData.discoveryOrder.removeFirst();
+			if (!dimensionData.discovered.remove(evicted)) {
+				continue;
+			}
+			dimensionData.regionByChunk.remove(evicted);
+			this.unindexDiscoveredChunk(dimensionData, evicted);
+		}
+	}
+
 	private WorldData world(WorldContext context) {
-		return this.worlds.computeIfAbsent(context.worldId(), ignored -> new WorldData());
+		WorldData existing = this.worlds.get(context.worldId());
+		if (existing != null) {
+			return existing;
+		}
+		WorldData created = new WorldData();
+		this.worlds.put(context.worldId(), created);
+		this.evictWorldOverflow();
+		return created;
 	}
 
 	private DimensionData dimension(WorldContext context) {
 		WorldData worldData = this.world(context);
-		return worldData.dimensions.computeIfAbsent(context.dimensionId(), ignored -> new DimensionData());
+		DimensionData existing = worldData.dimensions.get(context.dimensionId());
+		if (existing != null) {
+			return existing;
+		}
+		DimensionData created = new DimensionData();
+		worldData.dimensions.put(context.dimensionId(), created);
+		this.evictDimensionOverflow(worldData);
+		return created;
+	}
+
+	private void evictWorldOverflow() {
+		Iterator<String> iterator = this.worlds.keySet().iterator();
+		while (this.worlds.size() > MAX_WORLDS && iterator.hasNext()) {
+			iterator.next();
+			iterator.remove();
+			this.markDirty();
+		}
+	}
+
+	private void evictDimensionOverflow(WorldData worldData) {
+		Iterator<String> iterator = worldData.dimensions.keySet().iterator();
+		while (worldData.dimensions.size() > MAX_DIMENSIONS_PER_WORLD && iterator.hasNext()) {
+			iterator.next();
+			iterator.remove();
+			this.markDirty();
+		}
 	}
 
 	private void load() {
@@ -321,8 +394,7 @@ public final class ClientTacticsDataStore {
 							for (JsonElement discoveredElement : discoveredArray) {
 								try {
 									long chunkKey = Long.parseLong(asString(discoveredElement));
-									dimensionData.discovered.add(chunkKey);
-									this.indexDiscoveredChunk(dimensionData, chunkKey);
+									this.addDiscoveredChunk(dimensionData, chunkKey);
 								} catch (NumberFormatException ignored) {
 								}
 							}
@@ -334,17 +406,21 @@ public final class ClientTacticsDataStore {
 								try {
 									long chunkKey = Long.parseLong(regionEntry.getKey());
 									RegionColor color = RegionColor.fromId(asInt(regionEntry.getValue(), 0));
-									if (color != RegionColor.NONE) {
+									if (color != RegionColor.NONE && dimensionData.discovered.contains(chunkKey)) {
 										dimensionData.regionByChunk.put(chunkKey, color.id());
 									}
 								} catch (NumberFormatException ignored) {
 								}
 							}
 						}
-						worldData.dimensions.put(dimensionEntry.getKey(), dimensionData);
+						if (worldData.dimensions.size() < MAX_DIMENSIONS_PER_WORLD) {
+							worldData.dimensions.put(dimensionEntry.getKey(), dimensionData);
+						}
 					}
 				}
-				this.worlds.put(worldEntry.getKey(), worldData);
+				if (this.worlds.size() < MAX_WORLDS) {
+					this.worlds.put(worldEntry.getKey(), worldData);
+				}
 			}
 			this.dirty = false;
 		} catch (IOException exception) {
@@ -386,7 +462,7 @@ public final class ClientTacticsDataStore {
 				dimensionsObject.add(dimensionEntry.getKey(), dimensionObject);
 
 				JsonArray discoveredArray = new JsonArray();
-				for (long discoveredChunk : dimensionData.discovered) {
+				for (long discoveredChunk : dimensionData.discoveryOrder) {
 					discoveredArray.add(Long.toString(discoveredChunk));
 				}
 				dimensionObject.add("discovered", discoveredArray);
@@ -473,7 +549,7 @@ public final class ClientTacticsDataStore {
 	}
 
 	private static final class WorldData {
-		private final Map<String, DimensionData> dimensions = new HashMap<>();
+		private final Map<String, DimensionData> dimensions = new LinkedHashMap<>(4, 0.75F, true);
 		private final List<String> groupNames = new ArrayList<>(DEFAULT_GROUP_NAMES);
 		private final Int2IntOpenHashMap rowColorByGroup = new Int2IntOpenHashMap();
 
@@ -486,6 +562,7 @@ public final class ClientTacticsDataStore {
 		private final LongOpenHashSet discovered = new LongOpenHashSet();
 		private final Long2IntOpenHashMap regionByChunk = new Long2IntOpenHashMap();
 		private final Int2ObjectOpenHashMap<IntOpenHashSet> discoveredByChunkX = new Int2ObjectOpenHashMap<>();
+		private final ArrayDeque<Long> discoveryOrder = new ArrayDeque<>();
 
 		private DimensionData() {
 			this.regionByChunk.defaultReturnValue(0);
