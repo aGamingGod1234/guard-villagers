@@ -271,8 +271,6 @@ public final class ClientTacticsDataStore {
 
 	private boolean addDiscoveredChunk(DimensionData dimensionData, long chunkKey) {
 		if (dimensionData.discovered.contains(chunkKey)) {
-			dimensionData.discoveryOrder.remove(chunkKey);
-			dimensionData.discoveryOrder.addLast(chunkKey);
 			return false;
 		}
 		dimensionData.discovered.add(chunkKey);
