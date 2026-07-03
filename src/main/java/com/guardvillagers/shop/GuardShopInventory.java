@@ -87,7 +87,7 @@ public class GuardShopInventory extends SimpleInventory {
 	}
 
 	private void upgradeArmor() {
-		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgradesView(this.player);
+		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgrades(this.player);
 		if (upgrades.getArmorLevel() >= GuardPlayerUpgrades.MAX_ARMOR_LEVEL) {
 			this.player.sendMessage(Text.literal("Armor upgrades are already maxed."), true);
 			return;
