@@ -183,15 +183,31 @@ public final class VoicePipeline implements AutoCloseable {
 	public CompletableFuture<Void> transcribe(UUID player, short[] pcm48k, long endpointMs) {
 		if (!inputAvailable() || !isConsented(player) || pcm48k.length == 0) return CompletableFuture.completedFuture(null);
 		long wait = limiter.sttSpacingRemaining(player);
-		if (wait > 0L) {
-			// The capture engine runs one request per player at a time, so waiting out the spacing here
-			// delays this sentence instead of dropping it.
-			return CompletableFuture.runAsync(() -> { }, CompletableFuture.delayedExecutor(wait, TimeUnit.MILLISECONDS))
-					.thenCompose(ignored -> startTranscription(player, pcm48k, endpointMs + wait));
-		}
-		return startTranscription(player, pcm48k, endpointMs);
+		if (wait <= 0L) return startTranscription(player, pcm48k, endpointMs);
+		// The capture engine runs one request per player at a time, so waiting out the spacing here delays this
+		// sentence instead of dropping it. Cancelling the returned future before the wait ends skips the request;
+		// cancelling it later cancels the request itself.
+		CompletableFuture<Void> result = new CompletableFuture<>();
+		CompletableFuture.delayedExecutor(wait, TimeUnit.MILLISECONDS).execute(() -> {
+			if (result.isDone()) return;
+			link(result, startTranscription(player, pcm48k, endpointMs + wait));
+		});
+		return result;
 	}
 
+	/** Completes {@code outer} with {@code inner}, and cancels {@code inner} when {@code outer} is cancelled. */
+	private static void link(CompletableFuture<Void> outer, CompletableFuture<Void> inner) {
+		inner.whenComplete((ignored, failure) -> outer.complete(null));
+		outer.whenComplete((ignored, failure) -> {
+			if (outer.isCancelled()) inner.cancel(true);
+		});
+	}
+
+	/**
+	 * Starts one STT request. The permit and in-flight entry are released when the request itself ends, however it
+	 * ends: the returned future is only a view, and the capture engine cancels it on disconnect, consent off or its
+	 * deadline. Cancelling the returned future cancels the request.
+	 */
 	private CompletableFuture<Void> startTranscription(UUID player, short[] pcm48k, long endpointMs) {
 		if (closed) return CompletableFuture.completedFuture(null);
 		long audioMillis = pcm48k.length * 1000L / SpeechToText.INPUT_SAMPLE_RATE;
@@ -203,36 +219,59 @@ public final class VoicePipeline implements AutoCloseable {
 		long started = System.nanoTime();
 		CompletableFuture<SpeechToText.Transcript> request;
 		try {
-			request = stt.transcribe(player, pcm48k, safeHint(player));
+			request = Objects.requireNonNull(stt.transcribe(player, pcm48k, safeHint(player)), "stt returned null");
 		} catch (RuntimeException failure) {
 			request = CompletableFuture.failedFuture(failure);
 		}
 		inFlight.add(request);
 		CompletableFuture<SpeechToText.Transcript> tracked = request;
-		return request.handle((transcript, failure) -> {
+		request.whenComplete((ignored, failure) -> {
 			inFlight.remove(tracked);
 			limiter.releaseStt();
-			long sttMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
-			if (closed) return null;
-			if (failure != null) {
-				onFailure(player, failure, SpeechException.Channel.STT);
-				LOGGER.info("Voice input latency player={} audioMs={} endpointMs={} sttMs={} result=failed",
-						player, audioMillis, endpointMs, sttMs);
-				return null;
-			}
-			LOGGER.info("Voice input latency player={} audioMs={} endpointMs={} sttMs={} totalMs={} result={}",
-					player, audioMillis, endpointMs, sttMs, endpointMs + sttMs,
-					transcript.isBlank() ? "no-speech" : "recognized");
-			if (transcript.isBlank()) return null;
-			LOGGER.debug("Voice transcript from {}: {}", player, transcript.text());
-			VoiceTranscriptListener target = listener;
-			VoiceTranscriptListener.VoiceTranscript event = new VoiceTranscriptListener.VoiceTranscript(
-					player, transcript.text(), endpointMs, sttMs, System.nanoTime());
-			runOnServer(() -> {
-				if (!closed && isConsented(player)) target.onTranscript(event);
-			});
-			return null;
 		});
+		CompletableFuture<Void> result = new CompletableFuture<>();
+		request.whenComplete((transcript, failure) -> {
+			try {
+				deliver(player, transcript, failure, audioMillis, endpointMs, started);
+			} finally {
+				result.complete(null);
+			}
+		});
+		result.whenComplete((ignored, failure) -> {
+			if (result.isCancelled()) tracked.cancel(true);
+		});
+		return result;
+	}
+
+	private void deliver(UUID player, SpeechToText.Transcript transcript, Throwable failure, long audioMillis,
+			long endpointMs, long started) {
+		long sttMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+		if (closed) return;
+		if (failure != null) {
+			if (SpeechException.find(failure) == null && isCancellation(failure)) return;
+			onFailure(player, failure, SpeechException.Channel.STT);
+			LOGGER.info("Voice input latency player={} audioMs={} endpointMs={} sttMs={} result=failed",
+					player, audioMillis, endpointMs, sttMs);
+			return;
+		}
+		LOGGER.info("Voice input latency player={} audioMs={} endpointMs={} sttMs={} totalMs={} result={}",
+				player, audioMillis, endpointMs, sttMs, endpointMs + sttMs,
+				transcript.isBlank() ? "no-speech" : "recognized");
+		if (transcript.isBlank()) return;
+		LOGGER.debug("Voice transcript from {}: {}", player, transcript.text());
+		VoiceTranscriptListener target = listener;
+		VoiceTranscriptListener.VoiceTranscript event = new VoiceTranscriptListener.VoiceTranscript(
+				player, transcript.text(), endpointMs, sttMs, System.nanoTime());
+		runOnServer(() -> {
+			if (!closed && isConsented(player)) target.onTranscript(event);
+		});
+	}
+
+	private static boolean isCancellation(Throwable failure) {
+		for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+			if (cause instanceof java.util.concurrent.CancellationException) return true;
+		}
+		return false;
 	}
 
 	private String safeHint(UUID player) {

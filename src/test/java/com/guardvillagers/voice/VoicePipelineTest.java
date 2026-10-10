@@ -188,6 +188,49 @@ class VoicePipelineTest {
 		assertTrue(transcripts.isEmpty());
 	}
 
+	@Test
+	void cancellingTheReturnedFutureReleasesTheSttSlotAndCancelsTheRequest() {
+		FakeStt stt = new FakeStt();
+		VoiceConfig config = VoiceConfig.defaults();
+		VoicePipeline pipeline = pipeline(config, stt, null);
+		int slots = config.rateLimits().sttGlobalInFlight();
+		for (int i = 0; i < slots + 2; i++) {
+			CompletableFuture<SpeechToText.Transcript> hanging = new CompletableFuture<>();
+			stt.next = hanging;
+			UUID speaker = new UUID(100, i);
+			pipeline.setConsent(speaker, true);
+			CompletableFuture<Void> done = pipeline.transcribe(speaker, new short[100], 0);
+			assertFalse(done.isDone());
+			assertEquals(1, pipeline.rateLimiter().sttInFlight());
+			// What the capture engine does on disconnect, consent off or its deadline.
+			done.cancel(true);
+			assertTrue(hanging.isCancelled(), "request " + i + " kept running after its caller gave up");
+			assertEquals(0, pipeline.rateLimiter().sttInFlight(), "STT slot leaked by cancel " + i);
+		}
+		assertEquals(slots + 2, stt.calls.get(), "every utterance got a slot");
+		runServerTasks();
+		assertTrue(failures.isEmpty(), "a cancel is not a recognition failure");
+		assertEquals(0L, pipeline.rateLimiter().backoffRemaining(SpeechException.Channel.STT), "a cancel does not back off");
+	}
+
+	@Test
+	void cancellingDuringTheSpacingWaitSkipsTheRequest() throws Exception {
+		FakeStt stt = new FakeStt();
+		// Real time for the spacing wait: a 200 ms minimum interval, so the second call waits.
+		AtomicLong realClock = new AtomicLong();
+		VoiceConfig config = VoiceConfig.parse("{\"rateLimits\": {\"sttMinIntervalMs\": 200}}");
+		VoiceRateLimiter limiter = new VoiceRateLimiter(config.rateLimits(), 6, System::currentTimeMillis);
+		VoicePipeline pipeline = new VoicePipeline(config, stt, null, limiter, serverTasks::add, realClock::get);
+		pipeline.setConsent(PLAYER, true);
+		pipeline.transcribe(PLAYER, new short[100], 0).join();
+		CompletableFuture<Void> waiting = pipeline.transcribe(PLAYER, new short[100], 0);
+		assertFalse(waiting.isDone(), "second utterance waits out the spacing");
+		waiting.cancel(true);
+		Thread.sleep(400);
+		assertEquals(1, stt.calls.get(), "a cancelled wait never reaches STT");
+		assertEquals(0, limiter.sttInFlight());
+	}
+
 	private static final class NoopBridge implements VoiceBridge {
 		final List<UUID> cancelled = new ArrayList<>();
 

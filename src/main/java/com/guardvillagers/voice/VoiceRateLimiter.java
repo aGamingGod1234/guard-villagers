@@ -144,7 +144,9 @@ public final class VoiceRateLimiter {
 
 	/** Milliseconds until the channel accepts requests again; 0 when open. */
 	public synchronized long backoffRemaining(SpeechException.Channel channel) {
-		return Math.max(0L, backoffUntil.getOrDefault(channel, Long.MIN_VALUE) - clock.getAsLong());
+		Long until = backoffUntil.get(channel);
+		// No entry means never backed off; subtracting from Long.MIN_VALUE would overflow to a huge wait.
+		return until == null ? 0L : Math.max(0L, until - clock.getAsLong());
 	}
 
 	/** Remaining STT audio budget for this player in the current rolling hour, in milliseconds. */
