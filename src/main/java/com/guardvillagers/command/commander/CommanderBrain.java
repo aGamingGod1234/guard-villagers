@@ -85,6 +85,8 @@ final class CommanderBrain {
 	private final Set<UUID> wounded = new HashSet<>();
 	private final Set<UUID> announcedThreats = new HashSet<>();
 	private final Map<UUID, GuardBehavior> raidBehaviors = new HashMap<>();
+	/** Guard to threat, as decided by the last plan (rules 2 and 4). */
+	private final Map<UUID, UUID> assignments = new HashMap<>();
 	private boolean planRequested = true;
 	private int lastOwnerHurtStamp = Integer.MIN_VALUE;
 	private long lastThreatTick = Long.MIN_VALUE / 2;
@@ -293,6 +295,7 @@ final class CommanderBrain {
 		if (this.roster.isEmpty()) {
 			return;
 		}
+		this.assignments.clear();
 		Set<GuardEntity> busy = new HashSet<>();
 		this.pressAttackOrders(server, player, context, busy);
 		this.guardOwner(player, busy);
@@ -349,6 +352,7 @@ final class CommanderBrain {
 			int needed = Math.min(threat.need, this.roster.size()) - threat.assigned;
 			for (GuardEntity guard : this.nearestAvailable(threat, busy, true, needed)) {
 				guard.setPriorityTarget(threat.entity);
+				this.assignments.put(guard.getUUID(), threat.entity.getUUID());
 				busy.add(guard);
 				threat.assigned++;
 			}
@@ -440,6 +444,7 @@ final class CommanderBrain {
 			List<GuardEntity> chosen = this.nearestAvailable(threat, excluded, false, needed);
 			for (GuardEntity guard : chosen) {
 				guard.setMainTarget(threat.entity);
+				this.assignments.put(guard.getUUID(), threat.entity.getUUID());
 				busy.add(guard);
 				threat.assigned++;
 			}
@@ -691,6 +696,10 @@ final class CommanderBrain {
 	// Visible for tests.
 	List<Threat> threats() {
 		return this.threats;
+	}
+
+	Map<UUID, UUID> assignments() {
+		return this.assignments;
 	}
 
 	boolean isWounded(UUID guard) {

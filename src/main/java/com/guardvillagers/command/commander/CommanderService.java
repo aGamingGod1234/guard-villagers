@@ -243,6 +243,18 @@ public final class CommanderService {
 		return context(server, player.getUUID()).brain.statusLine(server, player, guards, commander);
 	}
 
+	/** Guard UUID to threat UUID as decided by the owner's last commander plan (auto rules only). */
+	public static Map<UUID, UUID> lastAssignments(UUID owner) {
+		OwnerContext context = CONTEXTS.get(owner);
+		return context == null ? Map.of() : Map.copyOf(context.brain.assignments());
+	}
+
+	/** True while the commander treats this guard as wounded (below 30%, until healed past 50%). */
+	public static boolean isWounded(UUID owner, UUID guard) {
+		OwnerContext context = CONTEXTS.get(owner);
+		return context != null && context.brain.isWounded(guard);
+	}
+
 	/** Mean server-thread nanoseconds the commander layer spent per server tick since the last reset. */
 	public static double meanNanosPerTick() {
 		return brainTicks == 0 ? 0.0D : (double) brainNanos / brainTicks;
