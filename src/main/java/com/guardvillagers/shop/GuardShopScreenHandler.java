@@ -24,7 +24,8 @@ public class GuardShopScreenHandler extends ChestMenu {
 
 	private final GuardShopInventory shopInventory;
 	private final ServerPlayer owner;
-	private int lastActionTick = Integer.MIN_VALUE;
+	/** -1 = no action yet. A MIN_VALUE sentinel would overflow in {@code now - last} and block the first click. */
+	private int lastActionTick = -1;
 
 	public GuardShopScreenHandler(int syncId, Inventory playerInventory, ServerPlayer owner) {
 		this(syncId, playerInventory, new GuardShopInventory(owner), owner);
@@ -50,7 +51,7 @@ public class GuardShopScreenHandler extends ChestMenu {
 			return;
 		}
 		int now = this.owner.level().getServer().getTickCount();
-		if (now >= this.lastActionTick && now - this.lastActionTick < ACTION_COOLDOWN_TICKS) {
+		if (this.lastActionTick >= 0 && now >= this.lastActionTick && now - this.lastActionTick < ACTION_COOLDOWN_TICKS) {
 			return;
 		}
 		this.lastActionTick = now;

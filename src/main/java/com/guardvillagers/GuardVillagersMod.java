@@ -14,6 +14,7 @@ import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.item.GuardWhistleItem;
 import com.guardvillagers.network.GuardDebugDataPayload;
 import com.guardvillagers.network.GuardDebugSyncPayload;
+import com.guardvillagers.network.GuardGroupResultPayload;
 import com.guardvillagers.network.GuardRosterSyncPayload;
 import com.guardvillagers.tactics.GuardTacticsScreenHandler;
 import java.util.UUID;
@@ -136,6 +137,7 @@ public class GuardVillagersMod implements ModInitializer {
 		PayloadTypeRegistry.clientboundPlay().register(GuardDebugSyncPayload.ID, GuardDebugSyncPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(GuardDebugDataPayload.ID, GuardDebugDataPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(GuardRosterSyncPayload.ID, GuardRosterSyncPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(GuardGroupResultPayload.ID, GuardGroupResultPayload.CODEC);
 	}
 
 	private static void registerDispenserBehavior() {
@@ -163,6 +165,11 @@ public class GuardVillagersMod implements ModInitializer {
 				return stack;
 			}
 		});
+	}
+
+	/** Shop price for the next hire; see {@link GuardHiring#getAdjustedGuardCost}. */
+	public static int getAdjustedGuardCost(ServerPlayer player) {
+		return GuardHiring.getAdjustedGuardCost(player);
 	}
 
 	/** Mutable, persisted upgrades. Creates a saved row, so only call this when about to change the upgrades. */

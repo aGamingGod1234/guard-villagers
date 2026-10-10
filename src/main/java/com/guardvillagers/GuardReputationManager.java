@@ -13,6 +13,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.world.entity.raid.Raid;
 import net.minecraft.world.entity.raid.Raider;
 
 public final class GuardReputationManager {
@@ -36,6 +37,8 @@ public final class GuardReputationManager {
 	/** ...and it dealt at most this much damage (two hearts) and the player is not already distrusted as hostile. */
 	public static final float GUARD_HIT_GRACE_MAX_DAMAGE = 4.0F;
 	private static final Map<UUID, Long> LAST_GUARD_HIT_TICK = new ConcurrentHashMap<>();
+	/** Owner -> tick of a raider kill made during an active raid, consumed by the matching recordRaidDefense call. */
+	private static final Map<UUID, Long> PENDING_RAID_DEFENSE = new ConcurrentHashMap<>();
 	private static final Map<TradeKey, Long> TRADE_REPUTATION_COOLDOWN = new ConcurrentHashMap<>();
 	private static long lastCooldownCleanupTick = Long.MIN_VALUE;
 
@@ -135,8 +138,35 @@ public final class GuardReputationManager {
 		return !recentlyHit && reputation >= HOSTILE_THRESHOLD && damage <= GUARD_HIT_GRACE_MAX_DAMAGE;
 	}
 
+	/**
+	 * Raid-defense bonus. GuardEntity calls this right after {@link #recordHostileKill} for every {@link Raider} kill,
+	 * so it only pays out when that kill was flagged as happening during an active raid (a lone patrol pillager is
+	 * just a hostile kill).
+	 */
 	public static void recordRaidDefense(ServerLevel world, UUID playerUuid) {
-		applyNormalizedReputationDelta(world, playerUuid, RAID_DEFENSE_DELTA);
+		Long flaggedTick = PENDING_RAID_DEFENSE.remove(playerUuid);
+		if (flaggedTick != null && flaggedTick == world.getGameTime()) {
+			applyNormalizedReputationDelta(world, playerUuid, RAID_DEFENSE_DELTA);
+		}
+	}
+
+	/** Explicit form for callers that have the raider; prefer this over the two-argument overload. */
+	public static void recordRaidDefense(ServerLevel world, UUID playerUuid, Raider raider) {
+		if (isDuringActiveRaid(world, raider)) {
+			applyNormalizedReputationDelta(world, playerUuid, RAID_DEFENSE_DELTA);
+		}
+	}
+
+	/**
+	 * Raider#die removes the raider from its raid before the killer is notified, so also look for an active raid
+	 * around where it died.
+	 */
+	static boolean isDuringActiveRaid(ServerLevel world, Raider raider) {
+		if (raider.hasActiveRaid()) {
+			return true;
+		}
+		Raid raid = world.getRaidAt(raider.blockPosition());
+		return raid != null && raid.isActive();
 	}
 
 	public static void recordHostileKill(ServerLevel world, UUID playerUuid, LivingEntity target) {
@@ -145,6 +175,11 @@ public final class GuardReputationManager {
 		}
 		double delta = target instanceof Raider ? RAIDER_KILL_DELTA : HOSTILE_KILL_DELTA;
 		applyNormalizedReputationDelta(world, playerUuid, delta);
+		if (target instanceof Raider raider && isDuringActiveRaid(world, raider)) {
+			PENDING_RAID_DEFENSE.put(playerUuid, world.getGameTime());
+		} else {
+			PENDING_RAID_DEFENSE.remove(playerUuid);
+		}
 	}
 
 	public static void tickDecay(ServerLevel world) {
@@ -158,6 +193,7 @@ public final class GuardReputationManager {
 	public static void clearSessionState() {
 		TRADE_REPUTATION_COOLDOWN.clear();
 		LAST_GUARD_HIT_TICK.clear();
+		PENDING_RAID_DEFENSE.clear();
 		lastCooldownCleanupTick = Long.MIN_VALUE;
 	}
 

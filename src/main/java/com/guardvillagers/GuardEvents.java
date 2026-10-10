@@ -54,6 +54,7 @@ final class GuardEvents {
 		});
 
 		ServerTickEvents.END_LEVEL_TICK.register(GuardEvents::onLevelTick);
+		ServerTickEvents.END_SERVER_TICK.register(GuardTacticsMenus::tickOpenRosters);
 
 		ServerPlayerEvents.LEAVE.register(player -> {
 			GuardDebugManager.forget(player.getUUID());

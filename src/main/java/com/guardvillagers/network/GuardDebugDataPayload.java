@@ -7,11 +7,12 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.Identifier;
 
 public record GuardDebugDataPayload(List<GuardDebugEntry> entries) implements CustomPacketPayload {
 	private static final int MAX_GUARDS_PER_PACKET = 256;
 	private static final int MAX_PATH_NODES = 64;
-	public static final Type<GuardDebugDataPayload> ID = new Type<>(GuardVillagersMod.id("debug_data"));
+	public static final Type<GuardDebugDataPayload> ID = new Type<>(Identifier.fromNamespaceAndPath(GuardVillagersMod.MOD_ID, "debug_data"));
 	public static final StreamCodec<RegistryFriendlyByteBuf, GuardDebugDataPayload> CODEC = CustomPacketPayload.codec(
 		GuardDebugDataPayload::write,
 		GuardDebugDataPayload::new
