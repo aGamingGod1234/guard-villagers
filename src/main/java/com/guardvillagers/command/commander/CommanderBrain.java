@@ -70,8 +70,6 @@ final class CommanderBrain {
 	enum Control {
 		/** The commander may assign, move and pull back this guard. */
 		FREE,
-		/** Under a "follow me" order: only defending the owner (rule 2). */
-		ESCORT,
 		/** Under a player order, stay, hold, a foreign rally or a retreat. */
 		LOCKED
 	}
@@ -208,7 +206,9 @@ final class CommanderBrain {
 		if (best == null) {
 			return Control.FREE;
 		}
-		return best.order().action() == Action.FOLLOW ? Control.ESCORT : Control.LOCKED;
+		// Following is the default stance and every assignment stays inside the follow leash, so a "follow me"
+		// order keeps the commander's intuition; every other order pins the guard.
+		return best.order().action() == Action.FOLLOW ? Control.FREE : Control.LOCKED;
 	}
 
 	private void scanThreats(ServerLevel level, ServerPlayer player) {
@@ -456,7 +456,7 @@ final class CommanderBrain {
 	}
 
 	/**
-	 * Free (or, for the owner's defence, escorting) guards that can legally take {@code threat}, best first:
+	 * Free guards that can legally take {@code threat}, best first:
 	 * preferred role, then distance. Wounded guards are never chosen.
 	 */
 	private List<GuardEntity> nearestAvailable(Threat threat, Set<GuardEntity> excluded, boolean ownerDefence, int count) {
@@ -467,7 +467,7 @@ final class CommanderBrain {
 		for (GuardEntity guard : this.roster) {
 			Control control = this.controls.get(guard);
 			if (excluded.contains(guard) || this.wounded.contains(guard.getUUID())
-					|| !(control == Control.FREE || (ownerDefence && control == Control.ESCORT))) {
+					|| control != Control.FREE) {
 				continue;
 			}
 			if (!ownerDefence && !this.canReach(guard, threat)) {
