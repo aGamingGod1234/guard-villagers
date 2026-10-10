@@ -147,6 +147,7 @@ Each bell rallies at most once every 5 s.
 - Ranks are rechecked every 5 s and right after a hire, death, unload or group change. Only a strictly higher level unseats a rank holder, so ranks do not flicker.
 - When a commander falls, the most senior captain within 64 blocks of you takes over, and the commander announces it.
 - Appoint ranks yourself: look at a guard within 8 blocks and run `/guards appoint commander` or `/guards appoint captain`, or say "make Liam commander". Appointed guards keep their rank until they die or you run `/guards appoint auto`.
+- Ranks show as a gold star (commander) and a silver chevron (captain) in the tactics sidebar and on name tags. Right-click a guard in the sidebar to make it commander or captain.
 
 ### What the commander does on its own
 
@@ -325,6 +326,7 @@ Everything is under `/guards`. Player commands only affect your own guards.
 | `/guards status` | Commander's status report. |
 | `/guards appoint commander` | Make the guard you look at (within 8 blocks) your commander. |
 | `/guards appoint captain` | Make it captain of its group. |
+| `/guards appoint commander <guardUuid>` / `captain <guardUuid>` | Same, for a specific guard (used by the tactics screen menu). |
 | `/guards appoint auto` | Clear appointments; ranks follow seniority again. |
 | `/guards commander auto on\|off` | Let the commander act on its own, or only on your orders. |
 | `/guards voice on\|off` | Allow or stop voice orders for you. |
