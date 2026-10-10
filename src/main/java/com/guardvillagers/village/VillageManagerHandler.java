@@ -15,15 +15,19 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.GlobalPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.StructureTags;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
+import net.minecraft.world.entity.ai.memory.MemoryModuleType;
 import net.minecraft.world.entity.ai.village.poi.PoiManager;
 import net.minecraft.world.entity.ai.village.poi.PoiTypes;
 import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.StructureStart;
 
@@ -49,6 +53,10 @@ public final class VillageManagerHandler {
 	};
 
 	private VillageManagerHandler() {
+	}
+
+	public static void clearSessionState() {
+		DOOR_COUNT_CACHE.clear();
 	}
 
 	public static void maintainVillageGuards(ServerLevel world) {
@@ -197,6 +205,12 @@ public final class VillageManagerHandler {
 	private static boolean villagerBelongsToVillage(ServerLevel world, Villager villager, VillageDescriptor village) {
 		BoundingBox bounds = village.bounds();
 
+		// Fast path: the villager's own claimed bed or job site. Avoids two POI square queries per villager.
+		if (claimedPoiInside(world, villager, MemoryModuleType.HOME, bounds)
+			|| claimedPoiInside(world, villager, MemoryModuleType.JOB_SITE, bounds)) {
+			return true;
+		}
+
 		// Check for bed (HOME POI) within village bounds near the villager
 		boolean hasBedInBounds = world.getPoiManager().getInSquare(
 			entry -> entry.is(PoiTypes.HOME),
@@ -224,6 +238,13 @@ public final class VillageManagerHandler {
 		).anyMatch(poi -> bounds.isInside(poi.getPos()));
 
 		return hasJobSiteInBounds;
+	}
+
+	private static boolean claimedPoiInside(ServerLevel world, Villager villager, MemoryModuleType<GlobalPos> memory, BoundingBox bounds) {
+		Optional<GlobalPos> claimed = villager.getBrain().getMemory(memory);
+		return claimed.isPresent()
+			&& claimed.get().dimension() == world.dimension()
+			&& bounds.isInside(claimed.get().pos());
 	}
 
 	private static Optional<VillageDescriptor> findFallbackVillageDescriptor(ServerLevel world, BlockPos origin) {
@@ -292,21 +313,50 @@ public final class VillageManagerHandler {
 		return recalculated;
 	}
 
+	/**
+	 * Counts door blocks (both halves, as before) in a box around the village center. Walks loaded chunks only and
+	 * skips sections whose palette has no doors, instead of up to ~170k getBlockState calls that could also force
+	 * unloaded chunks to load.
+	 */
 	private static int countDoorsUncached(ServerLevel world, VillageDescriptor village) {
 		int radius = Math.min(64, village.horizontalRadius() + 8);
-		int minY = Math.max(world.getMinY(), village.center().getY() - 4);
-		int maxY = Math.min(world.getMaxY(), village.center().getY() + 5);
-		BlockPos.MutableBlockPos mutable = new BlockPos.MutableBlockPos();
+		BlockPos center = village.center();
+		int minX = center.getX() - radius;
+		int maxX = center.getX() + radius;
+		int minZ = center.getZ() - radius;
+		int maxZ = center.getZ() + radius;
+		int minY = Math.max(world.getMinY(), center.getY() - 4);
+		int maxY = Math.min(world.getMaxY(), center.getY() + 5);
 		int count = 0;
 
-		for (int x = village.center().getX() - radius; x <= village.center().getX() + radius; x++) {
-			for (int z = village.center().getZ() - radius; z <= village.center().getZ() + radius; z++) {
-				for (int y = minY; y <= maxY; y++) {
-					mutable.set(x, y, z);
-					if (world.getBlockState(mutable).is(BlockTags.DOORS)) {
-						count++;
-						if (count >= 512) {
-							return count;
+		for (int chunkX = SectionPos.blockToSectionCoord(minX); chunkX <= SectionPos.blockToSectionCoord(maxX); chunkX++) {
+			for (int chunkZ = SectionPos.blockToSectionCoord(minZ); chunkZ <= SectionPos.blockToSectionCoord(maxZ); chunkZ++) {
+				LevelChunk chunk = world.getChunkSource().getChunkNow(chunkX, chunkZ);
+				if (chunk == null) {
+					continue;
+				}
+				for (int sectionY = SectionPos.blockToSectionCoord(minY); sectionY <= SectionPos.blockToSectionCoord(maxY); sectionY++) {
+					int sectionIndex = world.getSectionIndexFromSectionY(sectionY);
+					if (sectionIndex < 0 || sectionIndex >= chunk.getSectionsCount()) {
+						continue;
+					}
+					LevelChunkSection section = chunk.getSection(sectionIndex);
+					if (section.hasOnlyAir() || !section.maybeHas(state -> state.is(BlockTags.DOORS))) {
+						continue;
+					}
+					int baseX = SectionPos.sectionToBlockCoord(chunkX);
+					int baseY = SectionPos.sectionToBlockCoord(sectionY);
+					int baseZ = SectionPos.sectionToBlockCoord(chunkZ);
+					for (int y = Math.max(minY, baseY); y <= Math.min(maxY, baseY + 15); y++) {
+						for (int x = Math.max(minX, baseX); x <= Math.min(maxX, baseX + 15); x++) {
+							for (int z = Math.max(minZ, baseZ); z <= Math.min(maxZ, baseZ + 15); z++) {
+								if (section.getBlockState(x - baseX, y - baseY, z - baseZ).is(BlockTags.DOORS)) {
+									count++;
+									if (count >= 512) {
+										return count;
+									}
+								}
+							}
 						}
 					}
 				}

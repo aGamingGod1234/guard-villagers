@@ -1,7 +1,7 @@
 package com.guardvillagers.item;
 
-import com.guardvillagers.GuardVillagersMod;
 import com.guardvillagers.entity.GuardEntity;
+import com.guardvillagers.tactics.GuardTacticsMenus;
 import java.util.List;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -12,6 +12,7 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 
 public final class GuardWhistleItem extends Item {
@@ -20,7 +21,7 @@ public final class GuardWhistleItem extends Item {
 	}
 
 	@Override
-	public InteractionResult use(net.minecraft.world.level.Level world, Player user, InteractionHand hand) {
+	public InteractionResult use(Level world, Player user, InteractionHand hand) {
 		if (world.isClientSide() || !(user instanceof ServerPlayer player)) {
 			return InteractionResult.SUCCESS;
 		}
@@ -30,7 +31,7 @@ public final class GuardWhistleItem extends Item {
 			return InteractionResult.SUCCESS;
 		}
 
-		GuardVillagersMod.openTacticsScreen(player);
+		GuardTacticsMenus.openTactics(player);
 		return InteractionResult.SUCCESS;
 	}
 
@@ -40,7 +41,7 @@ public final class GuardWhistleItem extends Item {
 			return InteractionResult.PASS;
 		}
 		if (!guard.isOwnedBy(player.getUUID())) {
-			player.sendOverlayMessage(Component.literal("This guard does not follow your commands."));
+			player.sendOverlayMessage(Component.translatable("message.guardvillagers.whistle.not_owner"));
 			return InteractionResult.SUCCESS;
 		}
 
@@ -53,13 +54,13 @@ public final class GuardWhistleItem extends Item {
 			} else {
 				guard.setPatrolRadius(nextRadius);
 			}
-			player.sendOverlayMessage(Component.literal("Patrol radius set to " + nextRadius + " blocks."));
+			player.sendOverlayMessage(Component.translatable("message.guardvillagers.whistle.patrol_radius", nextRadius));
 		} else {
 			int radius = Math.max(24, guard.getPatrolRadius());
 			guard.setFollowOverride(false);
 			guard.clearCombatTarget();
 			guard.setHome(guard.blockPosition(), radius);
-			player.sendOverlayMessage(Component.literal("Guard home zone assigned at current location."));
+			player.sendOverlayMessage(Component.translatable("message.guardvillagers.whistle.home_set"));
 		}
 		return InteractionResult.SUCCESS;
 	}
@@ -81,6 +82,6 @@ public final class GuardWhistleItem extends Item {
 				leader.setPriorityTarget(threat);
 			}
 		}
-		caller.sendOverlayMessage(Component.literal("Rally command sent to " + leaders.size() + " squad leaders."));
+		caller.sendOverlayMessage(Component.translatable("message.guardvillagers.whistle.rally", leaders.size()));
 	}
 }

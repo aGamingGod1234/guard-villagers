@@ -44,8 +44,7 @@ public final class GuardDebugState extends SavedData {
 		if (current.enabled() == enabled) {
 			return;
 		}
-		this.settings.put(playerId, current.withEnabled(enabled));
-		this.setDirty();
+		this.store(playerId, current.withEnabled(enabled));
 	}
 
 	public double getRange(UUID playerId) {
@@ -58,12 +57,21 @@ public final class GuardDebugState extends SavedData {
 		if (Double.compare(current.range(), normalizedRange) == 0) {
 			return;
 		}
-		this.settings.put(playerId, current.withRange(normalizedRange));
-		this.setDirty();
+		this.store(playerId, current.withRange(normalizedRange));
 	}
 
-	public void toggle(UUID playerId) {
-		this.setEnabled(playerId, !this.isEnabled(playerId));
+	public int trackedPlayerCount() {
+		return this.settings.size();
+	}
+
+	/** Rows equal to the defaults are dropped so a disabled overlay leaves nothing behind in the save. */
+	private void store(UUID playerId, DebugSettings updated) {
+		if (updated.equals(DebugSettings.DEFAULT)) {
+			this.settings.remove(playerId);
+		} else {
+			this.settings.put(playerId, updated);
+		}
+		this.setDirty();
 	}
 
 	private Map<UUID, DebugSettings> entriesForCodec() {
