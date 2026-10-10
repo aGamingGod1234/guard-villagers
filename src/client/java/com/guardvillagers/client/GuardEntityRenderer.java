@@ -8,6 +8,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.HumanoidModel;
 import net.minecraft.client.model.geom.ModelLayers;
 import net.minecraft.client.renderer.SubmitNodeCollector;
@@ -104,7 +105,8 @@ public class GuardEntityRenderer
 	// MobRenderer only shows names for custom-named mobs; also show the stats label on the guard under the crosshair.
 	@Override
 	protected boolean shouldShowName(GuardEntity entity, double distanceToCameraSq) {
-		return super.shouldShowName(entity, distanceToCameraSq) || this.isLookedAt(entity);
+		// The extra stats label must still honor F1 (hideGui), which vanilla checks through Minecraft.renderNames().
+		return super.shouldShowName(entity, distanceToCameraSq) || (Minecraft.renderNames() && this.isLookedAt(entity));
 	}
 
 	private boolean isLookedAt(GuardEntity entity) {
@@ -125,8 +127,8 @@ public class GuardEntityRenderer
 		if (name != null && entity.hasCustomName()) {
 			label.append(name).append(Component.literal("  "));
 		}
-		label.append(Component.literal("Lv " + entity.getLevel()).withStyle(ChatFormatting.GOLD));
-		label.append(Component.literal(" " + roleLabel(entity.getRole()) + " ").withStyle(ChatFormatting.GRAY));
+		label.append(Component.literal("Lv " + entity.getLevel()).withStyle(ChatFormatting.YELLOW));
+		label.append(Component.literal(" " + roleLabel(entity.getRole()) + " ").withStyle(ChatFormatting.WHITE));
 		float maxHealth = Math.max(1.0F, entity.getMaxHealth());
 		float ratio = Mth.clamp(entity.getHealth() / maxHealth, 0.0F, 1.0F);
 		ChatFormatting healthColor = ratio > 0.6F ? ChatFormatting.GREEN : ratio > 0.3F ? ChatFormatting.YELLOW : ChatFormatting.RED;
