@@ -49,6 +49,22 @@ final class GuardSavedDataMigrationTest {
 	}
 
 	@Test
+	void movesVillageStateForNestedDatapackDimensionPaths() throws IOException {
+		String legacyVillage = GuardSavedData.legacyFileName(GuardSavedData.VILLAGE_STATE);
+		write(this.world.resolve("dimensions/custom/realms/sky/data").resolve(legacyVillage), "nested");
+		write(this.world.resolve("dimensions/custom/a/b/c/data").resolve(legacyVillage), "deeper");
+		// Not a data folder: must stay put.
+		write(this.world.resolve("dimensions/custom/sky/region").resolve(legacyVillage), "stray");
+
+		GuardSavedData.migrateLegacyFiles(this.world);
+
+		assertEquals("nested", Files.readString(this.world.resolve("dimensions/custom/realms/sky/data/guardvillagers/village_state.dat")));
+		assertEquals("deeper", Files.readString(this.world.resolve("dimensions/custom/a/b/c/data/guardvillagers/village_state.dat")));
+		assertFalse(Files.exists(this.world.resolve("dimensions/custom/realms/sky/data").resolve(legacyVillage)));
+		assertTrue(Files.exists(this.world.resolve("dimensions/custom/sky/region").resolve(legacyVillage)));
+	}
+
+	@Test
 	void neverOverwritesAlreadyMigratedData() throws IOException {
 		write(this.world.resolve("data").resolve(GuardSavedData.legacyFileName("tactics")), "stale");
 		write(this.world.resolve("data/guardvillagers/tactics.dat"), "current");

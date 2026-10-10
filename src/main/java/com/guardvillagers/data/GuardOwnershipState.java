@@ -1,11 +1,11 @@
 package com.guardvillagers.data;
 
+import com.guardvillagers.GuardSecurityLimits;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -17,20 +17,24 @@ import net.minecraft.world.level.saveddata.SavedDataType;
 
 /**
  * Persisted guard -> owner index, so ownership limits and counts include guards in unloaded chunks and survive
- * restarts without scanning worlds. Guards refresh their row while loaded; rows for guards that vanished without a
- * destroy event (deleted region, external edits) expire after {@link #EXPIRY_TICKS} of game time unseen.
+ * restarts without scanning worlds. Guards refresh their row while loaded. A row is only removed when its guard is
+ * destroyed (killed or discarded) or changes owner; how long a guard has gone unseen only affects roster ordering,
+ * because an old row is usually a guard parked in a far-away chunk, not a missing one.
+ *
+ * <p>Size is bounded per owner ({@link #MAX_ROWS_PER_OWNER}), not globally: a global cap would have to drop some
+ * owner's rows and let them hire past the personal limit. The per-owner cap is four times the personal limit, so
+ * eviction only ever touches owners who already hold far more guards than they can hire.
  */
 public final class GuardOwnershipState extends SavedData {
 	/** Only re-mark a loaded guard's row dirty this often, so tracking does not rewrite the file every autosave. */
 	public static final long REFRESH_TICKS = 20L * 60L * 20L;
-	/** 100 in-game days (about 33 hours of server uptime). */
-	public static final long EXPIRY_TICKS = 24_000L * 100L;
-	public static final int MAX_ENTRIES = 65_536;
+	public static final int MAX_ROWS_PER_OWNER = GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER * 4;
 	public static final int MAX_NAME_LENGTH = 64;
 
 	private static final Codec<Map<UUID, Entry>> ENTRY_MAP_CODEC = Codec.unboundedMap(UUIDUtil.STRING_CODEC, Entry.CODEC);
 	public static final Codec<GuardOwnershipState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
-		ENTRY_MAP_CODEC.optionalFieldOf("guards", Map.of()).forGetter(GuardOwnershipState::entriesForCodec)
+		ENTRY_MAP_CODEC.optionalFieldOf("guards", Map.of()).forGetter(GuardOwnershipState::entriesForCodec),
+		Codec.BOOL.optionalFieldOf("backfilled", false).forGetter(GuardOwnershipState::isBackfilled)
 	).apply(instance, GuardOwnershipState::new));
 
 	public static final SavedDataType<GuardOwnershipState> TYPE = new SavedDataType<>(
@@ -42,17 +46,17 @@ public final class GuardOwnershipState extends SavedData {
 
 	private final Map<UUID, Entry> guards = new HashMap<>();
 	private final Map<UUID, Set<UUID>> byOwner = new HashMap<>();
+	/** True once {@link GuardOwnershipBackfill} has imported guards saved before this index existed. */
+	private boolean backfilled;
 
 	public GuardOwnershipState() {
 	}
 
-	private GuardOwnershipState(Map<UUID, Entry> entries) {
+	private GuardOwnershipState(Map<UUID, Entry> entries, boolean backfilled) {
 		for (Map.Entry<UUID, Entry> entry : entries.entrySet()) {
-			if (this.guards.size() >= MAX_ENTRIES) {
-				break;
-			}
 			this.put(entry.getKey(), entry.getValue());
 		}
+		this.backfilled = backfilled;
 	}
 
 	/** Records that {@code guardId} is owned by {@code ownerId} and was seen at {@code tick}, keeping its last label. */
@@ -70,17 +74,28 @@ public final class GuardOwnershipState extends SavedData {
 	public void record(UUID guardId, UUID ownerId, long tick, String name, int groupIndex) {
 		String safeName = name == null ? "" : name.length() <= MAX_NAME_LENGTH ? name : name.substring(0, MAX_NAME_LENGTH);
 		Entry existing = this.guards.get(guardId);
-		if (existing != null && existing.owner().equals(ownerId)
-				&& existing.name().equals(safeName) && existing.groupIndex() == groupIndex) {
+		boolean sameOwner = existing != null && existing.owner().equals(ownerId);
+		if (sameOwner && existing.name().equals(safeName) && existing.groupIndex() == groupIndex) {
 			long sinceSeen = tick - existing.lastSeenTick();
 			if (sinceSeen >= 0 && sinceSeen < REFRESH_TICKS) {
 				return;
 			}
-		} else if (existing == null && this.guards.size() >= MAX_ENTRIES) {
-			this.evictLeastRecentlySeen();
+		}
+		if (!sameOwner) {
+			this.makeRoomFor(ownerId);
 		}
 		this.put(guardId, new Entry(ownerId, tick, safeName, groupIndex));
 		this.setDirty();
+	}
+
+	/**
+	 * Adds a row for a guard found in saved entity data, unless the guard already has one (a live row is newer than
+	 * anything read from disk).
+	 */
+	public void recordIfAbsent(UUID guardId, UUID ownerId, long tick, String name, int groupIndex) {
+		if (!this.guards.containsKey(guardId)) {
+			this.record(guardId, ownerId, tick, name, groupIndex);
+		}
 	}
 
 	public Optional<Entry> get(UUID guardId) {
@@ -95,28 +110,10 @@ public final class GuardOwnershipState extends SavedData {
 		}
 	}
 
-	/** Guards owned by {@code ownerId} that were seen within the expiry window; expired rows are dropped. */
-	public int countOwned(UUID ownerId, long now) {
+	/** Every guard row owned by {@code ownerId}, however long ago it was last seen. */
+	public int countOwned(UUID ownerId) {
 		Set<UUID> owned = this.byOwner.get(ownerId);
-		if (owned == null) {
-			return 0;
-		}
-		int count = 0;
-		for (Iterator<UUID> iterator = owned.iterator(); iterator.hasNext(); ) {
-			UUID guardId = iterator.next();
-			Entry entry = this.guards.get(guardId);
-			if (entry != null && !isExpired(entry, now)) {
-				count++;
-				continue;
-			}
-			iterator.remove();
-			this.guards.remove(guardId);
-			this.setDirty();
-		}
-		if (owned.isEmpty()) {
-			this.byOwner.remove(ownerId);
-		}
-		return count;
+		return owned == null ? 0 : owned.size();
 	}
 
 	public Set<UUID> guardsOf(UUID ownerId) {
@@ -128,9 +125,15 @@ public final class GuardOwnershipState extends SavedData {
 		return this.guards.size();
 	}
 
-	static boolean isExpired(Entry entry, long now) {
-		// If game time went backwards (copied world, edited level.dat) the difference is negative and the row stays.
-		return now - entry.lastSeenTick() > EXPIRY_TICKS;
+	public boolean isBackfilled() {
+		return this.backfilled;
+	}
+
+	public void markBackfilled() {
+		if (!this.backfilled) {
+			this.backfilled = true;
+			this.setDirty();
+		}
 	}
 
 	private void put(UUID guardId, Entry entry) {
@@ -148,18 +151,25 @@ public final class GuardOwnershipState extends SavedData {
 		}
 	}
 
-	private void evictLeastRecentlySeen() {
+	/**
+	 * Keeps {@code ownerId} under {@link #MAX_ROWS_PER_OWNER} by dropping that owner's least recently seen row. The
+	 * owner keeps far more rows than the personal limit, so this never lets anyone hire past it.
+	 */
+	private void makeRoomFor(UUID ownerId) {
+		Set<UUID> owned = this.byOwner.get(ownerId);
+		if (owned == null || owned.size() < MAX_ROWS_PER_OWNER) {
+			return;
+		}
 		UUID oldest = null;
 		long oldestTick = Long.MAX_VALUE;
-		for (Map.Entry<UUID, Entry> entry : this.guards.entrySet()) {
-			if (entry.getValue().lastSeenTick() < oldestTick) {
-				oldestTick = entry.getValue().lastSeenTick();
-				oldest = entry.getKey();
+		for (UUID guardId : owned) {
+			long lastSeen = this.guards.get(guardId).lastSeenTick();
+			if (oldest == null || lastSeen < oldestTick) {
+				oldestTick = lastSeen;
+				oldest = guardId;
 			}
 		}
-		if (oldest != null) {
-			this.remove(oldest);
-		}
+		this.remove(oldest);
 	}
 
 	private Map<UUID, Entry> entriesForCodec() {

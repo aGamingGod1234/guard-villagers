@@ -533,8 +533,6 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 			}
 			GuardOwnershipIndex.track(this);
 			this.aiController.invalidateStatus();
-		} else if (ownerUuid == null) {
-			GuardOwnershipIndex.untrack(this);
 		}
 	}
 
@@ -1580,6 +1578,11 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	@Override
 	protected void customServerAiStep(ServerLevel world) {
 		super.customServerAiStep(world);
+		if (this.isRemoved()) {
+			// A goal just teleported this guard to another dimension. The new copy (same UUID) owns
+			// the index entry and the owner's name now; this one must not touch them.
+			return;
+		}
 		if (this.tickCount % 20 == 0) {
 			this.syncRegisteredOwnerName();
 		}
@@ -2330,14 +2333,32 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 			this.lastRegisteredOwnerName = "";
 			this.lastRegisteredOwner = null;
 		}
-		if (reason == null || reason.shouldDestroy()) {
+		super.remove(reason);
+	}
+
+	/**
+	 * Runs for every removal: remove() (kill, discard) and the paths that only call setRemoved()
+	 * (chunk unload, dimension change). Deaths are reported in die(); a guard that leaves while
+	 * alive counts as lost (not dead) so the owner's hierarchy re-elects among loaded guards. The
+	 * removal reason is already set here, so isAlive() is false; check health instead.
+	 */
+	@Override
+	public void onRemoval(Entity.RemovalReason reason) {
+		super.onRemoval(reason);
+		if (!(this.level() instanceof ServerLevel)) {
+			return;
+		}
+		if (reason.shouldDestroy()) {
 			GuardOwnershipIndex.untrack(this);
 		}
-		// Deaths are handled in die(); this covers chunk unloads, dimension changes and discards.
-		if (this.ownerUuid != null && this.isAlive() && this.level() instanceof ServerLevel) {
+		if (this.ownerUuid != null && this.getHealth() > 0.0F) {
 			GuardHierarchy.onGuardLost(this, false);
 		}
-		super.remove(reason);
+	}
+
+	/** Drops the per-owner name registry when the server stops so the next world starts clean. */
+	public static void clearSessionState() {
+		OWNER_USED_NAMES.clear();
 	}
 
 	private UUID parseUuid(String value) {

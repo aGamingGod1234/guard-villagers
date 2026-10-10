@@ -122,7 +122,7 @@ public class GuardCommanderGameTest {
 		GuardEntity veteran = owned(helper, owner, CENTER + 3.5, CENTER + 0.5, GuardRole.SWORDSMAN, 1100);
 		owned(helper, owner, CENTER + 0.5, CENTER + 3.5, GuardRole.BOWMAN, 500);
 		helper.runAfterDelay(10, () -> GuardHierarchy.appointCommander(helper.getLevel().getServer(), owner.getUUID(), rookie));
-		helper.onEachTick(() -> {
+		GuardTestSupport.onEachTick(helper, () -> {
 			if (helper.getTick() > 12 && rookie.getRank() != GuardRank.COMMANDER) {
 				helper.fail("appointed commander lost its rank at tick " + helper.getTick() + "; veteran is " + veteran.getRank());
 			}
@@ -576,7 +576,7 @@ public class GuardCommanderGameTest {
 		UUID[] zombie = new UUID[1];
 		helper.runAfterDelay(40, () -> zombie[0] = statue(helper, CENTER + 22.5, CENTER + 0.5).getUUID());
 		boolean[] healed = {false};
-		helper.onEachTick(() -> {
+		GuardTestSupport.onEachTick(helper, () -> {
 			if (zombie[0] == null) {
 				return;
 			}
@@ -611,7 +611,7 @@ public class GuardCommanderGameTest {
 			start[1] = guards.get(1).position();
 			statue(helper, CENTER + 8.5, CENTER + 0.5);
 		});
-		helper.onEachTick(() -> {
+		GuardTestSupport.onEachTick(helper, () -> {
 			if (start[0] == null) {
 				return;
 			}

@@ -25,7 +25,9 @@ public final class ElectLeaderGoal extends Goal {
 	public boolean canUse() {
 		return this.guard.hasSquad()
 			&& !this.guard.hasOwner()
-			&& this.guard.tickCount % 80 == 0
+			// Mob#serverAiStep only evaluates canUse when (tickCount + id) is even, so a bare
+			// tickCount % 80 never fired for odd-id guards.
+			&& (this.guard.tickCount + this.guard.getId()) % 80 == 0
 			&& this.guard.level() instanceof ServerLevel;
 	}
 

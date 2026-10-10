@@ -55,7 +55,7 @@ public class GuardMovementGameTest {
 			dunked[0] = true;
 		});
 
-		helper.onEachTick(() -> {
+		GuardTestSupport.onEachTick(helper, () -> {
 			if (!guard.isAlive()) {
 				helper.fail("guard drowned in the pit");
 			}
@@ -74,7 +74,7 @@ public class GuardMovementGameTest {
 		GuardTestSupport.fill(helper, 0, 0, 0, SIZE - 1, 3, SIZE - 1, Blocks.STONE);
 		GuardTestSupport.fill(helper, CENTER - 2, 1, CENTER - 2, CENTER + 2, 3, CENTER + 2, Blocks.WATER);
 		GuardEntity guard = GuardTestSupport.swordsman(helper, CENTER + 0.5, 1, CENTER + 0.5);
-		helper.onEachTick(() -> {
+		GuardTestSupport.onEachTick(helper, () -> {
 			if (!guard.isAlive() || guard.getHealth() < guard.getMaxHealth()) {
 				helper.fail("guard took drowning damage, air=" + guard.getAirSupply());
 			}
@@ -94,7 +94,7 @@ public class GuardMovementGameTest {
 		GuardEntity guard = GuardTestSupport.ownedGuard(helper, CENTER - 12.5, 4, CENTER + 0.5, owner);
 		guard.setFollowOverride(true);
 
-		helper.onEachTick(() -> {
+		GuardTestSupport.onEachTick(helper, () -> {
 			if (!guard.isAlive()) {
 				helper.fail("guard drowned following its owner across water");
 			}
@@ -120,7 +120,7 @@ public class GuardMovementGameTest {
 		GuardEntity guard = GuardTestSupport.ownedGuard(helper, CENTER - 12.5, 6, CENTER + 0.5, owner);
 		guard.setFollowOverride(true);
 
-		helper.onEachTick(() -> {
+		GuardTestSupport.onEachTick(helper, () -> {
 			double y = helper.relativeVec(guard.position()).y;
 			if (y < 5.0D) {
 				helper.fail("guard fell off the bridge at " + GuardTestSupport.relative(helper, guard));
@@ -150,7 +150,7 @@ public class GuardMovementGameTest {
 		int[] stableTicks = {0};
 		String[] lastProblem = {"never evaluated"};
 
-		helper.onEachTick(() -> {
+		GuardTestSupport.onEachTick(helper, () -> {
 			String problem = clumpProblem(guards, owner);
 			if (problem == null) {
 				stableTicks[0]++;

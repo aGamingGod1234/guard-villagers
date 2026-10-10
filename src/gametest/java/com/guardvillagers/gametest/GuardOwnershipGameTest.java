@@ -4,18 +4,25 @@ import static com.guardvillagers.gametest.GuardTestSupport.ARENA;
 import static com.guardvillagers.gametest.GuardTestSupport.CENTER;
 import static com.guardvillagers.gametest.GuardTestSupport.ENV;
 
+import com.guardvillagers.GuardHiring;
 import com.guardvillagers.GuardOwnershipIndex;
 import com.guardvillagers.GuardReputationManager;
+import com.guardvillagers.GuardSecurityLimits;
 import com.guardvillagers.GuardVillagersMod;
+import com.guardvillagers.data.GuardOwnershipState;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.shop.GuardShopInventory;
 import com.guardvillagers.shop.GuardShopScreenHandler;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.ItemStack;
@@ -294,5 +301,62 @@ public class GuardOwnershipGameTest {
 
 		helper.succeedWhen(() -> helper.assertTrue(guard.distanceTo(owner) <= 6.0F,
 				"guard is " + guard.distanceTo(owner) + " blocks from owner outside its zone"));
+	}
+
+	// ---- persisted ownership rows ------------------------------------------------------------------
+
+	private static GuardOwnershipState ownershipState(GameTestHelper helper) {
+		return helper.getLevel().getServer().getDataStorage().computeIfAbsent(GuardOwnershipState.TYPE);
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void longUnseenGuardsStillCountTowardTheLimit(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer player = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		player.getInventory().add(new ItemStack(Items.EMERALD_BLOCK, 64));
+		GuardOwnershipState state = ownershipState(helper);
+		List<UUID> parked = new ArrayList<>();
+		// Guards last seen at tick 0, i.e. parked in unloaded chunks far longer than the old 100-day expiry.
+		for (int i = 0; i < GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER; i++) {
+			UUID guardId = UUID.randomUUID();
+			parked.add(guardId);
+			state.record(guardId, player.getUUID(), 0L, "Parked " + i, -1);
+		}
+		try {
+			GuardHiring.BatchResult result = GuardHiring.hire(player, 1);
+
+			helper.assertValueEqual(result.result(), GuardHiring.Result.LIMIT_REACHED, "hire result with 16 unloaded guards");
+			helper.assertValueEqual(owned(helper, player).size(), 0, "guards spawned past the limit");
+			helper.assertValueEqual(GuardOwnershipIndex.getUnloadedOwnedGuards(helper.getLevel().getServer(), player.getUUID(), Set.of()).size(),
+					GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER, "unloaded roster rows");
+		} finally {
+			parked.forEach(state::remove);
+		}
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void failedSpawnDoesNotLeaveAPhantomOwnershipRow(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer player = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		GuardEntity guard = GuardVillagersMod.GUARD_ENTITY_TYPE.create(helper.getLevel(), EntitySpawnReason.EVENT);
+		helper.assertTrue(guard != null, "guard entity type did not create a guard");
+		Vec3 spawn = helper.absoluteVec(new Vec3(CENTER + 2.5, 1, CENTER + 0.5));
+		guard.snapTo(spawn.x, spawn.y, spawn.z, 0.0F, 0.0F);
+
+		boolean threw = false;
+		try {
+			GuardHiring.spawnOwned(helper.getLevel(), guard, player.getUUID(), configured -> {
+				throw new IllegalStateException("simulated loadout failure");
+			});
+		} catch (IllegalStateException expected) {
+			threw = true;
+		}
+
+		helper.assertTrue(threw, "spawn failure was swallowed instead of rethrown");
+		helper.assertTrue(ownershipState(helper).get(guard.getUUID()).isEmpty(), "failed spawn left a persisted ownership row");
+		helper.assertValueEqual(GuardOwnershipIndex.countOwnedGuards(helper.getLevel().getServer(), player.getUUID()), 0,
+				"failed spawn still counts toward the personal limit");
+		helper.succeed();
 	}
 }

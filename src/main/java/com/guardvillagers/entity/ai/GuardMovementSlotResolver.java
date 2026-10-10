@@ -129,6 +129,11 @@ public final class GuardMovementSlotResolver {
 		return REGISTRY.size(key, tick);
 	}
 
+	/** Drops every roster; called when the server stops so the next world starts clean. */
+	public static void clearSessionState() {
+		REGISTRY.clear();
+	}
+
 	public static void release(AnchorKey key, UUID guard) {
 		if (key != null) {
 			REGISTRY.release(key, guard);

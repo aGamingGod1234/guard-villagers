@@ -1,6 +1,9 @@
 package com.guardvillagers;
 
 import com.guardvillagers.entity.GuardEntity;
+import com.guardvillagers.entity.ai.GuardAiController;
+import com.guardvillagers.entity.ai.GuardMovementSlotResolver;
+import com.guardvillagers.navigation.SquadRouteCache;
 import com.guardvillagers.tactics.GuardTacticsMenus;
 import com.guardvillagers.village.GuardBellRally;
 import com.guardvillagers.village.VillageManagerHandler;
@@ -69,6 +72,10 @@ final class GuardEvents {
 			GuardOwnershipIndex.clearSessionState();
 			VillageManagerHandler.clearSessionState();
 			GuardBellRally.clearSessionState();
+			GuardEntity.clearSessionState();
+			GuardAiController.clearSessionState();
+			GuardMovementSlotResolver.clearSessionState();
+			SquadRouteCache.clear();
 		});
 	}
 
