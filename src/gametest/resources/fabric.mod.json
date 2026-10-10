@@ -6,7 +6,13 @@
 	"environment": "*",
 	"entrypoints": {
 		"fabric-gametest": [
-			"com.guardvillagers.gametest.GuardCombatGameTest"
+			"com.guardvillagers.gametest.GuardCombatGameTest",
+			"com.guardvillagers.gametest.GuardCombatScenariosGameTest",
+			"com.guardvillagers.gametest.GuardOwnershipGameTest",
+			"com.guardvillagers.gametest.GuardMovementGameTest",
+			"com.guardvillagers.gametest.GuardPersistenceGameTest",
+			"com.guardvillagers.gametest.GuardReputationGameTest",
+			"com.guardvillagers.gametest.GuardVillageGameTest"
 		],
 		"fabric-client-gametest": [
 			"com.guardvillagers.gametest.client.GuardRenderClientGameTest",
