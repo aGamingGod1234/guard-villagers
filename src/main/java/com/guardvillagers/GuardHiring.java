@@ -12,7 +12,8 @@ import net.minecraft.world.entity.EntitySpawnReason;
 
 /** Hiring personal guards from the shop: pricing, payment, spawn and refund. */
 public final class GuardHiring {
-	private static final int SPAWN_SEARCH_RANGE = 10;
+	/** How far above or below the buyer's feet a hired guard may appear, always in the buyer's own column. */
+	static final int SPAWN_VERTICAL_RANGE = 3;
 
 	public enum Result {
 		SUCCESS,
@@ -98,9 +99,46 @@ public final class GuardHiring {
 		return BatchResult.of(Result.SPAWN_FAILED);
 	}
 
+	/**
+	 * README: hired guards spawn on the buyer's exact X/Z column or the purchase fails cleanly. Searches feet level
+	 * first, then up/down to {@link #SPAWN_VERTICAL_RANGE}, and only accepts a spot connected to the buyer through
+	 * open blocks, so a guard is never dropped into a sealed pocket under the floor.
+	 */
+	static BlockPos findSpawnInBuyerColumn(ServerLevel world, ServerPlayer player) {
+		BlockPos feet = new BlockPos(Mth.floor(player.getX()), player.getBlockY(), Mth.floor(player.getZ()));
+		for (int offset : spawnOffsets()) {
+			BlockPos candidate = feet.above(offset);
+			if (GuardVillagersMod.canGuardSpawnAt(world, candidate) && isOpenBetween(world, feet, candidate)) {
+				return candidate;
+			}
+		}
+		return null;
+	}
+
+	/** 0, +1, -1, +2, -2, ... nearest first, preferring up. */
+	static int[] spawnOffsets() {
+		int[] offsets = new int[SPAWN_VERTICAL_RANGE * 2 + 1];
+		for (int step = 1; step <= SPAWN_VERTICAL_RANGE; step++) {
+			offsets[step * 2 - 1] = step;
+			offsets[step * 2] = -step;
+		}
+		return offsets;
+	}
+
+	/** Every block strictly between the buyer's feet and the candidate (same column) must be passable. */
+	private static boolean isOpenBetween(ServerLevel world, BlockPos feet, BlockPos candidate) {
+		int step = Integer.signum(candidate.getY() - feet.getY());
+		for (int y = feet.getY() + step; y != candidate.getY(); y += step) {
+			BlockPos between = new BlockPos(feet.getX(), y, feet.getZ());
+			if (!world.getBlockState(between).getCollisionShape(world, between).isEmpty()) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	private static GuardEntity trySpawn(ServerLevel world, ServerPlayer player, GuardPlayerUpgrades upgrades, GuardRole role) {
-		BlockPos candidate = new BlockPos(Mth.floor(player.getX()), player.getBlockY(), Mth.floor(player.getZ()));
-		BlockPos spawn = GuardVillagersMod.findNearbyGuardSpawnPos(world, candidate, SPAWN_SEARCH_RANGE);
+		BlockPos spawn = findSpawnInBuyerColumn(world, player);
 		if (spawn == null) {
 			return null;
 		}

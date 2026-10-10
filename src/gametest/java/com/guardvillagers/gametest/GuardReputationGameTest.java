@@ -41,7 +41,7 @@ public class GuardReputationGameTest {
 				what + ": expected delta " + expected + " but reputation went " + before + " -> " + after);
 	}
 
-	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40, required = false)
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
 	public void completedTradeRaisesReputationWithCooldown(GameTestHelper helper) {
 		GuardTestSupport.floor(helper);
 		ServerPlayer player = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 2.5);
@@ -85,9 +85,13 @@ public class GuardReputationGameTest {
 
 		double before = rep(helper, attacker.getUUID());
 		guard.hurtServer(level, level.damageSources().playerAttack(attacker), 1.0F);
-		double after = rep(helper, attacker.getUUID());
+		double afterFirst = rep(helper, attacker.getUUID());
+		// A larger second hit gets through the invulnerability window and lands inside the 5 s grace window.
+		guard.hurtServer(level, level.damageSources().playerAttack(attacker), 3.0F);
+		double afterSecond = rep(helper, attacker.getUUID());
 
-		assertDelta(helper, before, after, -6 / 400.0D, "hitting an unowned guard");
+		assertDelta(helper, before, afterFirst, 0.0D, "first light hit on an unowned guard is forgiven");
+		assertDelta(helper, afterFirst, afterSecond, -6 / 400.0D, "second hit within the grace window");
 		helper.succeed();
 	}
 
@@ -127,7 +131,7 @@ public class GuardReputationGameTest {
 	}
 
 	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
-	public void ownedGuardKillingRaiderCountsAsRaidDefense(GameTestHelper helper) {
+	public void ownedGuardKillingLonePillagerIsNotRaidDefense(GameTestHelper helper) {
 		GuardTestSupport.floor(helper);
 		ServerLevel level = helper.getLevel();
 		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 4.5);
@@ -139,8 +143,8 @@ public class GuardReputationGameTest {
 		double after = rep(helper, owner.getUUID());
 
 		helper.assertFalse(pillager.isAlive(), "setup: pillager survived");
-		// raider kill (+4) plus raid-defense bonus (+4) in legacy points
-		assertDelta(helper, before, after, 8 / 400.0D, "owned guard killing a pillager");
+		// No raid is running: a raider kill (+4 legacy points) without the raid-defense bonus.
+		assertDelta(helper, before, after, 4 / 400.0D, "owned guard killing a pillager outside a raid");
 		helper.succeed();
 	}
 
@@ -180,7 +184,7 @@ public class GuardReputationGameTest {
 	}
 
 	/** README: "/guards reputation <value> - Sets your own reputation." */
-	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40, required = false)
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
 	public void reputationCommandSelfFormSetsOwnValue(GameTestHelper helper) {
 		GuardTestSupport.floor(helper);
 		ServerPlayer player = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
