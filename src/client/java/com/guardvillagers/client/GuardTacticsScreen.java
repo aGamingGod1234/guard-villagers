@@ -6,6 +6,7 @@ import org.lwjgl.glfw.GLFW;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -100,6 +101,9 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private static final int DIALOG_MAX_WIDTH = 260;
 	private static final int DIALOG_HEIGHT = 84;
 	private static final int DIALOG_BUTTON_HEIGHT = 16;
+	private static final int MAX_COMMAND_LENGTH = 256;
+	// Mirrors the server's MAX_BATCH_ASSIGN for assignmany.
+	private static final int MAX_UUIDS_PER_COMMAND = 64;
 	private static final Pattern GENERIC_GROUP_NAME = Pattern.compile("Role(\\s+\\d+)?");
 
 	private static final ItemStack GUARD_HEAD_ICON = new ItemStack(Items.PLAYER_HEAD);
@@ -1140,12 +1144,9 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		List<ClientGuardRosterStore.GuardRosterEntry> roster = this.rosterStore.roster(context);
 		this.viewRosterLoaded = this.rosterStore.hasRoster(context);
 		this.viewRosterSize = roster.size();
-		int maxGroupRow = -1;
-		for (ClientGuardRosterStore.GuardRosterEntry guard : roster) {
-			maxGroupRow = Math.max(maxGroupRow, this.getEffectiveGroup(guard));
-		}
-		int groupCount = Mth.clamp(Math.max(maxGroupRow + 1, this.dataStore.groupCount(context)), 0, ClientTacticsDataStore.MAX_GROUPS);
-		this.dataStore.ensureGroupCount(context, groupCount);
+		// The server rejects rows it does not have, so only show rows from the synced list (plus rows this
+		// screen asked it to add). Guards holding a stale index beyond that are listed as unassigned.
+		int groupCount = Mth.clamp(this.dataStore.groupCount(context), 0, ClientTacticsDataStore.MAX_GROUPS);
 		this.viewGroupCount = groupCount;
 
 		while (this.groupMembers.size() < groupCount) {
@@ -1156,8 +1157,8 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		}
 		this.rosterList.clear();
 		for (ClientGuardRosterStore.GuardRosterEntry guard : roster) {
-			int group = this.getEffectiveGroup(guard);
-			if (group >= 0 && group < groupCount) {
+			int group = this.displayGroup(guard);
+			if (group >= 0) {
 				this.groupMembers.get(group).add(guard);
 			}
 			if (!this.filterUnassigned || group < 0) {
@@ -1428,7 +1429,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 				break;
 			}
 			ClientGuardRosterStore.GuardRosterEntry guard = list.get(i);
-			int group = this.getEffectiveGroup(guard);
+			int group = this.displayGroup(guard);
 			this.renderRosterCard(graphics, worldContext, guard, group, cardX, cardY, cardW, mouseX, mouseY);
 			this.addCardHit(guard, cardX, cardY, cardW, ROSTER_CARD_HEIGHT, group, this.rightListTop, this.rightListBottom);
 		}
@@ -1604,9 +1605,9 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			return;
 		}
 		int nextRow = this.dataStore.groupCount(worldContext);
-		this.dataStore.ensureGroupCount(worldContext, nextRow + 1);
-		this.localRevision++;
 		if (this.sendCommand("guards groups add")) {
+			this.dataStore.ensureGroupCount(worldContext, nextRow + 1);
+			this.localRevision++;
 			this.setStatus(Component.translatable(KEY + "status.group_added", nextRow + 1), STATUS_SUCCESS);
 		}
 	}
@@ -1621,7 +1622,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		DropHit target = this.findDropHit(mouseX, mouseY);
 		this.dragTarget = target == null ? null : target.copy(this.dragTargetScratch);
 		ClientGuardRosterStore.GuardRosterEntry guard = this.dragHandler.draggedGuard();
-		int currentGroup = guard == null ? -1 : this.getEffectiveGroup(guard);
+		int currentGroup = guard == null ? -1 : this.displayGroup(guard);
 		Object labelKey;
 		if (this.dragTarget == null) {
 			labelKey = DRAG_CANCEL;
@@ -1688,12 +1689,19 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		int targetGroup = target.kind == DropKind.UNASSIGN ? -1 : target.group;
 		if (target.kind == DropKind.NEW_GROUP) {
 			ClientTacticsDataStore.WorldContext worldContext = this.worldContext();
-			if (worldContext == null || targetGroup >= ClientTacticsDataStore.MAX_GROUPS) {
+			if (worldContext == null) {
+				return;
+			}
+			// The server appends the new group, so its row is the current count. Commands run in order,
+			// so the add lands before the assignment that references it.
+			targetGroup = this.dataStore.groupCount(worldContext);
+			if (targetGroup >= ClientTacticsDataStore.MAX_GROUPS || !this.sendCommand("guards groups add")) {
 				return;
 			}
 			this.dataStore.ensureGroupCount(worldContext, targetGroup + 1);
-			// Create it on the server too, like the Add Group button, so names and counts stay in sync.
-			this.sendCommand("guards groups add");
+			this.localRevision++;
+		} else if (targetGroup >= this.viewGroupCount) {
+			return;
 		}
 		this.setPendingAssignment(result.guard(), targetGroup);
 	}
@@ -1727,10 +1735,24 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			this.setStatus(tr("status.no_connection"), STATUS_ERROR);
 			return;
 		}
-		for (Map.Entry<UUID, Integer> entry : this.pendingAssignments.entrySet()) {
-			this.minecraft.getConnection().sendCommand("guards groups assign " + entry.getKey() + " " + (entry.getValue() + 1));
+		// One assignmany per target row instead of one command per guard: per-guard commands got
+		// non-operators kicked for chat spam. Rows that no longer exist are dropped, not sent.
+		Map<Integer, List<UUID>> byRow = new java.util.TreeMap<>();
+		Iterator<Map.Entry<UUID, Integer>> entries = this.pendingAssignments.entrySet().iterator();
+		while (entries.hasNext()) {
+			Map.Entry<UUID, Integer> entry = entries.next();
+			if (entry.getValue() >= this.viewGroupCount) {
+				entries.remove();
+				continue;
+			}
+			byRow.computeIfAbsent(entry.getValue(), ignored -> new ArrayList<>()).add(entry.getKey());
 		}
-		// Each accepted assign makes the server push a fresh roster; confirmation is checked against it.
+		for (Map.Entry<Integer, List<UUID>> row : byRow.entrySet()) {
+			for (String command : assignManyCommands(row.getKey(), row.getValue())) {
+				this.sendCommand(command);
+			}
+		}
+		// Each accepted batch makes the server push a fresh roster; confirmation is checked against it.
 		this.awaitingConfirmation.putAll(this.pendingAssignments);
 		this.awaitingSentCount = this.awaitingConfirmation.size();
 		this.awaitingSince = System.currentTimeMillis();
@@ -1740,9 +1762,44 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		this.setStatus(Component.translatable(KEY + "status.saving", this.awaitingSentCount), TEXT_SECONDARY);
 	}
 
+	/**
+	 * Builds {@code guards groups assignmany <row> <uuid> ...} commands for one target row, splitting the UUID
+	 * list so every command stays within the 256-character chat limit.
+	 *
+	 * @param row zero-based row, or -1 to unassign (sent as row 0)
+	 */
+	static List<String> assignManyCommands(int row, List<UUID> guardIds) {
+		String prefix = "guards groups assignmany " + (row + 1) + " ";
+		List<String> commands = new ArrayList<>();
+		StringBuilder builder = new StringBuilder(prefix);
+		int inCommand = 0;
+		for (UUID guardId : guardIds) {
+			String id = guardId.toString();
+			if (inCommand > 0 && (builder.length() + 1 + id.length() > MAX_COMMAND_LENGTH || inCommand >= MAX_UUIDS_PER_COMMAND)) {
+				commands.add(builder.toString());
+				builder.setLength(0);
+				builder.append(prefix);
+				inCommand = 0;
+			}
+			if (inCommand > 0) {
+				builder.append(' ');
+			}
+			builder.append(id);
+			inCommand++;
+		}
+		if (inCommand > 0) {
+			commands.add(builder.toString());
+		}
+		return commands;
+	}
+
 	private void checkAwaitingConfirmation() {
 		if (this.awaitingConfirmation.isEmpty()) {
 			return;
+		}
+		if (GuardCommandQueue.pending() > 0) {
+			// Commands still held back by the spam guard; the timeout starts once they are all sent.
+			this.awaitingSince = System.currentTimeMillis();
 		}
 		int revision = this.rosterStore.revision();
 		if (revision != this.awaitingCheckedRevision) {
@@ -1767,6 +1824,12 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			this.localRevision++;
 			this.setStatus(Component.translatable(KEY + "status.rejected", rejected, this.awaitingSentCount), STATUS_ERROR);
 		}
+	}
+
+	/** Effective group, or -1 when it points at a row the server does not have. */
+	private int displayGroup(ClientGuardRosterStore.GuardRosterEntry guard) {
+		int group = this.getEffectiveGroup(guard);
+		return group < this.viewGroupCount ? group : -1;
 	}
 
 	private int getEffectiveGroup(ClientGuardRosterStore.GuardRosterEntry guard) {
@@ -1803,7 +1866,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		String requested = this.groupRenameField.getValue() == null ? "" : this.groupRenameField.getValue().trim();
 		int row = this.editingRow;
 		// A blank name keeps the old one instead of inventing a placeholder.
-		if (worldContext == null || requested.isEmpty() || requested.equals(this.groupNames.size() > row ? this.groupNames.get(row) : null)) {
+		if (worldContext == null || row >= this.viewGroupCount || requested.isEmpty() || requested.equals(this.groupNames.size() > row ? this.groupNames.get(row) : null)) {
 			this.cancelGroupRename();
 			return;
 		}
@@ -2179,8 +2242,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	// ---------------------------------------------------------------- helpers
 
 	private boolean sendCommand(String command) {
-		if (this.minecraft != null && this.minecraft.getConnection() != null) {
-			this.minecraft.getConnection().sendCommand(command);
+		if (GuardCommandQueue.enqueue(command)) {
 			return true;
 		}
 		this.setStatus(tr("status.no_connection"), STATUS_ERROR);
