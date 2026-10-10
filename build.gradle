@@ -41,6 +41,29 @@ fabricApi {
 	}
 }
 
+// Opt-in server benchmark (src/gametest/.../perf). Off unless -Pperf is passed:
+//   ./gradlew runGameTest -Pperf                       all scenarios, results in build/perf/
+//   -PperfOnly=combat_128,follow_64                    run only scenarios with these name prefixes
+//   -PperfSizes=16,64,128 -PperfMeasure=600 -PperfWarmup=100 -PperfJitWarmup=200
+//   -PperfJfr                                          also record build/perf/guard-perf.jfr
+if (project.hasProperty('perf')) {
+	tasks.matching { it.name == 'runGameTest' }.configureEach {
+		def outDir = file('build/perf')
+		doFirst { outDir.mkdirs() }
+		systemProperty 'guardvillagers.perf', 'true'
+		systemProperty 'guardvillagers.perf.out', outDir.absolutePath
+		systemProperty 'fabric-api.gametest.filter', 'guardvillagers-gametest:guard_perf_benchmark*'
+		[perfOnly: 'only', perfSizes: 'sizes', perfMeasure: 'measure', perfWarmup: 'warmup', perfJitWarmup: 'jitwarmup'].each { prop, key ->
+			if (project.hasProperty(prop)) {
+				systemProperty "guardvillagers.perf.${key}", project.property(prop).toString()
+			}
+		}
+		if (project.hasProperty('perfJfr')) {
+			jvmArgs "-XX:StartFlightRecording=filename=${outDir.absolutePath}/guard-perf.jfr,settings=profile,dumponexit=true"
+		}
+	}
+}
+
 dependencies {
 	// To change the versions see the gradle.properties file
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
