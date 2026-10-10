@@ -758,6 +758,9 @@ public final class GuardAiController {
 
 
 	private boolean isSuppressed(UUID uuid, long now) {
+		if (this.suppressedTargets.isEmpty()) {
+			return false;
+		}
 		Long suppressedUntil = this.suppressedTargets.get(uuid);
 		return suppressedUntil != null && suppressedUntil > now;
 	}
