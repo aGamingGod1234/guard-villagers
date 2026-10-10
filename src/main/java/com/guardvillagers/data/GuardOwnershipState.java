@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import net.minecraft.core.UUIDUtil;
@@ -25,6 +26,7 @@ public final class GuardOwnershipState extends SavedData {
 	/** 100 in-game days (about 33 hours of server uptime). */
 	public static final long EXPIRY_TICKS = 24_000L * 100L;
 	public static final int MAX_ENTRIES = 65_536;
+	public static final int MAX_NAME_LENGTH = 64;
 
 	private static final Codec<Map<UUID, Entry>> ENTRY_MAP_CODEC = Codec.unboundedMap(UUIDUtil.STRING_CODEC, Entry.CODEC);
 	public static final Codec<GuardOwnershipState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
@@ -53,10 +55,23 @@ public final class GuardOwnershipState extends SavedData {
 		}
 	}
 
-	/** Records that {@code guardId} is owned by {@code ownerId} and was seen at {@code tick}. */
+	/** Records that {@code guardId} is owned by {@code ownerId} and was seen at {@code tick}, keeping its last label. */
 	public void record(UUID guardId, UUID ownerId, long tick) {
 		Entry existing = this.guards.get(guardId);
-		if (existing != null && existing.owner().equals(ownerId)) {
+		this.record(guardId, ownerId, tick,
+				existing == null ? "" : existing.name(),
+				existing == null ? -1 : existing.groupIndex());
+	}
+
+	/**
+	 * Records ownership plus the last known name and group, shown for the guard while it is unloaded. Only marks the
+	 * state dirty when something visible changed or the last-seen time is older than {@link #REFRESH_TICKS}.
+	 */
+	public void record(UUID guardId, UUID ownerId, long tick, String name, int groupIndex) {
+		String safeName = name == null ? "" : name.length() <= MAX_NAME_LENGTH ? name : name.substring(0, MAX_NAME_LENGTH);
+		Entry existing = this.guards.get(guardId);
+		if (existing != null && existing.owner().equals(ownerId)
+				&& existing.name().equals(safeName) && existing.groupIndex() == groupIndex) {
 			long sinceSeen = tick - existing.lastSeenTick();
 			if (sinceSeen >= 0 && sinceSeen < REFRESH_TICKS) {
 				return;
@@ -64,8 +79,12 @@ public final class GuardOwnershipState extends SavedData {
 		} else if (existing == null && this.guards.size() >= MAX_ENTRIES) {
 			this.evictLeastRecentlySeen();
 		}
-		this.put(guardId, new Entry(ownerId, tick));
+		this.put(guardId, new Entry(ownerId, tick, safeName, groupIndex));
 		this.setDirty();
+	}
+
+	public Optional<Entry> get(UUID guardId) {
+		return Optional.ofNullable(this.guards.get(guardId));
 	}
 
 	public void remove(UUID guardId) {
@@ -147,10 +166,16 @@ public final class GuardOwnershipState extends SavedData {
 		return Collections.unmodifiableMap(this.guards);
 	}
 
-	public record Entry(UUID owner, long lastSeenTick) {
+	public record Entry(UUID owner, long lastSeenTick, String name, int groupIndex) {
 		public static final Codec<Entry> CODEC = RecordCodecBuilder.create(instance -> instance.group(
 			UUIDUtil.STRING_CODEC.fieldOf("owner").forGetter(Entry::owner),
-			Codec.LONG.optionalFieldOf("last_seen", 0L).forGetter(Entry::lastSeenTick)
+			Codec.LONG.optionalFieldOf("last_seen", 0L).forGetter(Entry::lastSeenTick),
+			Codec.string(0, MAX_NAME_LENGTH).optionalFieldOf("name", "").forGetter(Entry::name),
+			Codec.intRange(-1, 63).optionalFieldOf("group", -1).forGetter(Entry::groupIndex)
 		).apply(instance, Entry::new));
+
+		public Entry {
+			name = name == null ? "" : name;
+		}
 	}
 }

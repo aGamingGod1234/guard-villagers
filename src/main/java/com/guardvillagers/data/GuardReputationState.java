@@ -81,15 +81,23 @@ public final class GuardReputationState extends SavedData {
 		return this.reputation.size();
 	}
 
+	/**
+	 * Moves every tracked value {@code amount} toward neutral ({@link #DEFAULT_REPUTATION}) from either side, so
+	 * good and bad standing both fade. Rows that reach neutral are dropped: they read the same as an untracked player.
+	 */
 	public void decayAll(double amount) {
-		if (amount <= 0.0D || this.reputation.isEmpty()) {
+		if (!(amount > 0.0D) || this.reputation.isEmpty()) {
 			return;
 		}
 		boolean changed = false;
-		for (Map.Entry<UUID, Double> entry : this.reputation.entrySet()) {
+		for (Iterator<Map.Entry<UUID, Double>> iterator = this.reputation.entrySet().iterator(); iterator.hasNext(); ) {
+			Map.Entry<UUID, Double> entry = iterator.next();
 			double current = entry.getValue();
-			double decayed = clamp(current - amount);
-			if (Double.compare(current, decayed) != 0) {
+			double decayed = decayTowardNeutral(current, amount);
+			if (Double.compare(decayed, DEFAULT_REPUTATION) == 0) {
+				iterator.remove();
+				changed = true;
+			} else if (Double.compare(current, decayed) != 0) {
 				entry.setValue(decayed);
 				changed = true;
 			}
@@ -97,6 +105,13 @@ public final class GuardReputationState extends SavedData {
 		if (changed) {
 			this.setDirty();
 		}
+	}
+
+	static double decayTowardNeutral(double value, double amount) {
+		if (value > DEFAULT_REPUTATION) {
+			return Math.max(DEFAULT_REPUTATION, value - amount);
+		}
+		return Math.min(DEFAULT_REPUTATION, value + amount);
 	}
 
 	private Map<UUID, Double> reputationForCodec() {
