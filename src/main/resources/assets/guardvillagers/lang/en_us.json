@@ -7,9 +7,10 @@
   "screen.guardvillagers.groups": "Guard Groups",
   "item.guardvillagers.guard_whistle": "Guard Whistle",
   "itemGroup.guardvillagers.guards": "Guards",
-
   "commands.guardvillagers.no_loaded_guards": "You have no loaded guards to command.",
   "commands.guardvillagers.stay": "Ordered %s guards to stay.",
+  "commands.guardvillagers.hold": "Ordered %s guards to hold their position.",
+  "commands.guardvillagers.cleartargets": "Cleared the targets of %s guards.",
   "commands.guardvillagers.follow.all": "Ordered %s guards to follow.",
   "commands.guardvillagers.follow.group": "Ordered %s guards from group \"%s\" to follow.",
   "commands.guardvillagers.follow.no_group": "None of your loaded guards are in a group named \"%s\".",
@@ -34,7 +35,6 @@
   "commands.guardvillagers.reputation.notify": "Your guard reputation was set to %s by an operator.",
   "commands.guardvillagers.debug.enabled": "Guard debug enabled. Range: %s blocks.",
   "commands.guardvillagers.debug.disabled": "Guard debug disabled.",
-
   "message.guardvillagers.screen_failed": "Could not open that screen. Check the server log.",
   "message.guardvillagers.shop.hired_one": "%s hired.",
   "message.guardvillagers.shop.hired_many": "Guards hired: %s.",

@@ -2,6 +2,7 @@ package com.guardvillagers;
 
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.tactics.GuardTacticsMenus;
+import com.guardvillagers.village.GuardBellRally;
 import com.guardvillagers.village.VillageManagerHandler;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
@@ -66,6 +67,7 @@ final class GuardEvents {
 			GuardReputationManager.clearSessionState();
 			GuardOwnershipIndex.clearSessionState();
 			VillageManagerHandler.clearSessionState();
+			GuardBellRally.clearSessionState();
 		});
 	}
 

@@ -55,6 +55,8 @@ public final class GuardCommands {
 					return Command.SINGLE_SUCCESS;
 				}))
 				.then(Commands.literal("stay").executes(context -> stay(context.getSource())))
+				.then(Commands.literal("hold").executes(context -> hold(context.getSource())))
+				.then(Commands.literal("cleartargets").executes(context -> clearTargets(context.getSource())))
 				.then(Commands.literal("follow")
 						.executes(context -> follow(context.getSource(), null))
 						.then(Commands.argument("group", StringArgumentType.greedyString())
@@ -131,6 +133,28 @@ public final class GuardCommands {
 			guard.setStaying(true);
 		}
 		return reportOrders(source, guards.size(), Component.translatable("commands.guardvillagers.stay", guards.size()));
+	}
+
+	/**
+	 * Stand ground where they are. GuardEntity has no "fight in place without chasing" mode yet, so this uses
+	 * stay (pinned to the current block, owner alerts ignored); see the hand-off notes for the entity API it needs.
+	 */
+	private static int hold(CommandSourceStack source) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		List<GuardEntity> guards = ownedGuards(player);
+		for (GuardEntity guard : guards) {
+			guard.setStaying(true);
+		}
+		return reportOrders(source, guards.size(), Component.translatable("commands.guardvillagers.hold", guards.size()));
+	}
+
+	private static int clearTargets(CommandSourceStack source) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		List<GuardEntity> guards = ownedGuards(player);
+		for (GuardEntity guard : guards) {
+			guard.clearCombatTarget();
+		}
+		return reportOrders(source, guards.size(), Component.translatable("commands.guardvillagers.cleartargets", guards.size()));
 	}
 
 	private static int follow(CommandSourceStack source, String groupName) throws CommandSyntaxException {
