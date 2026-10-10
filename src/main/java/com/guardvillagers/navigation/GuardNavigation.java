@@ -137,13 +137,29 @@ public class GuardNavigation extends GroundPathNavigation {
 	}
 
 	public boolean startMovingToStatic(double x, double y, double z, double speed) {
+		return this.startMovingToStatic(x, y, z, speed, 1);
+	}
+
+	/**
+	 * @param reachRange how close (in blocks) the path may end to the target; vanilla's default of
+	 *                   1 accepts any neighbouring block, so callers that must stand on the block
+	 *                   itself (formation slots) pass 0
+	 */
+	public boolean startMovingToStatic(BlockPos target, double speed, int reachRange) {
+		if (target == null) {
+			return false;
+		}
+		return this.startMovingToStatic(target.getX() + 0.5D, target.getY(), target.getZ() + 0.5D, speed, reachRange);
+	}
+
+	private boolean startMovingToStatic(double x, double y, double z, double speed, int reachRange) {
 		Vec3 targetPos = new Vec3(x, y, z);
 		if (!this.shouldIssueMove(targetPos, speed, RouteMode.STATIC)) {
 			return !this.isDone();
 		}
 		this.routeMode = RouteMode.STATIC;
 		this.lastTargetPos = BlockPos.containing(x, y, z);
-		return this.afterMove(targetPos, super.moveTo(x, y, z, speed));
+		return this.afterMove(targetPos, super.moveTo(x, y, z, reachRange, speed));
 	}
 
 	public boolean startMovingToDynamic(Vec3 targetPos, double speed) {

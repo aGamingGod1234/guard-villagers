@@ -1,6 +1,7 @@
 package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
+import com.guardvillagers.entity.ai.GuardMovementSlotResolver;
 import java.util.EnumSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -28,7 +29,10 @@ public final class FormationFollowOwnerGoal extends Goal {
 	private static final double CATCH_UP_VERTICAL_ENTER = 3.0D;
 	private static final double CATCH_UP_VERTICAL_EXIT = 2.0D;
 	private static final double SPEED_BOOST_DISTANCE = 16.0D;
-	private static final double SLOT_DEPART_DISTANCE_SQUARED = 2.5D * 2.5D;
+	// Departing only past 2.5 blocks (wider than the 1.5-block slot spacing) let a guard that was
+	// shoved into a neighbour's block stay there, and three guards could settle in one block.
+	private static final double SLOT_DEPART_DISTANCE_SQUARED = GuardMovementSlotResolver.DEFAULT_ARC_SPACING
+			* GuardMovementSlotResolver.DEFAULT_ARC_SPACING;
 	private static final double SLOT_ARRIVE_DISTANCE_SQUARED = 1.0D;
 	private static final double OWNER_APPROACH_STOP_DISTANCE_SQUARED = 3.0D * 3.0D;
 	private static final int REPATH_INTERVAL_TICKS = 5;
@@ -126,6 +130,11 @@ public final class FormationFollowOwnerGoal extends Goal {
 		double verticalDelta = Math.abs(currentOwner.getY() - this.guard.getY());
 		if (this.catchingUp) {
 			this.catchingUp = ownerDistance > CATCH_UP_EXIT_DISTANCE || verticalDelta > CATCH_UP_VERTICAL_EXIT;
+			if (!this.catchingUp) {
+				// The catch-up path to the owner's feet is still running; head for the slot instead
+				// of only reacting once that path has carried the guard past the depart distance.
+				this.movingToSlot = true;
+			}
 		} else {
 			this.catchingUp = ownerDistance > CATCH_UP_ENTER_DISTANCE
 					|| (verticalDelta > CATCH_UP_VERTICAL_ENTER && ownerDistance > 3.0D);
@@ -160,7 +169,9 @@ public final class FormationFollowOwnerGoal extends Goal {
 		}
 
 		this.movingToSlot = true;
-		this.guard.getGuardNavigation().startMovingToStatic(slot, this.speed);
+		// Reach 0: with vanilla's reach of 1 the path "arrives" in any neighbouring block, which is
+		// often another guard's slot, and re-issuing the move then yields an empty path.
+		this.guard.getGuardNavigation().startMovingToStatic(slot, this.speed, 0);
 		if (this.guard.getGuardNavigation().isLastTargetUnreachable()) {
 			this.slotUnreachableUntil = now + UNREACHABLE_SLOT_TICKS;
 		}
