@@ -1,6 +1,7 @@
 package com.guardvillagers.navigation;
 
 import com.guardvillagers.entity.GuardEntity;
+import java.util.function.Supplier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.tags.FluidTags;
@@ -22,6 +23,9 @@ import net.minecraft.world.phys.Vec3;
  * <li>Stall recovery sidesteps out of guard crowds onto a path-validated spot, or leaves flowing
  * water toward the nearest dry standing spot, and holds that recovery move for a short time so the
  * calling goal does not immediately cancel it.</li>
+ * <li>Block-update re-paths ({@link #recomputePath()}) go to the destination the guard is actually
+ * following. Vanilla re-paths to its private {@code targetPos}, which only a fresh A* search sets,
+ * so after a squad-cache hit or a probe search it pointed at an old or probe block.</li>
  * </ul>
  */
 public class GuardNavigation extends GroundPathNavigation {
@@ -60,6 +64,12 @@ public class GuardNavigation extends GroundPathNavigation {
 	private boolean lastCrowdCheckResult;
 	private Vec3 unreachableTargetPos;
 	private long unreachableUntilTick = Long.MIN_VALUE;
+	/** Destination and reach range of the path being followed; what recomputePath re-paths to. */
+	private BlockPos followTarget;
+	private int followReach;
+	/** Destination and reach range of the last createPath request, matched up in moveTo(Path). */
+	private BlockPos requestedTarget;
+	private int requestedReach;
 
 	public GuardNavigation(GuardEntity guard, Level world) {
 		super(guard, world);
@@ -72,13 +82,15 @@ public class GuardNavigation extends GroundPathNavigation {
 			return null;
 		}
 		this.lastTargetPos = target.immutable();
+		this.requestedTarget = this.lastTargetPos;
+		this.requestedReach = distance;
 		// Same as vanilla's early-out: keep following the current path to this block.
 		if (this.path != null && !this.path.isDone() && target.equals(this.path.getTarget())) {
 			return this.path;
 		}
 
 		if (this.routeMode != RouteMode.STATIC || this.guard.getAirSupply() < 80 || this.guard.getSquadId() == null) {
-			return super.createPath(target, distance);
+			return this.search(() -> super.createPath(target, distance));
 		}
 
 		long currentTick = this.level.getGameTime();
@@ -92,7 +104,7 @@ public class GuardNavigation extends GroundPathNavigation {
 			return cached;
 		}
 
-		Path newPath = super.createPath(target, distance);
+		Path newPath = this.search(() -> super.createPath(target, distance));
 		if (newPath != null) {
 			SquadRouteCache.cacheSquadRoute(this.level.dimension(), this.guard.getSquadId(), target, newPath, currentTick);
 		}
@@ -107,7 +119,67 @@ public class GuardNavigation extends GroundPathNavigation {
 		this.lastTargetPos = entity.blockPosition().immutable();
 		this.lastRequestedTargetPos = entity.position();
 		this.routeMode = RouteMode.DYNAMIC;
-		return super.createPath(entity, distance);
+		this.requestedTarget = this.lastTargetPos;
+		this.requestedReach = distance;
+		if (this.path != null && !this.path.isDone() && this.lastTargetPos.equals(this.path.getTarget())) {
+			return this.path;
+		}
+		return this.search(() -> super.createPath(entity, distance));
+	}
+
+	@Override
+	public boolean moveTo(Path newPath, double speed) {
+		boolean started = super.moveTo(newPath, speed);
+		if (this.path == null) {
+			this.followTarget = null;
+		} else {
+			this.followTarget = this.path.getTarget();
+			this.followReach = this.followTarget.equals(this.requestedTarget) ? this.requestedReach : 0;
+		}
+		return started;
+	}
+
+	/**
+	 * Vanilla's version re-paths to its private targetPos, which cache hits and probe searches
+	 * leave stale. Same 20-tick throttle; the shared squad route to that block is dropped as well,
+	 * since the block change that triggered this may have cut it.
+	 */
+	@Override
+	public void recomputePath() {
+		long now = this.level.getGameTime();
+		if (now - this.timeLastRecompute <= 20L || !this.canUpdatePath()) {
+			this.hasDelayedRecomputation = true;
+			return;
+		}
+		this.hasDelayedRecomputation = false;
+		BlockPos target = this.followTarget;
+		if (target == null) {
+			return;
+		}
+		this.timeLastRecompute = now;
+		SquadRouteCache.invalidateSquadRoute(this.level.dimension(), this.guard.getSquadId(), target);
+		int reach = this.followReach;
+		this.path = null;
+		this.path = this.search(() -> super.createPath(target, reach));
+		if (this.path == null) {
+			this.followTarget = null;
+		}
+	}
+
+	/**
+	 * Runs an A* search with no current path. Vanilla createPath returns the current path when the
+	 * requested block equals its private targetPos, and that field can belong to a different route
+	 * here (cache hit, probe search), so the early-out could hand back a path to the wrong place.
+	 * Our own createPath overrides do the early-out against the current path's real target.
+	 */
+	private Path search(Supplier<Path> search) {
+		Path current = this.path;
+		this.path = null;
+		try {
+			return search.get();
+		} finally {
+			this.path = current;
+		}
 	}
 
 	@Override
@@ -219,6 +291,7 @@ public class GuardNavigation extends GroundPathNavigation {
 	@Override
 	public void stop() {
 		super.stop();
+		this.followTarget = null;
 		// A goal handing over movement cancels any recovery in progress.
 		this.recoveryHoldTicks = 0;
 		this.crowdRecoveryActive = false;
@@ -257,7 +330,7 @@ public class GuardNavigation extends GroundPathNavigation {
 		if (this.hasNearbyGuardCrowding()) {
 			Path sidestep = this.findCrowdSidestep();
 			if (sidestep != null) {
-				super.moveTo(sidestep, this.speedModifier);
+				this.moveTo(sidestep, this.speedModifier);
 				this.crowdRecoveryActive = true;
 				this.recoveryHoldTicks = RECOVERY_HOLD_TICKS;
 				return;
@@ -273,8 +346,9 @@ public class GuardNavigation extends GroundPathNavigation {
 				}
 			}
 			if (dryExit != null) {
-				Path exitPath = super.createPath(dryExit, 0);
-				if (exitPath != null && super.moveTo(exitPath, this.speedModifier)) {
+				BlockPos exit = dryExit;
+				Path exitPath = this.search(() -> super.createPath(exit, 0));
+				if (exitPath != null && this.moveTo(exitPath, this.speedModifier)) {
 					this.recoveryHoldTicks = RECOVERY_HOLD_TICKS;
 					return;
 				}
@@ -349,7 +423,7 @@ public class GuardNavigation extends GroundPathNavigation {
 				continue;
 			}
 			pathChecks++;
-			Path path = super.createPath(candidate, 0, CROWD_SIDESTEP_MAX_PATH);
+			Path path = this.search(() -> super.createPath(candidate, 0, CROWD_SIDESTEP_MAX_PATH));
 			if (path != null && path.canReach() && path.getNodeCount() <= CROWD_SIDESTEP_MAX_PATH + 2) {
 				return path;
 			}
@@ -436,7 +510,7 @@ public class GuardNavigation extends GroundPathNavigation {
 					if (++pathChecks > 4) {
 						return null;
 					}
-					Path path = super.createPath(candidate, 0, 16);
+					Path path = this.search(() -> super.createPath(candidate, 0, 16));
 					if (path != null && path.canReach()) {
 						return candidate;
 					}
@@ -448,8 +522,8 @@ public class GuardNavigation extends GroundPathNavigation {
 
 	/** Moves to {@code target} and keeps goals from overriding the move for a short while. */
 	public void beginRecoveryMove(BlockPos target, double speed) {
-		Path path = super.createPath(target, 0);
-		if (path != null && super.moveTo(path, speed)) {
+		Path path = this.search(() -> super.createPath(target, 0));
+		if (path != null && this.moveTo(path, speed)) {
 			this.recoveryHoldTicks = RECOVERY_HOLD_TICKS * 2;
 		}
 	}
