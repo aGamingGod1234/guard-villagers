@@ -16,6 +16,7 @@ public final class GuardEngagementTracker {
 	private final int maxTargets;
 	private final Map<UUID, Map<UUID, Engagement>> byTarget = new HashMap<>();
 	private long lastSweepTick = Long.MIN_VALUE;
+	private long latestTick = Long.MIN_VALUE;
 
 	public GuardEngagementTracker(int entryTtlTicks, int maxTargets) {
 		this.entryTtlTicks = Math.max(1, entryTtlTicks);
@@ -27,6 +28,7 @@ public final class GuardEngagementTracker {
 	 * guard's rank: how many other live engagers are closer to the target.
 	 */
 	public synchronized int report(UUID target, UUID guard, double distanceSq, long tick) {
+		this.observe(tick);
 		this.maybeSweep(tick);
 		Map<UUID, Engagement> engagers = this.byTarget.get(target);
 		if (engagers == null) {
@@ -60,6 +62,7 @@ public final class GuardEngagementTracker {
 
 	/** Number of live engagers of {@code target}, not counting {@code exclude}. */
 	public synchronized int count(UUID target, UUID exclude, long tick) {
+		this.observe(tick);
 		Map<UUID, Engagement> engagers = this.byTarget.get(target);
 		if (engagers == null) {
 			return 0;
@@ -88,6 +91,20 @@ public final class GuardEngagementTracker {
 
 	public synchronized int targetCount() {
 		return this.byTarget.size();
+	}
+
+	public synchronized void clear() {
+		this.byTarget.clear();
+		this.lastSweepTick = Long.MIN_VALUE;
+		this.latestTick = Long.MIN_VALUE;
+	}
+
+	/** A different world loaded into the same JVM can start at a lower game time; drop everything then. */
+	private void observe(long tick) {
+		if (this.latestTick != Long.MIN_VALUE && tick < this.latestTick) {
+			this.clear();
+		}
+		this.latestTick = tick;
 	}
 
 	private void maybeSweep(long tick) {

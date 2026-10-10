@@ -109,6 +109,11 @@ public final class GuardAiController {
 	private UUID lastBroadcastTargetUuid;
 	private long lastBroadcastTick = Long.MIN_VALUE;
 
+	/** Drops shared state on server stop so the next world starts clean. */
+	public static void clearSessionState() {
+		ENGAGEMENTS.clear();
+	}
+
 	public GuardAiController(GuardEntity guard) {
 		this.guard = guard;
 	}

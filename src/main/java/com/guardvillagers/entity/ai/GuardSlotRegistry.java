@@ -25,6 +25,7 @@ public final class GuardSlotRegistry<K> {
 	private final int maxRosters;
 	private final Map<K, Roster> rosters = new HashMap<>();
 	private long lastSweepTick = Long.MIN_VALUE;
+	private long latestTick = Long.MIN_VALUE;
 
 	public GuardSlotRegistry(int memberTtlTicks, int maxRosters) {
 		this.memberTtlTicks = Math.max(1, memberTtlTicks);
@@ -33,6 +34,7 @@ public final class GuardSlotRegistry<K> {
 
 	/** Registers (or refreshes) {@code member} under {@code key} and returns its slot index. */
 	public synchronized int indexOf(K key, UUID member, long sortKey, long tick) {
+		this.observe(tick);
 		this.maybeSweep(tick);
 		Roster roster = this.rosters.get(key);
 		if (roster == null) {
@@ -48,6 +50,7 @@ public final class GuardSlotRegistry<K> {
 
 	/** Number of live members under {@code key}. */
 	public synchronized int size(K key, long tick) {
+		this.observe(tick);
 		Roster roster = this.rosters.get(key);
 		if (roster == null) {
 			return 0;
@@ -68,6 +71,23 @@ public final class GuardSlotRegistry<K> {
 
 	public synchronized int rosterCount() {
 		return this.rosters.size();
+	}
+
+	public synchronized void clear() {
+		this.rosters.clear();
+		this.lastSweepTick = Long.MIN_VALUE;
+		this.latestTick = Long.MIN_VALUE;
+	}
+
+	/**
+	 * Game time only moves backwards when a different world is loaded into the same JVM. Every
+	 * stored tick then lies in the future, so nothing would ever expire; start over instead.
+	 */
+	private void observe(long tick) {
+		if (this.latestTick != Long.MIN_VALUE && tick < this.latestTick) {
+			this.clear();
+		}
+		this.latestTick = tick;
 	}
 
 	private void maybeSweep(long tick) {
