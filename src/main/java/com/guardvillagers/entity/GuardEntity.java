@@ -5,6 +5,8 @@ import com.guardvillagers.GuardOwnershipIndex;
 import com.guardvillagers.GuardPlayerUpgrades;
 import com.guardvillagers.GuardReputationManager;
 import com.guardvillagers.GuardVillagersMod;
+import com.guardvillagers.command.hierarchy.GuardHierarchy;
+import com.guardvillagers.command.hierarchy.GuardRank;
 import com.guardvillagers.entity.ai.GuardAiController;
 import com.guardvillagers.entity.ai.GuardAiIntent;
 import com.guardvillagers.entity.ai.GuardBehaviorExecutor;
@@ -127,6 +129,9 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 			.defineId(GuardEntity.class, EntityDataSerializers.OPTIONAL_LIVING_ENTITY_REFERENCE);
 	private static final EntityDataAccessor<Integer> SYNCED_GROUP_INDEX = SynchedEntityData.defineId(GuardEntity.class,
 			EntityDataSerializers.INT);
+	/** {@link GuardRank} id of owned guards, synced for a nameplate badge. */
+	private static final EntityDataAccessor<Byte> RANK = SynchedEntityData.defineId(GuardEntity.class,
+			EntityDataSerializers.BYTE);
 	/** Only the type (biome robe) is used; profession and level stay at their defaults. */
 	private static final EntityDataAccessor<VillagerData> SYNCED_VILLAGER_DATA = SynchedEntityData.defineId(
 			GuardEntity.class, EntityDataSerializers.VILLAGER_DATA);
@@ -192,6 +197,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	private static final String HOLD_Y_KEY = "HoldY";
 	private static final String HOLD_Z_KEY = "HoldZ";
 	private static final String VILLAGER_DATA_KEY = "GuardVillagerData";
+	private static final String RANK_KEY = "GuardRank";
+	private static final String HIRED_AT_KEY = "GuardHiredAt";
 	private static final int MIN_GROUP_INDEX = -1;
 	private static final int MAX_GROUP_INDEX = Integer.MAX_VALUE / 2;
 	private static final int MISSING_LOADOUT_LEVEL = -1;
@@ -333,6 +340,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	private int unstickSamples;
 	private UUID lastRallyAttackerUuid;
 	private long lastRallyTick = Long.MIN_VALUE;
+	/** Game time this guard was hired; 0 for village guards. Seniority tie-breaker (longer service ranks higher). */
+	private long hiredAtTick;
 
 	public GuardEntity(EntityType<? extends PathfinderMob> entityType, net.minecraft.world.level.Level world) {
 		super(entityType, world);
@@ -417,6 +426,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		builder.define(SYNCED_PATROL_RADIUS, 0);
 		builder.define(SYNCED_OWNER, Optional.empty());
 		builder.define(SYNCED_GROUP_INDEX, MIN_GROUP_INDEX);
+		builder.define(RANK, (byte) GuardRank.SOLDIER.id());
 		builder.define(SYNCED_VILLAGER_DATA, Villager.createDefaultVillagerData());
 	}
 
@@ -495,6 +505,16 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		this.syncOwnerData();
 		if (ownerUuid != null && !ownerUuid.equals(previousOwner)) {
 			this.squadId = ownerUuid;
+			if (this.level() instanceof ServerLevel serverLevel) {
+				this.hiredAtTick = serverLevel.getGameTime();
+			}
+		}
+		if (!java.util.Objects.equals(previousOwner, ownerUuid)) {
+			this.setRank(GuardRank.SOLDIER);
+			if (this.level() instanceof ServerLevel) {
+				GuardHierarchy.requestElection(previousOwner);
+				GuardHierarchy.requestElection(ownerUuid);
+			}
 		}
 		if (previousOwner != null && !previousOwner.equals(ownerUuid) && !this.lastRegisteredOwnerName.isBlank()) {
 			unregisterOwnerName(this.lastRegisteredOwner != null ? this.lastRegisteredOwner : previousOwner,
@@ -574,6 +594,24 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 
 	public void setSquadLeader(boolean squadLeader) {
 		this.entityData.set(SQUAD_LEADER, squadLeader);
+	}
+
+	public GuardRank getRank() {
+		return GuardRank.fromId(this.entityData.get(RANK));
+	}
+
+	/**
+	 * Set by {@link GuardHierarchy} only. Captains and commanders also carry the squad-leader flag, so the whistle's
+	 * leader rally reaches them without knowing about ranks.
+	 */
+	public void setRank(GuardRank rank) {
+		GuardRank resolved = rank == null ? GuardRank.SOLDIER : rank;
+		this.entityData.set(RANK, (byte) resolved.id());
+		this.setSquadLeader(resolved.atLeast(GuardRank.CAPTAIN));
+	}
+
+	public long getHiredAtTick() {
+		return this.hiredAtTick;
 	}
 
 	public boolean isSameSquad(GuardEntity other) {
@@ -751,8 +789,12 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	public void setGroupIndex(int groupIndex) {
+		int previous = this.groupIndex;
 		this.groupIndex = Mth.clamp(groupIndex, MIN_GROUP_INDEX, MAX_GROUP_INDEX);
 		this.entityData.set(SYNCED_GROUP_INDEX, this.groupIndex);
+		if (previous != this.groupIndex && this.ownerUuid != null && this.level() instanceof ServerLevel) {
+			GuardHierarchy.requestElection(this.ownerUuid);
+		}
 	}
 
 	public int getGroupColumn() {
@@ -809,7 +851,20 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 
 	public void rallyTo(BlockPos rallyPoint, int ticks) {
 		// Temporary: stay/follow/home state is untouched, so the guard resumes it once the rally ends.
-		this.aiController.rallyTo(rallyPoint, ticks);
+		this.aiController.rallyTo(rallyPoint, ticks, false);
+	}
+
+	/**
+	 * Like {@link #rallyTo(BlockPos, int)}, but with {@code exact} the guard stands on the rally block itself instead of
+	 * a ring slot around it (formation posts, the commander reporting to its owner). Guards sharing one exact point
+	 * still spread into slots.
+	 */
+	public void rallyTo(BlockPos rallyPoint, int ticks, boolean exact) {
+		this.aiController.rallyTo(rallyPoint, ticks, exact);
+	}
+
+	public boolean isRallyExact() {
+		return this.aiController.isRallyExact();
 	}
 
 	public boolean canExecuteBehaviorGoals() {
@@ -1901,6 +1956,9 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	@Override
 	public void die(DamageSource damageSource) {
 		super.die(damageSource);
+		if (this.ownerUuid != null && this.level() instanceof ServerLevel) {
+			GuardHierarchy.onGuardLost(this, true);
+		}
 		if (this.ownerUuid != null && this.level() instanceof ServerLevel world) {
 			ServerPlayer owner = this.resolveOwner(world);
 			boolean showDeathMessages = Boolean.TRUE.equals(world.getGameRules().get(GameRules.SHOW_DEATH_MESSAGES));
@@ -2114,6 +2172,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		view.putString(OWNER_KEY, this.ownerUuid == null ? "" : this.ownerUuid.toString());
 		view.putString(SQUAD_ID_KEY, this.squadId == null ? "" : this.squadId.toString());
 		view.putBoolean(SQUAD_LEADER_KEY, this.isSquadLeader());
+		view.putByte(RANK_KEY, this.entityData.get(RANK));
+		view.putLong(HIRED_AT_KEY, this.hiredAtTick);
 		view.putInt(EXPERIENCE_KEY, this.getExperience());
 		view.putBoolean(PLAYER_MAINHAND_KEY, this.playerMainHand);
 		view.putBoolean(PLAYER_HELMET_KEY, this.playerArmor.getOrDefault(EquipmentSlot.HEAD, false));
@@ -2180,6 +2240,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		this.ownerUuid = parseUuid(view.getStringOr(OWNER_KEY, ""));
 		this.squadId = parseUuid(view.getStringOr(SQUAD_ID_KEY, ""));
 		this.entityData.set(SQUAD_LEADER, view.getBooleanOr(SQUAD_LEADER_KEY, false));
+		this.entityData.set(RANK, (byte) GuardRank.fromId(view.getByteOr(RANK_KEY, (byte) 0)).id());
+		this.hiredAtTick = Math.max(0L, view.getLongOr(HIRED_AT_KEY, 0L));
 		this.entityData.set(EXPERIENCE, Math.max(0, view.getIntOr(EXPERIENCE_KEY, 0)));
 		this.playerMainHand = view.getBooleanOr(PLAYER_MAINHAND_KEY, false);
 		this.playerArmor.put(EquipmentSlot.HEAD, view.getBooleanOr(PLAYER_HELMET_KEY, false));
@@ -2270,6 +2332,10 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		}
 		if (reason == null || reason.shouldDestroy()) {
 			GuardOwnershipIndex.untrack(this);
+		}
+		// Deaths are handled in die(); this covers chunk unloads, dimension changes and discards.
+		if (this.ownerUuid != null && this.isAlive() && this.level() instanceof ServerLevel) {
+			GuardHierarchy.onGuardLost(this, false);
 		}
 		super.remove(reason);
 	}

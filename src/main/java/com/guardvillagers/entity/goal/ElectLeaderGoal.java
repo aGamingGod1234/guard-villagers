@@ -1,12 +1,16 @@
 package com.guardvillagers.entity.goal;
 
+import com.guardvillagers.command.hierarchy.GuardSeniority;
 import com.guardvillagers.entity.GuardEntity;
-import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.List;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.ai.goal.Goal;
 
+/**
+ * Squad leader election for unowned village guards. Owned guards get their ranks from
+ * {@link com.guardvillagers.command.hierarchy.GuardHierarchy} instead, so this goal skips them.
+ */
 public final class ElectLeaderGoal extends Goal {
 	private final GuardEntity guard;
 	private final double searchRadius;
@@ -20,6 +24,7 @@ public final class ElectLeaderGoal extends Goal {
 	@Override
 	public boolean canUse() {
 		return this.guard.hasSquad()
+			&& !this.guard.hasOwner()
 			&& this.guard.tickCount % 80 == 0
 			&& this.guard.level() instanceof ServerLevel;
 	}
@@ -29,21 +34,16 @@ public final class ElectLeaderGoal extends Goal {
 		return false;
 	}
 
-	private static final Comparator<GuardEntity> LEADER_COMPARATOR = Comparator
-			.comparingInt(GuardEntity::getLevel)
-			.thenComparingInt(GuardEntity::getExperience)
-			.thenComparing(entity -> entity.getUUID());
-
 	@Override
 	public void start() {
-		if (!(this.guard.level() instanceof ServerLevel world) || !this.guard.hasSquad()) {
+		if (!(this.guard.level() instanceof ServerLevel world) || !this.guard.hasSquad() || this.guard.hasOwner()) {
 			return;
 		}
 
 		List<GuardEntity> squad = world.getEntitiesOfClass(
 			GuardEntity.class,
 			this.guard.getBoundingBox().inflate(this.searchRadius),
-			other -> other.isAlive() && this.guard.isSameSquad(other)
+			other -> other.isAlive() && !other.hasOwner() && this.guard.isSameSquad(other)
 		);
 		if (squad.isEmpty()) {
 			return;
@@ -54,7 +54,7 @@ public final class ElectLeaderGoal extends Goal {
 			if (member.isSquadLeader()) {
 				return;
 			}
-			if (leader == null || LEADER_COMPARATOR.compare(member, leader) > 0) {
+			if (leader == null || GuardSeniority.ORDER.compare(member, leader) > 0) {
 				leader = member;
 			}
 		}

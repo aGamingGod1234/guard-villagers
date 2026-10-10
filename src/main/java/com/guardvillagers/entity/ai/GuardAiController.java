@@ -93,6 +93,7 @@ public final class GuardAiController {
 	private boolean homeAnchorActive;
 	private BlockPos rallyPoint;
 	private int rallyTicks;
+	private boolean rallyExact;
 	private int corneredTicks;
 	private long retreatSuppressedUntil = Long.MIN_VALUE;
 
@@ -218,15 +219,25 @@ public final class GuardAiController {
 	}
 
 	public void rallyTo(BlockPos rallyPoint, int ticks) {
+		this.rallyTo(rallyPoint, ticks, false);
+	}
+
+	/** @param exact stand on the rally block itself (index 0 of its own anchor) rather than a ring slot around it */
+	public void rallyTo(BlockPos rallyPoint, int ticks, boolean exact) {
 		if (rallyPoint == null) {
 			return;
 		}
 		this.rallyPoint = rallyPoint.immutable();
 		this.rallyTicks = Math.max(0, ticks);
+		this.rallyExact = exact;
 	}
 
 	public Optional<BlockPos> getRallyPoint() {
 		return Optional.ofNullable(this.rallyPoint);
+	}
+
+	public boolean isRallyExact() {
+		return this.rallyExact;
 	}
 
 	public boolean canExecuteBehaviorGoals() {

@@ -45,7 +45,8 @@ public final class GuardRallyGoal extends Goal {
 		if (rallyPoint == null) {
 			return;
 		}
-		BlockPos slot = this.guard.resolveAnchorSlot(GuardMovementSlotResolver.AnchorKind.RALLY, rallyPoint, false);
+		BlockPos slot = this.guard.resolveAnchorSlot(GuardMovementSlotResolver.AnchorKind.RALLY, rallyPoint,
+				this.guard.isRallyExact());
 		this.hold.tick(this.guard, slot, this.guard.getResolvedSlotPosition(), this.speed);
 	}
 }
