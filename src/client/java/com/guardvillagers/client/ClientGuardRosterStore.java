@@ -11,6 +11,7 @@ public final class ClientGuardRosterStore {
 	private static final ClientGuardRosterStore INSTANCE = new ClientGuardRosterStore();
 
 	private final Map<String, List<GuardRosterEntry>> rostersByWorld = new HashMap<>();
+	private int revision;
 
 	private ClientGuardRosterStore() {
 	}
@@ -28,6 +29,12 @@ public final class ClientGuardRosterStore {
 				.map(ClientGuardRosterStore::toEntry)
 				.toList();
 		this.rostersByWorld.put(this.key(context), entries);
+		this.revision++;
+	}
+
+	/** Incremented on every roster sync so screens can rebuild cached views and confirm saved changes. */
+	public int revision() {
+		return this.revision;
 	}
 
 	public boolean hasRoster(ClientTacticsDataStore.WorldContext context) {
@@ -43,6 +50,7 @@ public final class ClientGuardRosterStore {
 
 	public void clear() {
 		this.rostersByWorld.clear();
+		this.revision++;
 	}
 
 	private static GuardRosterEntry toEntry(GuardRosterSyncPayload.GuardSummary summary) {
