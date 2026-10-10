@@ -304,6 +304,7 @@ public final class CommanderService {
 				}
 				if (Math.floorMod(now + CommanderBrain.phaseOf(player.getUUID()), GuardHierarchy.ELECTION_INTERVAL_TICKS) == 0) {
 					VoiceCommandBridge.refreshPromptHint(player);
+					VoiceCommandBridge.maybeOfferConsent(server, player);
 				}
 				tickApproach(context, player, now);
 				context.brain.tick(server, player, context, now);

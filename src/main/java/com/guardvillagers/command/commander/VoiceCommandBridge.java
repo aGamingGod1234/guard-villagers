@@ -1,6 +1,5 @@
 package com.guardvillagers.command.commander;
 
-import com.guardvillagers.GuardOwnershipIndex;
 import com.guardvillagers.GuardVillagersMod;
 import com.guardvillagers.command.hierarchy.GuardHierarchy;
 import com.guardvillagers.command.language.GrammarInterpreter;
@@ -43,6 +42,8 @@ public final class VoiceCommandBridge {
 	 * from STT, HTTP and voice-chat threads, which must never touch saved data (plain maps the autosave walks).
 	 */
 	private static final Map<UUID, Optional<Boolean>> CONSENT = new ConcurrentHashMap<>();
+	/** Players already offered voice this session (cleared when they leave). */
+	private static final java.util.Set<UUID> PROMPTED = ConcurrentHashMap.newKeySet();
 	private static final int MAX_HINT_LENGTH = 400;
 
 	private VoiceCommandBridge() {
@@ -103,6 +104,7 @@ public final class VoiceCommandBridge {
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
 			PROMPT_HINTS.clear();
 			CONSENT.clear();
+			PROMPTED.clear();
 			// The LLM interpreter owns an HTTP client and executor; do not leave them running after the server.
 			OrderInterpreter previous = CommanderService.interpreter();
 			CommanderService.setInterpreter(OrderInterpreter.grammarOnly());
@@ -110,7 +112,6 @@ public final class VoiceCommandBridge {
 		});
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
 			CONSENT.put(handler.getPlayer().getUUID(), storedConsent(server, handler.getPlayer().getUUID()));
-			offerConsent(server, handler.getPlayer());
 		});
 		ServerMessageEvents.ALLOW_CHAT_MESSAGE.register((message, sender, params) -> !interceptChat(sender, message.signedContent()));
 	}
@@ -169,6 +170,7 @@ public final class VoiceCommandBridge {
 	static void forget(UUID player) {
 		PROMPT_HINTS.remove(player);
 		CONSENT.remove(player);
+		PROMPTED.remove(player);
 	}
 
 	/**
@@ -225,14 +227,25 @@ public final class VoiceCommandBridge {
 		return true;
 	}
 
-	private static void offerConsent(MinecraftServer server, ServerPlayer player) {
-		if (VoiceBridge.current().isEmpty() || GuardOwnershipIndex.countOwnedGuards(server, player.getUUID()) == 0) {
+	/**
+	 * Offers voice commands once per session, the first time the player is near their own loaded guards and has
+	 * never chosen. (At join the player's guards are usually not loaded yet, so asking then rarely worked.) Called
+	 * from the commander tick, server thread.
+	 */
+	static void maybeOfferConsent(MinecraftServer server, ServerPlayer player) {
+		UUID id = player.getUUID();
+		if (PROMPTED.contains(id) || VoiceBridge.current().isEmpty()
+				|| !VoiceRuntime.pipeline().map(VoicePipeline::inputAvailable).orElse(false)) {
 			return;
 		}
-		GuardCommandState.OwnerCommand command = GuardHierarchy.state(server).peek(player.getUUID());
-		if (command != null && command.voiceConsent().isPresent()) {
+		if (consent(id).isPresent()) {
+			PROMPTED.add(id);
 			return;
 		}
+		if (!VoiceRuntime.nearOwnGuards(server, id)) {
+			return;
+		}
+		PROMPTED.add(id);
 		player.sendSystemMessage(Component.translatable("commands.guardvillagers.voice.prompt")
 				.append(" ")
 				.append(Component.translatable("commands.guardvillagers.voice.prompt.enable")
