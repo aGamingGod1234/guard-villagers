@@ -111,7 +111,9 @@ public final class GuardDragHandler {
 			this.cachedName = GuardTacticsScreen.ellipsize(font, this.draggedGuard.displayName(), CARD_WIDTH - 26);
 		}
 		graphics.text(font, this.cachedName, x + 22, y + 5, 0xFFEAF1FA, false);
-		graphics.text(font, GuardTacticsScreen.levelText(this.draggedGuard.level()), x + 22, y + 15, 0xFFB6C6D6, false);
+		if (this.draggedGuard.loaded()) {
+			graphics.text(font, GuardTacticsScreen.levelText(this.draggedGuard.level()), x + 22, y + 15, 0xFFB6C6D6, false);
+		}
 
 		drawArmorIcon(graphics, this.draggedGuard.helmet(), x + 4, y + 25);
 		drawArmorIcon(graphics, this.draggedGuard.chest(), x + 23, y + 25);
