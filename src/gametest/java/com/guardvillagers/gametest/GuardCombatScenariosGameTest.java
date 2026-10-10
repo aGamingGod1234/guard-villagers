@@ -38,14 +38,14 @@ public class GuardCombatScenariosGameTest {
 		});
 	}
 
-	@GameTest(structure = ARENA, environment = ENV, maxTicks = 600, required = false)
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 600)
 	public void swordsmanKillsZombie(GameTestHelper helper) {
 		GuardTestSupport.floor(helper);
 		Zombie zombie = GuardTestSupport.noSunBurn(helper.spawn(EntityType.ZOMBIE, new net.minecraft.world.phys.Vec3(CENTER + 4, 1, CENTER)));
 		meleeVersus(helper, zombie);
 	}
 
-	@GameTest(structure = ARENA, environment = ENV, maxTicks = 600, required = false)
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 600)
 	public void swordsmanKillsSkeleton(GameTestHelper helper) {
 		GuardTestSupport.floor(helper);
 		Skeleton skeleton = GuardTestSupport.noSunBurn(helper.spawn(EntityType.SKELETON, new net.minecraft.world.phys.Vec3(CENTER + 4, 1, CENTER)));
@@ -53,7 +53,7 @@ public class GuardCombatScenariosGameTest {
 		meleeVersus(helper, skeleton);
 	}
 
-	@GameTest(structure = ARENA, environment = ENV, maxTicks = 600, required = false)
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 600)
 	public void swordsmanKillsPillager(GameTestHelper helper) {
 		GuardTestSupport.floor(helper);
 		Pillager pillager = helper.spawn(EntityType.PILLAGER, new net.minecraft.world.phys.Vec3(CENTER + 4, 1, CENTER));
@@ -65,7 +65,7 @@ public class GuardCombatScenariosGameTest {
 	 * A creeper is "handled" when it is gone and the guard survived; either the guard killed it or it
 	 * blew up without killing the guard. Mob griefing is off in the test environment, so the floor stays.
 	 */
-	@GameTest(structure = ARENA, environment = ENV, maxTicks = 600, required = false)
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 600)
 	public void swordsmanHandlesCreeper(GameTestHelper helper) {
 		GuardTestSupport.floor(helper);
 		Creeper creeper = helper.spawn(EntityType.CREEPER, new net.minecraft.world.phys.Vec3(CENTER + 4, 1, CENTER));
@@ -127,7 +127,7 @@ public class GuardCombatScenariosGameTest {
 	 * A goat is not a Monster, so the guard's hostile scan ignores it. The only reason to attack it is
 	 * the owner-defense hook (AFTER_DAMAGE on the owner).
 	 */
-	@GameTest(structure = ARENA, environment = ENV, maxTicks = 400, required = false)
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 400)
 	public void guardDefendsOwnerWhenMobHitsOwner(GameTestHelper helper) {
 		GuardTestSupport.floor(helper);
 		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
@@ -141,7 +141,7 @@ public class GuardCombatScenariosGameTest {
 		});
 	}
 
-	@GameTest(structure = ARENA, environment = ENV, maxTicks = 600, required = false)
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 600)
 	public void guardSavesVillagerFromZombie(GameTestHelper helper) {
 		GuardTestSupport.floor(helper);
 		Villager villager = helper.spawn(EntityType.VILLAGER, new net.minecraft.world.phys.Vec3(CENTER + 6.5, 1, CENTER + 0.5));
@@ -180,7 +180,7 @@ public class GuardCombatScenariosGameTest {
 	 * GuardAiController ranks OWNER_DAMAGED (90) above CURRENT_TARGET (84) and HOSTILE_SCAN (70), so the
 	 * guard should switch to the goat.
 	 */
-	@GameTest(structure = ARENA, environment = ENV, maxTicks = 120, required = false)
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 120)
 	public void ownerDefenseOutranksRoutineHostile(GameTestHelper helper) {
 		GuardTestSupport.floor(helper);
 		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER - 6.5);

@@ -86,7 +86,7 @@ public class GuardMovementGameTest {
 	 * Same pit, but the owner waits on the far side, so the follow goal (which zeroes the water path
 	 * penalty) wants to go straight through. The guard must cross or skirt it and survive.
 	 */
-	@GameTest(structure = ARENA, environment = ENV, maxTicks = 500, required = false)
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 500)
 	public void followsOwnerPastWaterPitWithoutDrowning(GameTestHelper helper) {
 		GuardTestSupport.fill(helper, 0, 0, 0, SIZE - 1, 3, SIZE - 1, Blocks.STONE);
 		GuardTestSupport.fill(helper, CENTER - 3, 1, 0, CENTER + 3, 3, SIZE - 1, Blocks.WATER);

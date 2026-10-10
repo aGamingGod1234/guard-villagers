@@ -6,6 +6,7 @@ import java.util.EnumSet;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.goal.Goal;
+import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.RangedAttackMob;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.Vec3;
@@ -29,6 +30,7 @@ public final class GuardMeleeAttackGoal extends Goal {
 	private static final double SHIELD_RANGED_THREAT_DISTANCE_SQUARED = 16.0D * 16.0D;
 	private static final double SHIELD_CLOSE_DISTANCE_SQUARED = 4.0D * 4.0D;
 	private static final float LOOK_CHANGE = 30.0F;
+	private static final double CREEPER_SAFE_DISTANCE = 6.0D;
 
 	private final GuardEntity guard;
 	private final double speed;
@@ -84,6 +86,9 @@ public final class GuardMeleeAttackGoal extends Goal {
 
 		this.guard.getLookControl().setLookAt(target, LOOK_CHANGE, LOOK_CHANGE);
 		double distanceSq = this.guard.distanceToSqr(target);
+		if (this.avoidingCreeperBlast(target, distanceSq)) {
+			return;
+		}
 		boolean frontline = this.guard.getEngagementRank() < MAX_FRONTLINE_ATTACKERS;
 		this.repathTicks = Math.max(this.repathTicks - 1, 0);
 		if (this.repathTicks <= 0 && (Double.isNaN(this.pathedTargetX)
@@ -122,6 +127,31 @@ public final class GuardMeleeAttackGoal extends Goal {
 		boolean betweenSwings = distanceSq <= SHIELD_CLOSE_DISTANCE_SQUARED
 				&& this.attackCooldown > 4 && this.attackCooldown < ATTACK_INTERVAL_TICKS - 4;
 		this.guard.requestShield(closingOnArcher || betweenSwings);
+	}
+
+	/**
+	 * Hit-and-run against creepers: once a creeper starts to swell, back out of blast range with the
+	 * shield up (shields block explosion damage when facing it), then close in again when it calms
+	 * down. Without this, swordsmen stood in the blast and died.
+	 */
+	private boolean avoidingCreeperBlast(LivingEntity target, double distanceSq) {
+		if (!(target instanceof Creeper creeper) || !(creeper.getSwellDir() > 0 || creeper.isIgnited())) {
+			return false;
+		}
+		this.guard.requestShield(true);
+		if (distanceSq >= CREEPER_SAFE_DISTANCE * CREEPER_SAFE_DISTANCE || this.guard.isHoldingPosition()) {
+			this.guard.getNavigation().stop();
+			return true;
+		}
+		Vec3 away = this.guard.position().subtract(target.position());
+		away = new Vec3(away.x, 0.0D, away.z);
+		if (away.lengthSqr() < 1.0E-4D) {
+			away = new Vec3(1.0D, 0.0D, 0.0D);
+		}
+		Vec3 retreat = target.position().add(away.normalize().scale(CREEPER_SAFE_DISTANCE + 1.0D));
+		this.guard.getGuardNavigation().startMovingToDynamic(retreat, this.speed * 1.2D);
+		this.pathedTargetX = Double.NaN;
+		return true;
 	}
 
 	private boolean moveTowards(LivingEntity target, double distanceSq, boolean frontline) {
