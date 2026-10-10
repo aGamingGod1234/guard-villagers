@@ -6,7 +6,8 @@
 	"environment": "*",
 	"entrypoints": {
 		"fabric-gametest": [
-			"com.guardvillagers.gametest.GuardCombatGameTest"
+			"com.guardvillagers.gametest.GuardCombatGameTest",
+			"com.guardvillagers.gametest.GuardAiGameTest"
 		]
 	},
 	"depends": {
