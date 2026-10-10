@@ -73,7 +73,7 @@ final class SpeechCaptureEngine implements AutoCloseable {
 		this.nanos = Objects.requireNonNull(nanos, "nanos");
 	}
 
-	/** Feeds one Opus packet from {@code playerId}. Call from a single thread (the server thread). */
+	/** Feeds one Opus packet from {@code playerId}. Called on the voice-chat thread, one player's packets in order. */
 	void accept(UUID playerId, byte[] opus, DecoderFactory decoderFactory) {
 		Objects.requireNonNull(playerId, "playerId");
 		Objects.requireNonNull(opus, "opus");

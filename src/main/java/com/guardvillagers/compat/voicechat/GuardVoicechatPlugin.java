@@ -19,7 +19,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import net.minecraft.server.MinecraftServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,9 +27,12 @@ import org.slf4j.LoggerFactory;
  * is installed, so this package is the only code that ever loads {@code de.maxhenkel} classes.
  *
  * <p>Capture: SVC sends microphone packets only while a player's push-to-talk (or voice activation) is on, so
- * each packet belongs to exactly one speaking player. The packet is copied on the SVC thread, then on the
- * server thread it is dropped unless {@link VoiceRuntime#shouldCapture} passes (consented, near their own
- * guards, within rate limits); only then is it decoded.
+ * each packet belongs to exactly one speaking player. On the SVC thread a packet is dropped unless
+ * {@link VoiceRuntime#mayCapture} passes (consented, near their own guards, within rate limits); only then is it
+ * copied and decoded, still on that thread, so other players' audio never reaches the server thread.
+ *
+ * <p>The capture engine's timings come from the voice config and are rebuilt whenever the pipeline is (server
+ * start and {@code /guards voice reload}).
  */
 public final class GuardVoicechatPlugin implements VoicechatPlugin {
 	private static final Logger LOGGER = LoggerFactory.getLogger("guardvillagers/voicechat");
@@ -48,6 +50,10 @@ public final class GuardVoicechatPlugin implements VoicechatPlugin {
 	public void initialize(VoicechatApi api) {
 		// Makes sure the voice config and pipeline follow the server lifecycle even if nothing else wired it.
 		VoiceRuntime.init();
+		VoiceRuntime.onPipelineChanged(pipeline -> {
+			SvcVoiceBridge current = bridge;
+			if (current != null) current.replaceEngine(newEngine(pipeline.config()));
+		});
 	}
 
 	@Override
@@ -120,20 +126,9 @@ public final class GuardVoicechatPlugin implements VoicechatPlugin {
 			byte[] opus = event.getPacket().getOpusEncodedData();
 			if (opus == null || opus.length == 0 || opus.length > MAX_OPUS_PACKET_BYTES) return;
 			UUID playerId = sender.getPlayer().getUuid();
-			byte[] copy = opus.clone();
+			if (playerId == null || !VoiceRuntime.mayCapture(playerId)) return;
 			VoicechatServerApi api = event.getVoicechat();
-			MinecraftServer server = VoiceRuntime.server().orElse(null);
-			if (server == null) return;
-			server.execute(() -> acceptOnServer(current, api, playerId, copy));
-		} catch (RuntimeException exception) {
-			LOGGER.error("Guard voice capture failed", exception);
-		}
-	}
-
-	private void acceptOnServer(SvcVoiceBridge current, VoicechatServerApi api, UUID playerId, byte[] opus) {
-		try {
-			if (bridge != current || !VoiceRuntime.shouldCapture(playerId)) return;
-			current.accept(playerId, opus, () -> decoder(api.createDecoder()));
+			current.accept(playerId, opus.clone(), () -> decoder(api.createDecoder()));
 		} catch (RuntimeException exception) {
 			LOGGER.error("Guard voice capture failed", exception);
 		}

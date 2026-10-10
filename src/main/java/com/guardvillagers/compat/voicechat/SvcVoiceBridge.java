@@ -23,7 +23,7 @@ final class SvcVoiceBridge implements VoiceBridge {
 	static final String CATEGORY_ID = "guard_voices";
 	static final int FRAME_SAMPLES = 960;
 	private final VoicechatServerApi api;
-	private final SpeechCaptureEngine engine;
+	private volatile SpeechCaptureEngine engine;
 	private final Map<UUID, ActivePlayback> active = new ConcurrentHashMap<>();
 
 	SvcVoiceBridge(VoicechatServerApi api, SpeechCaptureEngine engine) {
@@ -67,6 +67,13 @@ final class SvcVoiceBridge implements VoiceBridge {
 	@Override
 	public void cancelCapture(UUID playerId) {
 		engine.cancel(playerId);
+	}
+
+	/** Swaps in an engine built from a reloaded config; whatever the old one was capturing is dropped. */
+	void replaceEngine(SpeechCaptureEngine replacement) {
+		SpeechCaptureEngine previous = engine;
+		engine = Objects.requireNonNull(replacement, "replacement");
+		previous.close();
 	}
 
 	void close() {
