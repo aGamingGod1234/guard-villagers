@@ -2,11 +2,11 @@ package com.guardvillagers.client;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.objects.ReferenceLinkedOpenHashSet;
 
 import java.util.Iterator;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -44,20 +44,21 @@ public final class ChunkTerrainCache {
 	private long frame;
 	private int uploadsThisFrame;
 
-	public void prepareVisibleTiles(ClientTacticsDataStore.WorldContext context, ClientLevel world, List<ChunkPos> visibleChunks) {
+	/** Generates missing tiles for the given packed chunk keys, nearest-first order expected. */
+	public void prepareVisibleTiles(ClientTacticsDataStore.WorldContext context, ClientLevel world, LongArrayList visibleChunkKeys) {
 		this.frame++;
 		this.uploadsThisFrame = 0;
-		if (context == null || world == null || visibleChunks == null || visibleChunks.isEmpty()) {
+		if (context == null || world == null || visibleChunkKeys == null || visibleChunkKeys.isEmpty()) {
 			return;
 		}
 
 		Long2ObjectLinkedOpenHashMap<TerrainTile> tiles = this.tilesFor(context, true);
 		int generated = 0;
-		for (ChunkPos chunkPos : visibleChunks) {
+		for (int i = 0, size = visibleChunkKeys.size(); i < size; i++) {
 			if (generated >= MAX_TILE_GENERATIONS_PER_FRAME) {
 				break;
 			}
-			long chunkKey = ChunkPos.pack(chunkPos.x(), chunkPos.z());
+			long chunkKey = visibleChunkKeys.getLong(i);
 			if (tiles.containsKey(chunkKey)) {
 				continue;
 			}
@@ -66,7 +67,7 @@ public final class ChunkTerrainCache {
 				break;
 			}
 
-			LevelChunk chunk = world.getChunkSource().getChunk(chunkPos.x(), chunkPos.z(), ChunkStatus.FULL, false);
+			LevelChunk chunk = world.getChunkSource().getChunk(ChunkPos.getX(chunkKey), ChunkPos.getZ(chunkKey), ChunkStatus.FULL, false);
 			if (chunk == null) {
 				continue;
 			}

@@ -1,7 +1,9 @@
 package com.guardvillagers.client;
 
-import java.util.Comparator;
-import java.util.List;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
+import it.unimi.dsi.fastutil.longs.LongArrays;
+import it.unimi.dsi.fastutil.longs.LongComparator;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.texture.DynamicTexture;
@@ -10,13 +12,19 @@ import net.minecraft.world.level.ChunkPos;
 public final class ChunkMapWidget {
 	private static final double MIN_ZOOM = 0.05D;
 	private static final double MAX_ZOOM = 32.0D;
-	private static final double ZOOM_STEP_BASE = 1.1D;
+	private static final double ZOOM_STEP_BASE = 1.15D;
+	private static final double ZOOM_SMOOTHING_PER_SECOND = 16.0D;
 	private static final double BASE_CHUNK_PIXELS = 16.0D;
 	private static final double DETAILED_TEXTURE_MIN_CHUNK_PIXELS = 4.0D;
+	private static final double LABEL_MIN_CHUNK_PIXELS = 11.0D;
+	private static final int PAN_MARGIN_CHUNKS = 4;
 
 	private static final int MAP_BACKGROUND = 0xFF10161D;
 	private static final int SELECTION_OVERLAY = 0x446FD3FF;
+	private static final int SELECTION_BORDER = 0xFF6FD3FF;
 	private static final int HOVER_OVERLAY = 0x33FFFFFF;
+	private static final int ERASE_PREVIEW = 0xFFFF6B6B;
+	private static final int PREVIEW_SHADOW = 0xAA000000;
 	private static final int ZONE_OUTLINE_ALPHA_MASK = 0xCC000000;
 
 	private final ClientTacticsDataStore dataStore;
@@ -30,15 +38,30 @@ public final class ChunkMapWidget {
 	private double centerChunkX;
 	private double centerChunkZ;
 	private double zoom = 1.0D;
+	private double targetZoom = 1.0D;
+	private boolean zoomAnimating;
+	private double zoomAnchorScreenX;
+	private double zoomAnchorScreenY;
+	private double zoomAnchorChunkX;
+	private double zoomAnchorChunkZ;
+	private long lastFrameNanos;
 	private RegionColor activeColor = RegionColor.BLUE;
 	private ChunkPos selectionStart;
 	private ChunkPos selectionEnd;
 	private boolean selecting;
 	private boolean panning;
+	private boolean painting;
+	private boolean paintErase;
+	private int lastPaintX;
+	private int lastPaintZ;
 	private ChunkPos hoveredChunk;
+	private int visibleChunkCount;
 	private int[] chunkXEdges = new int[64];
 	private int[] chunkZEdges = new int[64];
-	private final Comparator<ChunkPos> distanceToCamera = Comparator.comparingDouble(this::distanceToCameraSq);
+	private final int[] discoveredBounds = new int[4];
+	private boolean hasDiscoveredBounds;
+	private final LongArrayList visibleChunkKeys = new LongArrayList();
+	private final LongComparator distanceToCamera = (a, b) -> Double.compare(this.distanceToCameraSq(a), this.distanceToCameraSq(b));
 
 	public ChunkMapWidget(ClientTacticsDataStore dataStore, ChunkTerrainCache terrainCache) {
 		this.dataStore = dataStore;
@@ -56,90 +79,160 @@ public final class ChunkMapWidget {
 		if (this.cameraInitialized || centerChunk == null) {
 			return;
 		}
-		this.centerChunkX = centerChunk.x();
-		this.centerChunkZ = centerChunk.z();
+		this.centerOn(centerChunk);
+	}
+
+	public void centerOn(ChunkPos chunk) {
+		if (chunk == null) {
+			return;
+		}
+		this.centerChunkX = chunk.x() + 0.5D;
+		this.centerChunkZ = chunk.z() + 0.5D;
+		this.zoomAnimating = false;
+		this.targetZoom = this.zoom;
 		this.cameraInitialized = true;
 	}
 
+	/**
+	 * @param eraseModifier whether shift is held, so the hover preview shows the erase brush
+	 */
 	public void render(
 			GuiGraphicsExtractor graphics,
+			Font font,
 			ClientLevel world,
 			ClientTacticsDataStore.WorldContext worldContext,
 			int mouseX,
-			int mouseY) {
+			int mouseY,
+			boolean eraseModifier) {
+		this.advanceZoom();
 		graphics.fill(this.x, this.y, this.x + this.width, this.y + this.height, MAP_BACKGROUND);
-		this.hoveredChunk = null;
+		this.visibleChunkCount = 0;
 		if (world == null || worldContext == null) {
+			this.hoveredChunk = null;
+			this.hasDiscoveredBounds = false;
 			return;
 		}
+		this.hasDiscoveredBounds = this.dataStore.discoveredBounds(worldContext, this.discoveredBounds);
+		this.clampCamera();
 
 		double chunkScale = this.chunkScale();
 		double viewportCenterX = this.x + (this.width / 2.0D);
 		double viewportCenterY = this.y + (this.height / 2.0D);
-		VisibleChunkFrame visibleFrame = this.computeVisibleFrame(viewportCenterX, viewportCenterY, chunkScale);
-		List<ChunkPos> visibleChunks = this.dataStore.discoveredChunksInBounds(
-				worldContext,
-				visibleFrame.minChunkX(),
-				visibleFrame.maxChunkX(),
-				visibleFrame.minChunkZ(),
-				visibleFrame.maxChunkZ());
-		visibleChunks.sort(this.distanceToCamera);
-		this.terrainCache.prepareVisibleTiles(worldContext, world, visibleChunks);
+		int minChunkX = (int) Math.floor(this.centerChunkX + ((this.x - viewportCenterX) / chunkScale)) - 1;
+		int maxChunkX = (int) Math.ceil(this.centerChunkX + (((this.x + this.width) - viewportCenterX) / chunkScale)) + 1;
+		int minChunkZ = (int) Math.floor(this.centerChunkZ + ((this.y - viewportCenterY) / chunkScale)) - 1;
+		int maxChunkZ = (int) Math.ceil(this.centerChunkZ + (((this.y + this.height) - viewportCenterY) / chunkScale)) + 1;
 
-		int[] chunkXEdges = this.chunkXEdges = computeChunkEdges(this.chunkXEdges, visibleFrame.minChunkX(), visibleFrame.maxChunkX(), this.centerChunkX, viewportCenterX, chunkScale);
-		int[] chunkZEdges = this.chunkZEdges = computeChunkEdges(this.chunkZEdges, visibleFrame.minChunkZ(), visibleFrame.maxChunkZ(), this.centerChunkZ, viewportCenterY, chunkScale);
-		int xEdgeCount = (visibleFrame.maxChunkX() - visibleFrame.minChunkX()) + 2;
-		int zEdgeCount = (visibleFrame.maxChunkZ() - visibleFrame.minChunkZ()) + 2;
+		LongArrayList visible = this.visibleChunkKeys;
+		this.dataStore.collectDiscoveredInBounds(worldContext, minChunkX, maxChunkX, minChunkZ, maxChunkZ, visible);
+		LongArrays.quickSort(visible.elements(), 0, visible.size(), this.distanceToCamera);
+		this.terrainCache.prepareVisibleTiles(worldContext, world, visible);
+		this.visibleChunkCount = visible.size();
+
+		int[] xEdges = this.chunkXEdges = computeChunkEdges(this.chunkXEdges, minChunkX, maxChunkX, this.centerChunkX, viewportCenterX, chunkScale);
+		int[] zEdges = this.chunkZEdges = computeChunkEdges(this.chunkZEdges, minChunkZ, maxChunkZ, this.centerChunkZ, viewportCenterY, chunkScale);
+		boolean drawLabels = chunkScale >= LABEL_MIN_CHUNK_PIXELS && font != null;
 
 		graphics.enableScissor(this.x, this.y, this.x + this.width, this.y + this.height);
-		for (ChunkPos chunkPos : visibleChunks) {
-			int xIndex = chunkPos.x() - visibleFrame.minChunkX();
-			int zIndex = chunkPos.z() - visibleFrame.minChunkZ();
-			int left = chunkXEdges[xIndex];
-			int right = chunkXEdges[xIndex + 1];
-			int top = chunkZEdges[zIndex];
-			int bottom = chunkZEdges[zIndex + 1];
+		for (int i = 0, size = visible.size(); i < size; i++) {
+			long key = visible.getLong(i);
+			int chunkX = ChunkPos.getX(key);
+			int chunkZ = ChunkPos.getZ(key);
+			int xIndex = chunkX - minChunkX;
+			int zIndex = chunkZ - minChunkZ;
+			int left = xEdges[xIndex];
+			int right = xEdges[xIndex + 1];
+			int top = zEdges[zIndex];
+			int bottom = zEdges[zIndex + 1];
 			if (right <= left || bottom <= top) {
 				continue;
 			}
 
-			this.renderChunkTerrain(graphics, worldContext, chunkPos.x(), chunkPos.z(), left, top, right, bottom);
+			this.renderChunkTerrain(graphics, worldContext, chunkX, chunkZ, left, top, right, bottom);
 
-			RegionColor regionColor = this.dataStore.getRegionColor(worldContext, chunkPos.x(), chunkPos.z());
+			RegionColor regionColor = this.dataStore.getRegionColor(worldContext, chunkX, chunkZ);
 			if (regionColor != RegionColor.NONE) {
-				this.drawZoneHighlight(graphics, worldContext, chunkPos.x(), chunkPos.z(), left, top, right, bottom, regionColor);
+				this.drawZoneHighlight(graphics, font, drawLabels, worldContext, chunkX, chunkZ, left, top, right, bottom, regionColor);
 			}
 
-			if (this.isChunkSelected(chunkPos.x(), chunkPos.z())) {
+			if (this.isChunkSelected(chunkX, chunkZ)) {
 				graphics.fill(left, top, right, bottom, SELECTION_OVERLAY);
 			}
 		}
+
+		if (this.hasSelection()) {
+			int selLeft = this.chunkToScreenX(Math.min(this.selectionStart.x(), this.selectionEnd.x()));
+			int selRight = this.chunkToScreenX(Math.max(this.selectionStart.x(), this.selectionEnd.x()) + 1);
+			int selTop = this.chunkToScreenZ(Math.min(this.selectionStart.z(), this.selectionEnd.z()));
+			int selBottom = this.chunkToScreenZ(Math.max(this.selectionStart.z(), this.selectionEnd.z()) + 1);
+			graphics.outline(selLeft, selTop, Math.max(1, selRight - selLeft), Math.max(1, selBottom - selTop), SELECTION_BORDER);
+		}
+
+		this.renderHover(graphics, worldContext, mouseX, mouseY, eraseModifier);
 		graphics.disableScissor();
+	}
 
-		if (!this.contains(mouseX, mouseY)) {
+	private void renderHover(GuiGraphicsExtractor graphics, ClientTacticsDataStore.WorldContext worldContext, int mouseX, int mouseY, boolean eraseModifier) {
+		if (!this.contains(mouseX, mouseY) || this.panning) {
+			this.hoveredChunk = null;
+			return;
+		}
+		int hoverX = (int) Math.floor(this.screenToChunkX(mouseX));
+		int hoverZ = (int) Math.floor(this.screenToChunkZ(mouseY));
+		if (!this.dataStore.isDiscovered(worldContext, hoverX, hoverZ)) {
+			this.hoveredChunk = null;
+			return;
+		}
+		if (this.hoveredChunk == null || this.hoveredChunk.x() != hoverX || this.hoveredChunk.z() != hoverZ) {
+			this.hoveredChunk = new ChunkPos(hoverX, hoverZ);
+		}
+
+		int left = this.chunkToScreenX(hoverX);
+		int right = this.chunkToScreenX(hoverX + 1);
+		int top = this.chunkToScreenZ(hoverZ);
+		int bottom = this.chunkToScreenZ(hoverZ + 1);
+		if (right > left && bottom > top) {
+			graphics.fill(left, top, right, bottom, HOVER_OVERLAY);
+		}
+		if (this.selecting) {
 			return;
 		}
 
-		ChunkPos hovered = this.chunkAt(mouseX, mouseY);
-		if (hovered == null || !this.dataStore.isDiscovered(worldContext, hovered.x(), hovered.z())) {
+		// Brush preview: what a right-click would paint (the whole selection when one exists).
+		boolean erase = this.painting ? this.paintErase : eraseModifier;
+		int previewColor = erase ? ERASE_PREVIEW : this.activeColor.swatchArgb();
+		if (this.hasSelection()) {
+			left = this.chunkToScreenX(Math.min(this.selectionStart.x(), this.selectionEnd.x()));
+			right = this.chunkToScreenX(Math.max(this.selectionStart.x(), this.selectionEnd.x()) + 1);
+			top = this.chunkToScreenZ(Math.min(this.selectionStart.z(), this.selectionEnd.z()));
+			bottom = this.chunkToScreenZ(Math.max(this.selectionStart.z(), this.selectionEnd.z()) + 1);
+		}
+		int w = right - left;
+		int h = bottom - top;
+		if (w >= 3 && h >= 3) {
+			graphics.outline(left - 1, top - 1, w + 2, h + 2, PREVIEW_SHADOW);
+			graphics.outline(left, top, w, h, previewColor);
+		} else if (w >= 1 && h >= 1) {
+			graphics.fill(left, top, right, bottom, previewColor);
+		}
+	}
+
+	/** Draws the player's position and facing; called after {@link #render} with the same bounds. */
+	public void drawPlayerMarker(GuiGraphicsExtractor graphics, double chunkX, double chunkZ, float yawDegrees) {
+		double scale = this.chunkScale();
+		int px = (int) Math.round(this.x + (this.width / 2.0D) + ((chunkX - this.centerChunkX) * scale));
+		int py = (int) Math.round(this.y + (this.height / 2.0D) + ((chunkZ - this.centerChunkZ) * scale));
+		if (!this.contains(px, py)) {
 			return;
 		}
-
-		this.hoveredChunk = hovered;
-		int hoveredXIndex = hovered.x() - visibleFrame.minChunkX();
-		int hoveredZIndex = hovered.z() - visibleFrame.minChunkZ();
-		if (hoveredXIndex < 0 || hoveredXIndex + 1 >= xEdgeCount || hoveredZIndex < 0 || hoveredZIndex + 1 >= zEdgeCount) {
-			return;
-		}
-
-		// Edge chunks extend past the viewport, so clip the hover overlay to the map like the tiles.
+		// Minecraft yaw 0 faces +Z (down on this map); 90 faces -X.
+		double radians = Math.toRadians(yawDegrees);
+		int tipX = px + (int) Math.round(-Math.sin(radians) * 5.0D);
+		int tipY = py + (int) Math.round(Math.cos(radians) * 5.0D);
 		graphics.enableScissor(this.x, this.y, this.x + this.width, this.y + this.height);
-		graphics.fill(
-				chunkXEdges[hoveredXIndex],
-				chunkZEdges[hoveredZIndex],
-				chunkXEdges[hoveredXIndex + 1],
-				chunkZEdges[hoveredZIndex + 1],
-				HOVER_OVERLAY);
+		graphics.fill(tipX - 1, tipY - 1, tipX + 1, tipY + 1, 0xFFFFFFFF);
+		graphics.fill(px - 3, py - 3, px + 3, py + 3, 0xFF10161D);
+		graphics.fill(px - 2, py - 2, px + 2, py + 2, 0xFFFFFFFF);
 		graphics.disableScissor();
 	}
 
@@ -157,6 +250,7 @@ public final class ChunkMapWidget {
 		if (button == 2) {
 			this.panning = true;
 			this.selecting = false;
+			this.painting = false;
 			return true;
 		}
 
@@ -174,7 +268,18 @@ public final class ChunkMapWidget {
 		}
 
 		if (button == 1) {
-			this.paintAtCursor(mouseX, mouseY, shiftDown, worldContext);
+			int chunkX = (int) Math.floor(this.screenToChunkX(mouseX));
+			int chunkZ = (int) Math.floor(this.screenToChunkZ(mouseY));
+			if (this.hasSelection()) {
+				this.paintSelection(worldContext, shiftDown);
+				return true;
+			}
+			// Without a selection the right button is a brush: drag to keep painting.
+			this.painting = true;
+			this.paintErase = shiftDown;
+			this.lastPaintX = chunkX;
+			this.lastPaintZ = chunkZ;
+			this.dataStore.setRegionColor(worldContext, chunkX, chunkZ, this.paintColor());
 			return true;
 		}
 
@@ -194,16 +299,26 @@ public final class ChunkMapWidget {
 		}
 
 		if (button == 2 && this.panning) {
-			double scale = this.chunkScale();
-			this.centerChunkX -= deltaX / scale;
-			this.centerChunkZ -= deltaY / scale;
+			this.panByPixels(-deltaX, -deltaY);
 			return true;
 		}
 
 		if (button == 0 && this.selecting) {
-			ChunkPos next = this.chunkAt(mouseX, mouseY);
-			if (next != null) {
-				this.selectionEnd = next;
+			ChunkPos next = this.chunkAtClamped(mouseX, mouseY);
+			this.selectionEnd = next;
+			return true;
+		}
+
+		if (button == 1 && this.painting) {
+			if (!this.contains(mouseX, mouseY)) {
+				return true;
+			}
+			int chunkX = (int) Math.floor(this.screenToChunkX(mouseX));
+			int chunkZ = (int) Math.floor(this.screenToChunkZ(mouseY));
+			if (chunkX != this.lastPaintX || chunkZ != this.lastPaintZ) {
+				this.paintLine(worldContext, this.lastPaintX, this.lastPaintZ, chunkX, chunkZ);
+				this.lastPaintX = chunkX;
+				this.lastPaintZ = chunkZ;
 			}
 			return true;
 		}
@@ -212,11 +327,12 @@ public final class ChunkMapWidget {
 
 	public boolean mouseReleased(double mouseX, double mouseY, int button) {
 		if (button == 0 && this.selecting) {
-			ChunkPos next = this.chunkAt(mouseX, mouseY);
-			if (next != null) {
-				this.selectionEnd = next;
-			}
+			this.selectionEnd = this.chunkAtClamped(mouseX, mouseY);
 			this.selecting = false;
+			return true;
+		}
+		if (button == 1 && this.painting) {
+			this.painting = false;
 			return true;
 		}
 		if (button == 2 && this.panning) {
@@ -230,21 +346,51 @@ public final class ChunkMapWidget {
 		if (!this.contains(mouseX, mouseY)) {
 			return false;
 		}
-		double chunkUnderCursorX = this.screenToChunkX(mouseX);
-		double chunkUnderCursorZ = this.screenToChunkZ(mouseY);
-		double zoomFactor = Math.pow(ZOOM_STEP_BASE, verticalAmount);
-		double nextZoom = clamp(this.zoom * zoomFactor, MIN_ZOOM, MAX_ZOOM);
-		if (Math.abs(nextZoom - this.zoom) < 1.0E-5D) {
-			return true;
-		}
-		this.zoom = nextZoom;
-
-		double centerScreenX = this.x + (this.width / 2.0D);
-		double centerScreenY = this.y + (this.height / 2.0D);
-		double chunkScale = this.chunkScale();
-		this.centerChunkX = chunkUnderCursorX - ((mouseX - centerScreenX) / chunkScale);
-		this.centerChunkZ = chunkUnderCursorZ - ((mouseY - centerScreenY) / chunkScale);
+		this.zoomAt(mouseX, mouseY, Math.pow(ZOOM_STEP_BASE, verticalAmount));
 		return true;
+	}
+
+	/** Starts a smooth zoom that keeps the chunk under (screenX, screenY) fixed on screen. */
+	public void zoomAt(double screenX, double screenY, double factor) {
+		this.zoomAnchorScreenX = screenX;
+		this.zoomAnchorScreenY = screenY;
+		this.zoomAnchorChunkX = this.screenToChunkX(screenX);
+		this.zoomAnchorChunkZ = this.screenToChunkZ(screenY);
+		this.targetZoom = clamp(this.targetZoom * factor, MIN_ZOOM, MAX_ZOOM);
+		this.zoomAnimating = true;
+	}
+
+	/** Zoom anchored at the viewport centre, used by the +/- keys. */
+	public void zoomSteps(int steps) {
+		this.zoomAt(this.x + (this.width / 2.0D), this.y + (this.height / 2.0D), Math.pow(ZOOM_STEP_BASE, steps * 2));
+	}
+
+	public void panByPixels(double deltaX, double deltaY) {
+		double scale = this.chunkScale();
+		double dx = deltaX / scale;
+		double dz = deltaY / scale;
+		this.centerChunkX += dx;
+		this.centerChunkZ += dz;
+		// Keep an in-flight zoom consistent with the pan instead of snapping the camera back.
+		this.zoomAnchorChunkX += dx;
+		this.zoomAnchorChunkZ += dz;
+		this.clampCamera();
+	}
+
+	public void paintSelection(ClientTacticsDataStore.WorldContext worldContext, boolean erase) {
+		if (!this.hasSelection() || worldContext == null) {
+			return;
+		}
+		RegionColor paintColor = erase ? RegionColor.NONE : this.activeColor;
+		int minX = Math.min(this.selectionStart.x(), this.selectionEnd.x());
+		int maxX = Math.max(this.selectionStart.x(), this.selectionEnd.x());
+		int minZ = Math.min(this.selectionStart.z(), this.selectionEnd.z());
+		int maxZ = Math.max(this.selectionStart.z(), this.selectionEnd.z());
+		for (int chunkX = minX; chunkX <= maxX; chunkX++) {
+			for (int chunkZ = minZ; chunkZ <= maxZ; chunkZ++) {
+				this.dataStore.setRegionColor(worldContext, ChunkPos.pack(chunkX, chunkZ), paintColor);
+			}
+		}
 	}
 
 	public void clearSelection() {
@@ -255,6 +401,43 @@ public final class ChunkMapWidget {
 
 	public boolean hasSelection() {
 		return this.selectionStart != null && this.selectionEnd != null;
+	}
+
+	public int selectionWidth() {
+		return this.hasSelection() ? Math.abs(this.selectionEnd.x() - this.selectionStart.x()) + 1 : 0;
+	}
+
+	public int selectionHeight() {
+		return this.hasSelection() ? Math.abs(this.selectionEnd.z() - this.selectionStart.z()) + 1 : 0;
+	}
+
+	public boolean isSelecting() {
+		return this.selecting;
+	}
+
+	public boolean isPainting() {
+		return this.painting;
+	}
+
+	public boolean isErasing() {
+		return this.painting && this.paintErase;
+	}
+
+	public boolean isPanning() {
+		return this.panning;
+	}
+
+	public boolean isMouseOver(double mouseX, double mouseY) {
+		return this.contains(mouseX, mouseY);
+	}
+
+	/** Discovered chunks drawn last frame; zero means the map shows nothing at this camera position. */
+	public int visibleChunkCount() {
+		return this.visibleChunkCount;
+	}
+
+	public boolean hasDiscoveredChunks() {
+		return this.hasDiscoveredBounds;
 	}
 
 	public RegionColor activeColor() {
@@ -276,25 +459,65 @@ public final class ChunkMapWidget {
 		return this.zoom;
 	}
 
-	private void paintAtCursor(double mouseX, double mouseY, boolean clear, ClientTacticsDataStore.WorldContext worldContext) {
-		RegionColor paintColor = clear ? RegionColor.NONE : this.activeColor;
-		if (this.hasSelection()) {
-			int minX = Math.min(this.selectionStart.x(), this.selectionEnd.x());
-			int maxX = Math.max(this.selectionStart.x(), this.selectionEnd.x());
-			int minZ = Math.min(this.selectionStart.z(), this.selectionEnd.z());
-			int maxZ = Math.max(this.selectionStart.z(), this.selectionEnd.z());
-			for (int chunkX = minX; chunkX <= maxX; chunkX++) {
-				for (int chunkZ = minZ; chunkZ <= maxZ; chunkZ++) {
-					long chunkKey = ChunkPos.pack(chunkX, chunkZ);
-					this.dataStore.setRegionColor(worldContext, chunkKey, paintColor);
-				}
+	private RegionColor paintColor() {
+		return this.paintErase ? RegionColor.NONE : this.activeColor;
+	}
+
+	// Fast drags skip chunks between mouse events, so fill the gap with a Bresenham line.
+	private void paintLine(ClientTacticsDataStore.WorldContext worldContext, int fromX, int fromZ, int toX, int toZ) {
+		RegionColor color = this.paintColor();
+		int dx = Math.abs(toX - fromX);
+		int dz = -Math.abs(toZ - fromZ);
+		int stepX = fromX < toX ? 1 : -1;
+		int stepZ = fromZ < toZ ? 1 : -1;
+		int error = dx + dz;
+		int cx = fromX;
+		int cz = fromZ;
+		for (int guard = 0; guard < 4096; guard++) {
+			this.dataStore.setRegionColor(worldContext, cx, cz, color);
+			if (cx == toX && cz == toZ) {
+				return;
 			}
+			int doubled = 2 * error;
+			if (doubled >= dz) {
+				error += dz;
+				cx += stepX;
+			}
+			if (doubled <= dx) {
+				error += dx;
+				cz += stepZ;
+			}
+		}
+	}
+
+	private void advanceZoom() {
+		long now = System.nanoTime();
+		double seconds = this.lastFrameNanos == 0L ? 0.0D : Math.min(0.1D, (now - this.lastFrameNanos) / 1.0E9D);
+		this.lastFrameNanos = now;
+		if (!this.zoomAnimating) {
 			return;
 		}
-		ChunkPos hovered = this.chunkAt(mouseX, mouseY);
-		if (hovered != null) {
-			this.dataStore.setRegionColor(worldContext, hovered.x(), hovered.z(), paintColor);
+		double blend = 1.0D - Math.exp(-ZOOM_SMOOTHING_PER_SECOND * seconds);
+		double logCurrent = Math.log(this.zoom);
+		double logTarget = Math.log(this.targetZoom);
+		double next = Math.exp(logCurrent + ((logTarget - logCurrent) * blend));
+		if (Math.abs(logTarget - Math.log(next)) < 0.002D) {
+			next = this.targetZoom;
+			this.zoomAnimating = false;
 		}
+		this.zoom = next;
+		double scale = this.chunkScale();
+		this.centerChunkX = this.zoomAnchorChunkX - ((this.zoomAnchorScreenX - (this.x + (this.width / 2.0D))) / scale);
+		this.centerChunkZ = this.zoomAnchorChunkZ - ((this.zoomAnchorScreenY - (this.y + (this.height / 2.0D))) / scale);
+	}
+
+	// Keeps the camera centre near explored land so the map can never be panned into an empty void.
+	private void clampCamera() {
+		if (!this.hasDiscoveredBounds) {
+			return;
+		}
+		this.centerChunkX = clamp(this.centerChunkX, this.discoveredBounds[0] - PAN_MARGIN_CHUNKS, this.discoveredBounds[1] + 1 + PAN_MARGIN_CHUNKS);
+		this.centerChunkZ = clamp(this.centerChunkZ, this.discoveredBounds[2] - PAN_MARGIN_CHUNKS, this.discoveredBounds[3] + 1 + PAN_MARGIN_CHUNKS);
 	}
 
 	private void renderChunkTerrain(
@@ -324,6 +547,8 @@ public final class ChunkMapWidget {
 
 	private void drawZoneHighlight(
 			GuiGraphicsExtractor graphics,
+			Font font,
+			boolean drawLabels,
 			ClientTacticsDataStore.WorldContext worldContext,
 			int chunkX,
 			int chunkZ,
@@ -339,17 +564,24 @@ public final class ChunkMapWidget {
 		graphics.fill(left, top, right, bottom, regionColor.overlayArgb());
 
 		int outlineColor = (regionColor.swatchArgb() & 0x00FFFFFF) | ZONE_OUTLINE_ALPHA_MASK;
-		if (this.dataStore.getRegionColor(worldContext, chunkX, chunkZ - 1) != regionColor) {
+		boolean northEdge = this.dataStore.getRegionColor(worldContext, chunkX, chunkZ - 1) != regionColor;
+		boolean westEdge = this.dataStore.getRegionColor(worldContext, chunkX - 1, chunkZ) != regionColor;
+		if (northEdge) {
 			graphics.fill(left, top, right, top + 1, outlineColor);
 		}
 		if (this.dataStore.getRegionColor(worldContext, chunkX, chunkZ + 1) != regionColor) {
 			graphics.fill(left, bottom - 1, right, bottom, outlineColor);
 		}
-		if (this.dataStore.getRegionColor(worldContext, chunkX - 1, chunkZ) != regionColor) {
+		if (westEdge) {
 			graphics.fill(left, top, left + 1, bottom, outlineColor);
 		}
 		if (this.dataStore.getRegionColor(worldContext, chunkX + 1, chunkZ) != regionColor) {
 			graphics.fill(right - 1, top, right, bottom, outlineColor);
+		}
+
+		// Colour-blind aid: the zone's palette number is stamped on each region's north-west corner chunk.
+		if (drawLabels && northEdge && westEdge) {
+			graphics.text(font, regionColor.hotkeyLabel(), left + 3, top + 2, 0xFFFFFFFF, true);
 		}
 	}
 
@@ -371,17 +603,11 @@ public final class ChunkMapWidget {
 		return new ChunkPos((int) Math.floor(this.screenToChunkX(mouseX)), (int) Math.floor(this.screenToChunkZ(mouseY)));
 	}
 
-	private VisibleChunkFrame computeVisibleFrame(double viewportCenterX, double viewportCenterY, double chunkScale) {
-		double minChunkX = this.centerChunkX + ((this.x - viewportCenterX) / chunkScale);
-		double maxChunkX = this.centerChunkX + (((this.x + this.width) - viewportCenterX) / chunkScale);
-		double minChunkZ = this.centerChunkZ + ((this.y - viewportCenterY) / chunkScale);
-		double maxChunkZ = this.centerChunkZ + (((this.y + this.height) - viewportCenterY) / chunkScale);
-
-		return new VisibleChunkFrame(
-				(int) Math.floor(Math.min(minChunkX, maxChunkX)) - 1,
-				(int) Math.ceil(Math.max(minChunkX, maxChunkX)) + 1,
-				(int) Math.floor(Math.min(minChunkZ, maxChunkZ)) - 1,
-				(int) Math.ceil(Math.max(minChunkZ, maxChunkZ)) + 1);
+	// Selection drags that leave the map stick to its edge instead of freezing at the last in-map chunk.
+	private ChunkPos chunkAtClamped(double mouseX, double mouseY) {
+		double clampedX = clamp(mouseX, this.x, this.x + this.width - 1);
+		double clampedY = clamp(mouseY, this.y, this.y + this.height - 1);
+		return new ChunkPos((int) Math.floor(this.screenToChunkX(clampedX)), (int) Math.floor(this.screenToChunkZ(clampedY)));
 	}
 
 	// Edges are rounded from exact positions so they always match chunkAt(); below 1px per chunk some chunks
@@ -395,9 +621,17 @@ public final class ChunkMapWidget {
 		return edges;
 	}
 
-	private double distanceToCameraSq(ChunkPos chunkPos) {
-		double dx = (chunkPos.x() + 0.5D) - this.centerChunkX;
-		double dz = (chunkPos.z() + 0.5D) - this.centerChunkZ;
+	private int chunkToScreenX(int chunkX) {
+		return (int) Math.round(this.x + (this.width / 2.0D) + ((chunkX - this.centerChunkX) * this.chunkScale()));
+	}
+
+	private int chunkToScreenZ(int chunkZ) {
+		return (int) Math.round(this.y + (this.height / 2.0D) + ((chunkZ - this.centerChunkZ) * this.chunkScale()));
+	}
+
+	private double distanceToCameraSq(long chunkKey) {
+		double dx = (ChunkPos.getX(chunkKey) + 0.5D) - this.centerChunkX;
+		double dz = (ChunkPos.getZ(chunkKey) + 0.5D) - this.centerChunkZ;
 		return (dx * dx) + (dz * dz);
 	}
 
@@ -421,8 +655,5 @@ public final class ChunkMapWidget {
 
 	private static double clamp(double value, double min, double max) {
 		return Math.max(min, Math.min(max, value));
-	}
-
-	private record VisibleChunkFrame(int minChunkX, int maxChunkX, int minChunkZ, int maxChunkZ) {
 	}
 }

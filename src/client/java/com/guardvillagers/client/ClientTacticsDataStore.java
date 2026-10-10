@@ -12,6 +12,8 @@ import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.longs.Long2IntMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
+import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
@@ -94,6 +96,66 @@ public final class ClientTacticsDataStore {
 			}
 		}
 		return visibleChunks;
+	}
+
+	/**
+	 * Allocation-free variant of {@link #discoveredChunksInBounds}: clears {@code out} and fills it with packed
+	 * chunk keys. Used by the map every frame.
+	 */
+	public void collectDiscoveredInBounds(WorldContext context, int minChunkX, int maxChunkX, int minChunkZ, int maxChunkZ, LongArrayList out) {
+		out.clear();
+		DimensionData dimensionData = this.dimension(context);
+		for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+			IntOpenHashSet zValues = dimensionData.discoveredByChunkX.get(chunkX);
+			if (zValues == null || zValues.isEmpty()) {
+				continue;
+			}
+			var iterator = zValues.iterator();
+			while (iterator.hasNext()) {
+				int chunkZ = iterator.nextInt();
+				if (chunkZ >= minChunkZ && chunkZ <= maxChunkZ) {
+					out.add(ChunkPos.pack(chunkX, chunkZ));
+				}
+			}
+		}
+	}
+
+	/**
+	 * Writes the discovered-chunk bounding box as {minX, maxX, minZ, maxZ} into {@code out}.
+	 * Returns false when nothing has been discovered. Bounds are recomputed only after discovery changes.
+	 */
+	public boolean discoveredBounds(WorldContext context, int[] out) {
+		DimensionData dimensionData = this.dimension(context);
+		if (dimensionData.discovered.isEmpty()) {
+			return false;
+		}
+		if (dimensionData.boundsDirty) {
+			int minX = Integer.MAX_VALUE;
+			int maxX = Integer.MIN_VALUE;
+			int minZ = Integer.MAX_VALUE;
+			int maxZ = Integer.MIN_VALUE;
+			LongIterator iterator = dimensionData.discovered.iterator();
+			while (iterator.hasNext()) {
+				long key = iterator.nextLong();
+				int x = ChunkPos.getX(key);
+				int z = ChunkPos.getZ(key);
+				minX = Math.min(minX, x);
+				maxX = Math.max(maxX, x);
+				minZ = Math.min(minZ, z);
+				maxZ = Math.max(maxZ, z);
+			}
+			dimensionData.bounds[0] = minX;
+			dimensionData.bounds[1] = maxX;
+			dimensionData.bounds[2] = minZ;
+			dimensionData.bounds[3] = maxZ;
+			dimensionData.boundsDirty = false;
+		}
+		System.arraycopy(dimensionData.bounds, 0, out, 0, 4);
+		return true;
+	}
+
+	public int discoveredCount(WorldContext context) {
+		return this.dimension(context).discovered.size();
 	}
 
 	public RegionColor getRegionColor(WorldContext context, int chunkX, int chunkZ) {
@@ -254,6 +316,7 @@ public final class ClientTacticsDataStore {
 		int chunkX = ChunkPos.getX(chunkKey);
 		int chunkZ = ChunkPos.getZ(chunkKey);
 		dimensionData.discoveredByChunkX.computeIfAbsent(chunkX, ignored -> new IntOpenHashSet()).add(chunkZ);
+		dimensionData.boundsDirty = true;
 	}
 
 	private void unindexDiscoveredChunk(DimensionData dimensionData, long chunkKey) {
@@ -264,6 +327,7 @@ public final class ClientTacticsDataStore {
 			return;
 		}
 		zValues.remove(chunkZ);
+		dimensionData.boundsDirty = true;
 		if (zValues.isEmpty()) {
 			dimensionData.discoveredByChunkX.remove(chunkX);
 		}
@@ -561,6 +625,8 @@ public final class ClientTacticsDataStore {
 		private final Long2IntOpenHashMap regionByChunk = new Long2IntOpenHashMap();
 		private final Int2ObjectOpenHashMap<IntOpenHashSet> discoveredByChunkX = new Int2ObjectOpenHashMap<>();
 		private final ArrayDeque<Long> discoveryOrder = new ArrayDeque<>();
+		private final int[] bounds = new int[4];
+		private boolean boundsDirty = true;
 
 		private DimensionData() {
 			this.regionByChunk.defaultReturnValue(0);
