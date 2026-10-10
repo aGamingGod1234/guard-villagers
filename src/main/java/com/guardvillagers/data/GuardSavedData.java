@@ -2,17 +2,28 @@ package com.guardvillagers.data;
 
 import com.guardvillagers.GuardVillagersMod;
 import java.io.IOException;
+import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.world.level.Level;
-import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.storage.LevelResource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public final class GuardSavedData {
-	private static final List<String> GLOBAL_STATES = List.of("debug", "diplomacy", "reputation", "tactics", "upgrades");
+	private static final Logger LOGGER = LoggerFactory.getLogger(GuardVillagersMod.MOD_ID + "/data");
+	static final List<String> GLOBAL_STATES = List.of("debug", "diplomacy", "reputation", "tactics", "upgrades");
+	static final String VILLAGE_STATE = "village_state";
+	private static final String LEGACY_PREFIX = GuardVillagersMod.MOD_ID + "_";
+	/** Pre-26.1 vanilla dimension folders that {@code DimensionStorageFileFix} relocates (and only deletes when empty). */
+	private static final Map<String, String> LEGACY_VANILLA_DIMENSIONS = Map.of(
+		"DIM-1", "dimensions/minecraft/the_nether",
+		"DIM1", "dimensions/minecraft/the_end"
+	);
 
 	private GuardSavedData() {
 	}
@@ -21,30 +32,88 @@ public final class GuardSavedData {
 		return Identifier.fromNamespaceAndPath(GuardVillagersMod.MOD_ID, path);
 	}
 
-	/**
-	 * Before 26.1 every state lived in the overworld's data folder as {@code data/guardvillagers_<name>.dat}.
-	 * Vanilla's world upgrade leaves unknown files where they are, so move ours to the namespaced paths
-	 * that 26.1 reads. Must run before any state is first loaded.
-	 */
 	public static void migrateLegacyFiles(MinecraftServer server) {
-		Path legacyDataDir = server.getWorldPath(LevelResource.DATA);
+		migrateLegacyFiles(server.getWorldPath(LevelResource.ROOT));
+	}
+
+	/**
+	 * Before 26.1 every global state lived in the overworld's data folder as {@code data/guardvillagers_<name>.dat},
+	 * and the per-level village state sat next to each dimension's vanilla data. 26.1 reads global data from
+	 * {@code data/<namespace>/<path>.dat} and per-level data from {@code dimensions/<ns>/<dim>/data/<namespace>/<path>.dat}.
+	 * Vanilla's {@code DimensionStorageFileFix} only moves vanilla files and leaves ours (and therefore the
+	 * non-empty {@code DIM-1}/{@code DIM1} folders) behind, so relocate them here. Runs on SERVER_STARTING,
+	 * before any level or saved data is loaded; it is idempotent and cheap when there is nothing to move.
+	 */
+	public static void migrateLegacyFiles(Path worldRoot) {
+		Path rootData = worldRoot.resolve("data");
 		for (String name : GLOBAL_STATES) {
-			moveIfPresent(legacyDataDir.resolve("guardvillagers_" + name + ".dat"), id(name).withSuffix(".dat").resolveAgainst(legacyDataDir));
+			moveIfPresent(rootData.resolve(legacyFileName(name)), id(name).withSuffix(".dat").resolveAgainst(rootData));
 		}
-		Path overworldDataDir = DimensionType.getStorageFolder(Level.OVERWORLD, server.getWorldPath(LevelResource.ROOT)).resolve("data");
-		moveIfPresent(legacyDataDir.resolve("guardvillagers_village_state.dat"), id("village_state").withSuffix(".dat").resolveAgainst(overworldDataDir));
+
+		// The old overworld storage was the root data folder.
+		moveVillageState(rootData, worldRoot.resolve("dimensions/minecraft/overworld/data"));
+		for (Map.Entry<String, String> entry : LEGACY_VANILLA_DIMENSIONS.entrySet()) {
+			Path legacyDimension = worldRoot.resolve(entry.getKey());
+			Path legacyData = legacyDimension.resolve("data");
+			moveVillageState(legacyData, worldRoot.resolve(entry.getValue()).resolve("data"));
+			deleteIfEmptyDirectory(legacyData);
+			deleteIfEmptyDirectory(legacyDimension);
+		}
+
+		// Datapack dimensions already lived under dimensions/<ns>/<path>/; only the file name changed.
+		Path dimensionsRoot = worldRoot.resolve("dimensions");
+		if (!Files.isDirectory(dimensionsRoot)) {
+			return;
+		}
+		try (DirectoryStream<Path> namespaces = Files.newDirectoryStream(dimensionsRoot, Files::isDirectory)) {
+			for (Path namespace : namespaces) {
+				try (DirectoryStream<Path> dimensions = Files.newDirectoryStream(namespace, Files::isDirectory)) {
+					for (Path dimension : dimensions) {
+						Path data = dimension.resolve("data");
+						moveVillageState(data, data);
+					}
+				}
+			}
+		} catch (IOException e) {
+			LOGGER.error("Failed to scan {} for legacy guard village data", dimensionsRoot, e);
+		}
+	}
+
+	static String legacyFileName(String name) {
+		return LEGACY_PREFIX + name + ".dat";
+	}
+
+	private static void moveVillageState(Path legacyDataDir, Path targetDataDir) {
+		moveIfPresent(legacyDataDir.resolve(legacyFileName(VILLAGE_STATE)), id(VILLAGE_STATE).withSuffix(".dat").resolveAgainst(targetDataDir));
 	}
 
 	private static void moveIfPresent(Path legacy, Path target) {
-		if (!Files.isRegularFile(legacy) || Files.exists(target)) {
+		if (!Files.isRegularFile(legacy)) {
+			return;
+		}
+		if (Files.exists(target)) {
+			LOGGER.warn("Both legacy guard data {} and migrated {} exist; keeping the migrated file", legacy, target);
 			return;
 		}
 		try {
 			Files.createDirectories(target.getParent());
 			Files.move(legacy, target);
-			GuardVillagersMod.LOGGER.info("Migrated legacy guard data {} -> {}", legacy.getFileName(), target);
+			LOGGER.info("Migrated legacy guard data {} -> {}", legacy, target);
 		} catch (IOException e) {
-			GuardVillagersMod.LOGGER.error("Failed to migrate legacy guard data {}", legacy, e);
+			LOGGER.error("Failed to migrate legacy guard data {}", legacy, e);
+		}
+	}
+
+	private static void deleteIfEmptyDirectory(Path directory) {
+		if (!Files.isDirectory(directory)) {
+			return;
+		}
+		try {
+			Files.delete(directory);
+		} catch (DirectoryNotEmptyException ignored) {
+			// Something else still lives there; leave it alone like vanilla does.
+		} catch (IOException e) {
+			LOGGER.warn("Could not remove empty legacy folder {}", directory, e);
 		}
 	}
 }

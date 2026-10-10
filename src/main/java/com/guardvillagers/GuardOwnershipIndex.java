@@ -1,20 +1,29 @@
 package com.guardvillagers;
 
+import com.guardvillagers.data.GuardOwnershipState;
 import com.guardvillagers.entity.GuardEntity;
-import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.entity.Entity;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.Entity;
 
+/**
+ * Owner -> guard lookup without world scans.
+ *
+ * <ul>
+ *   <li>In memory: weak references to loaded guards, used to command and alert them.</li>
+ *   <li>Persisted ({@link GuardOwnershipState}): every owned guard including unloaded ones, used for limits and counts.</li>
+ * </ul>
+ * GuardEntity calls {@link #track} on load, on owner change and periodically while ticking, and {@link #untrack}
+ * when it is destroyed (killed or discarded, not chunk unloads or dimension changes).
+ */
 public final class GuardOwnershipIndex {
-	private static final int CLEANUP_INTERVAL_TICKS = 200;
-	private static volatile long lastCleanupTick = Long.MIN_VALUE;
-
 	private static final ConcurrentHashMap<UUID, Set<UUID>> OWNER_TO_GUARDS = new ConcurrentHashMap<>();
 	private static final ConcurrentHashMap<UUID, UUID> GUARD_TO_OWNER = new ConcurrentHashMap<>();
 	private static final ConcurrentHashMap<UUID, WeakReference<GuardEntity>> GUARD_REFERENCES = new ConcurrentHashMap<>();
@@ -26,16 +35,15 @@ public final class GuardOwnershipIndex {
 		if (guard == null) {
 			return;
 		}
-
 		UUID guardId = guard.getUUID();
-		if (guard.isRemoved()) {
-			removeGuard(guardId);
-			return;
-		}
-
 		UUID ownerUuid = guard.getOwnerUuid();
 		if (ownerUuid == null) {
-			removeGuard(guardId);
+			removeLoaded(guardId);
+			persisted(guard).ifPresent(state -> state.remove(guardId));
+			return;
+		}
+		if (guard.isRemoved()) {
+			removeLoaded(guardId);
 			return;
 		}
 
@@ -43,69 +51,84 @@ public final class GuardOwnershipIndex {
 		if (previousOwner != null && !previousOwner.equals(ownerUuid)) {
 			removeFromOwner(previousOwner, guardId);
 		}
-
 		OWNER_TO_GUARDS.computeIfAbsent(ownerUuid, ignored -> ConcurrentHashMap.newKeySet()).add(guardId);
-		GUARD_REFERENCES.put(guardId, new WeakReference<>(guard));
-		maybeCleanup(guard.level().getGameTime());
+		WeakReference<GuardEntity> reference = GUARD_REFERENCES.get(guardId);
+		if (reference == null || reference.get() != guard) {
+			GUARD_REFERENCES.put(guardId, new WeakReference<>(guard));
+		}
+		persisted(guard).ifPresent(state -> state.record(guardId, ownerUuid, guard.level().getGameTime()));
 	}
 
 	public static void untrack(GuardEntity guard) {
 		if (guard == null) {
 			return;
 		}
-		removeGuard(guard.getUUID());
+		removeLoaded(guard.getUUID());
+		persisted(guard).ifPresent(state -> state.remove(guard.getUUID()));
 	}
 
+	/** Loaded, living-or-not-yet-removed guards owned by {@code ownerUuid}. Never scans worlds. */
 	public static List<GuardEntity> getOwnedGuards(MinecraftServer server, UUID ownerUuid) {
 		if (server == null || ownerUuid == null) {
 			return List.of();
 		}
-
-		return resolveIndexedGuards(server, ownerUuid);
-	}
-
-	public static int countOwnedGuards(MinecraftServer server, UUID ownerUuid) {
-		if (server == null || ownerUuid == null) {
-			return 0;
-		}
-
-		Set<UUID> indexedIds = OWNER_TO_GUARDS.get(ownerUuid);
-		return indexedIds == null ? 0 : resolveIndexedGuards(server, ownerUuid).size();
-	}
-
-	private static List<GuardEntity> resolveIndexedGuards(MinecraftServer server, UUID ownerUuid) {
 		Set<UUID> indexedIds = OWNER_TO_GUARDS.get(ownerUuid);
 		if (indexedIds == null || indexedIds.isEmpty()) {
 			return List.of();
 		}
 
 		List<GuardEntity> resolved = new ArrayList<>(indexedIds.size());
-		List<UUID> staleIds = new ArrayList<>();
 		for (UUID guardId : List.copyOf(indexedIds)) {
-			GuardEntity guard = resolveGuard(server, guardId);
+			GuardEntity guard = resolveLoadedGuard(server, guardId);
 			if (guard == null) {
 				continue;
 			}
-			if (guard.isRemoved() || !ownerUuid.equals(guard.getOwnerUuid())) {
-				staleIds.add(guardId);
+			if (!ownerUuid.equals(guard.getOwnerUuid())) {
+				removeLoaded(guardId);
 				continue;
 			}
 			resolved.add(guard);
 		}
-
-		for (UUID staleId : staleIds) {
-			removeGuard(staleId);
-		}
 		return resolved;
 	}
 
-	private static GuardEntity resolveGuard(MinecraftServer server, UUID guardId) {
+	/** Every guard owned by {@code ownerUuid}, loaded or not. This is what the personal guard limit is checked against. */
+	public static int countOwnedGuards(MinecraftServer server, UUID ownerUuid) {
+		if (server == null || ownerUuid == null) {
+			return 0;
+		}
+		GuardOwnershipState state = state(server);
+		int persisted = state.countOwned(ownerUuid, server.overworld().getGameTime());
+		// Loaded guards always have a fresh row; the max only matters if the state was reset under us.
+		return Math.max(persisted, getOwnedGuards(server, ownerUuid).size());
+	}
+
+	public static void clearSessionState() {
+		OWNER_TO_GUARDS.clear();
+		GUARD_TO_OWNER.clear();
+		GUARD_REFERENCES.clear();
+	}
+
+	private static GuardOwnershipState state(MinecraftServer server) {
+		return server.getDataStorage().computeIfAbsent(GuardOwnershipState.TYPE);
+	}
+
+	private static Optional<GuardOwnershipState> persisted(GuardEntity guard) {
+		return guard.level() instanceof ServerLevel serverLevel
+				? Optional.of(state(serverLevel.getServer()))
+				: Optional.empty();
+	}
+
+	/**
+	 * Resolves through the cached reference, then by UUID in each level (a hash lookup per level, not a scan).
+	 * Guards in unloaded chunks resolve to {@code null} but keep their index entry for when they load again.
+	 */
+	private static GuardEntity resolveLoadedGuard(MinecraftServer server, UUID guardId) {
 		WeakReference<GuardEntity> reference = GUARD_REFERENCES.get(guardId);
 		GuardEntity cached = reference == null ? null : reference.get();
 		if (cached != null && !cached.isRemoved()) {
 			return cached;
 		}
-
 		for (ServerLevel world : server.getAllLevels()) {
 			Entity entity = world.getEntity(guardId);
 			if (entity instanceof GuardEntity guard && !guard.isRemoved()) {
@@ -113,33 +136,13 @@ public final class GuardOwnershipIndex {
 				return guard;
 			}
 		}
+		if (cached == null && reference != null) {
+			GUARD_REFERENCES.remove(guardId, reference);
+		}
 		return null;
 	}
 
-	private static void maybeCleanup(long worldTime) {
-		if (lastCleanupTick != Long.MIN_VALUE && worldTime - lastCleanupTick < CLEANUP_INTERVAL_TICKS) {
-			return;
-		}
-		lastCleanupTick = worldTime;
-
-		for (UUID guardId : List.copyOf(GUARD_TO_OWNER.keySet())) {
-			WeakReference<GuardEntity> reference = GUARD_REFERENCES.get(guardId);
-			GuardEntity guard = reference == null ? null : reference.get();
-			if (guard == null) {
-				continue;
-			}
-			if (guard.isRemoved()) {
-				removeGuard(guardId);
-				continue;
-			}
-			UUID indexedOwner = GUARD_TO_OWNER.get(guardId);
-			if (guard.getOwnerUuid() == null || !guard.getOwnerUuid().equals(indexedOwner)) {
-				removeGuard(guardId);
-			}
-		}
-	}
-
-	private static void removeGuard(UUID guardId) {
+	private static void removeLoaded(UUID guardId) {
 		UUID ownerUuid = GUARD_TO_OWNER.remove(guardId);
 		if (ownerUuid != null) {
 			removeFromOwner(ownerUuid, guardId);

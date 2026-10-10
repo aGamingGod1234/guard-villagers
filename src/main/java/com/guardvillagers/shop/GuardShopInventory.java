@@ -1,9 +1,10 @@
 package com.guardvillagers.shop;
 
 import com.guardvillagers.GuardEconomy;
+import com.guardvillagers.GuardHiring;
 import com.guardvillagers.GuardPlayerUpgrades;
+import com.guardvillagers.GuardSecurityLimits;
 import com.guardvillagers.GuardVillagersMod;
-import com.guardvillagers.GuardVillagersMod.PurchaseBatchResult;
 import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.ChatFormatting;
@@ -57,89 +58,71 @@ public class GuardShopInventory extends SimpleContainer {
 	}
 
 	private void buyGuard(boolean bulkPurchase) {
-		int cost = GuardVillagersMod.getAdjustedGuardCost(this.player);
-		int requested;
+		int cost = GuardHiring.getAdjustedGuardCost(this.player);
+		int requested = 1;
 		if (bulkPurchase) {
-			if (this.player.getAbilities().instabuild) {
-				requested = 64;
-			} else {
-				requested = Math.max(1, GuardEconomy.countEmeraldBlocks(this.player.getInventory()) / Math.max(1, cost));
-			}
-		} else {
-			requested = 1;
+			requested = this.player.getAbilities().instabuild
+				? GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER
+				: Math.max(1, GuardEconomy.countEmeraldBlocks(this.player.getInventory()) / cost);
 		}
-		PurchaseBatchResult result = GuardVillagersMod.purchaseGuards(this.player, requested);
-		switch (result.result()) {
-			case SUCCESS -> {
-				if (result.spawnedCount() == 1 && !result.guardNames().isEmpty()) {
-					this.player.sendOverlayMessage(Component.literal(result.guardNames().getFirst() + " hired."));
-				} else {
-					this.player.sendOverlayMessage(Component.literal("Guards hired: " + result.spawnedCount() + "."));
-				}
-			}
-			case NOT_TRUSTED -> this.player.sendOverlayMessage(Component.literal("Village trust is too low to hire guards."));
-			case LIMIT_REACHED -> this.player.sendOverlayMessage(Component.literal("Personal guard limit reached."));
-			case INSUFFICIENT_FUNDS -> this.player.sendOverlayMessage(Component.literal("Need " + cost + " emerald block(s) to hire a guard."));
-			case SPAWN_FAILED -> this.player.sendOverlayMessage(Component.literal("Could not find space to spawn a guard. Move to open ground."));
-			case INTERNAL_ERROR -> this.player.sendOverlayMessage(Component.literal("Guard purchase failed due to an internal error. Check logs."));
-		}
+		GuardHiring.BatchResult result = GuardHiring.hire(this.player, requested);
+		Component message = switch (result.result()) {
+			case SUCCESS -> result.spawnedCount() == 1 && !result.guardNames().isEmpty()
+				? Component.translatable("message.guardvillagers.shop.hired_one", result.guardNames().getFirst())
+				: Component.translatable("message.guardvillagers.shop.hired_many", result.spawnedCount());
+			case NOT_TRUSTED -> Component.translatable("message.guardvillagers.shop.not_trusted");
+			case LIMIT_REACHED -> Component.translatable("message.guardvillagers.shop.limit", GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER);
+			case INSUFFICIENT_FUNDS -> Component.translatable("message.guardvillagers.shop.insufficient", cost);
+			case SPAWN_FAILED -> Component.translatable("message.guardvillagers.shop.spawn_failed");
+			case INTERNAL_ERROR -> Component.translatable("message.guardvillagers.shop.error");
+		};
+		this.player.sendOverlayMessage(message);
 	}
 
 	private void upgradeArmor() {
-		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgrades(this.player);
-		if (upgrades.getArmorLevel() >= GuardPlayerUpgrades.MAX_ARMOR_LEVEL) {
-			this.player.sendOverlayMessage(Component.literal("Armor upgrades are already maxed."));
+		GuardPlayerUpgrades current = GuardVillagersMod.getUpgradesView(this.player);
+		if (current.getArmorLevel() >= GuardPlayerUpgrades.MAX_ARMOR_LEVEL) {
+			this.player.sendOverlayMessage(Component.translatable("message.guardvillagers.shop.armor.maxed"));
 			return;
 		}
-
-		int cost = upgrades.getArmorUpgradeCost();
-		if (!GuardVillagersMod.spendEmeraldBlocks(this.player, cost)) {
-			this.player.sendOverlayMessage(Component.literal("Need " + cost + " emerald blocks for armor upgrade."));
+		int cost = current.getArmorUpgradeCost();
+		if (!GuardEconomy.spendEmeraldBlocks(this.player, cost)) {
+			this.player.sendOverlayMessage(Component.translatable("message.guardvillagers.shop.armor.need", cost));
 			return;
 		}
-
-		upgrades.upgradeArmor();
-		this.player.sendOverlayMessage(Component.literal("Armor upgrade purchased."));
+		GuardVillagersMod.getUpgrades(this.player).upgradeArmor();
+		this.player.sendOverlayMessage(Component.translatable("message.guardvillagers.shop.armor.bought"));
 	}
 
 	private void upgradeWeapon() {
-		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgrades(this.player);
-		if (upgrades.getWeaponLevel() >= GuardPlayerUpgrades.MAX_WEAPON_LEVEL) {
-			this.player.sendOverlayMessage(Component.literal("Weapon upgrades are already maxed."));
+		GuardPlayerUpgrades current = GuardVillagersMod.getUpgradesView(this.player);
+		if (current.getWeaponLevel() >= GuardPlayerUpgrades.MAX_WEAPON_LEVEL) {
+			this.player.sendOverlayMessage(Component.translatable("message.guardvillagers.shop.weapon.maxed"));
 			return;
 		}
-
-		int cost = upgrades.getWeaponUpgradeCost();
-		if (!GuardVillagersMod.spendEmeraldBlocks(this.player, cost)) {
-			this.player.sendOverlayMessage(Component.literal("Need " + cost + " emerald blocks for weapon upgrade."));
+		int cost = current.getWeaponUpgradeCost();
+		if (!GuardEconomy.spendEmeraldBlocks(this.player, cost)) {
+			this.player.sendOverlayMessage(Component.translatable("message.guardvillagers.shop.weapon.need", cost));
 			return;
 		}
-
-		upgrades.upgradeWeapon();
-		this.player.sendOverlayMessage(Component.literal("Weapon upgrade purchased."));
+		GuardVillagersMod.getUpgrades(this.player).upgradeWeapon();
+		this.player.sendOverlayMessage(Component.translatable("message.guardvillagers.shop.weapon.bought"));
 	}
 
 	private void upgradeHealing() {
+		GuardPlayerUpgrades current = GuardVillagersMod.getUpgradesView(this.player);
+		if (current.getSupportLevel() >= GuardPlayerUpgrades.MAX_SUPPORT_LEVEL) {
+			this.player.sendOverlayMessage(Component.translatable("message.guardvillagers.shop.support.maxed"));
+			return;
+		}
+		int cost = current.getHealingUpgradeCost();
+		if (!GuardEconomy.spendEmeraldBlocks(this.player, cost)) {
+			this.player.sendOverlayMessage(Component.translatable("message.guardvillagers.shop.support.need", cost));
+			return;
+		}
 		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgrades(this.player);
-		if (upgrades.getSupportLevel() >= GuardPlayerUpgrades.MAX_SUPPORT_LEVEL) {
-			this.player.sendOverlayMessage(Component.literal("Support upgrades are already maxed."));
-			return;
-		}
-
-		int cost = upgrades.getHealingUpgradeCost();
-		if (!GuardVillagersMod.spendEmeraldBlocks(this.player, cost)) {
-			this.player.sendOverlayMessage(Component.literal("Need " + cost + " emerald blocks for support upgrade."));
-			return;
-		}
-
 		upgrades.unlockHealingUpgrade();
-		String message = switch (upgrades.getSupportLevel()) {
-			case 1 -> "Healing upgraded to 1 heart every 2.5 seconds.";
-			case 2 -> "Shield upgrade unlocked.";
-			case 3 -> "Healing upgraded to 1 heart every second.";
-			default -> "Support upgraded.";
-		};
-		this.player.sendOverlayMessage(Component.literal(message));
+		this.player.sendOverlayMessage(Component.translatable("message.guardvillagers.shop.support.level_" + upgrades.getSupportLevel()));
 	}
 
 	public void refresh() {
@@ -154,13 +137,14 @@ public class GuardShopInventory extends SimpleContainer {
 			this.setItem(i, this.decorativePane(i));
 		}
 
-		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgrades(this.player);
+		// Rendering must not create a saved upgrade row for players who never buy anything.
+		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgradesView(this.player);
 		boolean creativeMode = this.player.getAbilities().instabuild;
 
 		List<String> bookStats = this.buildCurrentGuardStats(upgrades);
 		this.setItem(SLOT_INFO, this.card(Items.BOOK, "Guard Villagers", ChatFormatting.GOLD, bookStats.toArray(String[]::new)));
 
-		int guardCost = GuardVillagersMod.getAdjustedGuardCost(this.player);
+		int guardCost = GuardHiring.getAdjustedGuardCost(this.player);
 		String guardCostText = creativeMode ? "Cost: Free" : "Cost: " + guardCost + " emerald block(s)";
 		this.setItem(SLOT_BUY_GUARD, this.card(
 			Items.EMERALD_BLOCK,

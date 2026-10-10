@@ -1,6 +1,12 @@
 package com.guardvillagers;
 
 import com.guardvillagers.data.GuardReputationState;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -8,27 +14,30 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.entity.raid.Raider;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 public final class GuardReputationManager {
-	private static final double TRUST_THRESHOLD = 0.50D;
-	private static final double HOSTILE_THRESHOLD = 0.25D;
+	public static final double TRUST_THRESHOLD = 0.50D;
+	public static final double HOSTILE_THRESHOLD = 0.25D;
 	private static final int LEGACY_RANGE_SPAN = 400;
 	private static final int TRADE_COOLDOWN_TICKS = 200;
 	private static final int COOLDOWN_RETENTION_TICKS = 20 * 60 * 10;
 	private static final int COOLDOWN_CLEANUP_INTERVAL_TICKS = 20 * 60;
 	public static final int DECAY_INTERVAL_TICKS = 20 * 36;
 	public static final double DECAY_STEP = 0.01D;
-	private static final double TRADE_DELTA = legacyDeltaToNormalized(1);
+	static final double TRADE_DELTA = legacyDeltaToNormalized(1);
 	private static final double VILLAGER_HARM_DELTA = legacyDeltaToNormalized(-8);
 	private static final double GUARD_HARM_DELTA = legacyDeltaToNormalized(-6);
 	private static final double RAID_DEFENSE_DELTA = legacyDeltaToNormalized(4);
 	private static final double HOSTILE_KILL_DELTA = legacyDeltaToNormalized(2);
 	private static final double RAIDER_KILL_DELTA = legacyDeltaToNormalized(4);
-	private static final Map<UUID, Long> TRADE_REPUTATION_COOLDOWN = new ConcurrentHashMap<>();
-	private static volatile long lastCooldownCleanupTick = Long.MIN_VALUE;
+	private static final Pattern REPUTATION_INPUT_PATTERN = Pattern.compile("^(?:0(?:\\.\\d{1,2})?|1(?:\\.0{1,2})?)$");
+	/** A player's first hit on a guard is forgiven if they had not hit any guard in this window... */
+	public static final int GUARD_HIT_GRACE_TICKS = 20 * 5;
+	/** ...and it dealt at most this much damage (two hearts) and the player is not already distrusted as hostile. */
+	public static final float GUARD_HIT_GRACE_MAX_DAMAGE = 4.0F;
+	private static final Map<UUID, Long> LAST_GUARD_HIT_TICK = new ConcurrentHashMap<>();
+	private static final Map<TradeKey, Long> TRADE_REPUTATION_COOLDOWN = new ConcurrentHashMap<>();
+	private static long lastCooldownCleanupTick = Long.MIN_VALUE;
 
 	private GuardReputationManager() {
 	}
@@ -37,12 +46,13 @@ public final class GuardReputationManager {
 		return server.getDataStorage().computeIfAbsent(GuardReputationState.TYPE);
 	}
 
+	/** Reputation is global per player; the position and radius are kept for API compatibility. */
 	public static double getEffectiveReputation(ServerLevel world, UUID playerUuid, BlockPos reference, int radius) {
 		return getState(world.getServer()).get(playerUuid);
 	}
 
 	public static double getEffectiveReputation(ServerPlayer player) {
-		return getEffectiveReputation(player.level(), player.getUUID(), player.blockPosition(), 64);
+		return getState(player.level().getServer()).get(player.getUUID());
 	}
 
 	public static boolean isTrustedByGuards(ServerLevel world, UUID playerUuid, BlockPos reference) {
@@ -57,8 +67,12 @@ public final class GuardReputationManager {
 		return getState(world.getServer()).get(playerUuid);
 	}
 
+	public static void setReputation(MinecraftServer server, UUID playerUuid, double value) {
+		getState(server).set(playerUuid, value);
+	}
+
 	public static void setReputation(ServerLevel world, UUID playerUuid, double value) {
-		getState(world.getServer()).set(playerUuid, value);
+		setReputation(world.getServer(), playerUuid, value);
 	}
 
 	public static void resetReputation(ServerLevel world, UUID playerUuid) {
@@ -73,16 +87,13 @@ public final class GuardReputationManager {
 		return getState(world.getServer()).add(playerUuid, delta);
 	}
 
-	public static int getAdjustedGuardCost(ServerPlayer player, int baseCost) {
-		return Math.max(1, baseCost);
-	}
-
+	/** Called once per completed villager trade (see VillagerEntityMixin). Rewarded at most every 10 s per villager. */
 	public static void recordCompletedTrade(ServerPlayer player, Villager villager) {
 		long now = player.level().getGameTime();
-		cleanupTradeCooldown(now);
-		UUID key = mix(player.getUUID(), villager.getUUID());
-		long previous = TRADE_REPUTATION_COOLDOWN.getOrDefault(key, Long.MIN_VALUE);
-		if (now - previous < TRADE_COOLDOWN_TICKS) {
+		cleanupSessionMaps(now);
+		TradeKey key = new TradeKey(player.getUUID(), villager.getUUID());
+		Long previous = TRADE_REPUTATION_COOLDOWN.get(key);
+		if (previous != null && now >= previous && now - previous < TRADE_COOLDOWN_TICKS) {
 			return;
 		}
 
@@ -94,8 +105,34 @@ public final class GuardReputationManager {
 		applyNormalizedReputationDelta(world, playerUuid, VILLAGER_HARM_DELTA);
 	}
 
-	public static void recordGuardHarm(ServerLevel world, UUID playerUuid) {
+	/**
+	 * Single entry point for "a player damaged a guard". Applies the grace rule, then the reputation penalty.
+	 *
+	 * @return {@code true} when the hit counts and guards should retaliate/rally; {@code false} when it was forgiven
+	 */
+	public static boolean onGuardHitByPlayer(ServerLevel world, UUID playerUuid, float damage) {
+		long now = world.getGameTime();
+		cleanupSessionMaps(now);
+		Long previousHit = LAST_GUARD_HIT_TICK.put(playerUuid, now);
+		double reputation = getState(world.getServer()).get(playerUuid);
+		if (isForgivableGuardHit(previousHit, now, reputation, damage)) {
+			return false;
+		}
 		applyNormalizedReputationDelta(world, playerUuid, GUARD_HARM_DELTA);
+		return true;
+	}
+
+	/**
+	 * Legacy hook without the damage amount (GuardEntity#hurtServer still calls this after rallying). Applies the
+	 * time-based part of the grace rule so an accidental first hit costs no reputation.
+	 */
+	public static void recordGuardHarm(ServerLevel world, UUID playerUuid) {
+		onGuardHitByPlayer(world, playerUuid, 0.0F);
+	}
+
+	static boolean isForgivableGuardHit(Long previousHitTick, long now, double reputation, float damage) {
+		boolean recentlyHit = previousHitTick != null && now >= previousHitTick && now - previousHitTick < GUARD_HIT_GRACE_TICKS;
+		return !recentlyHit && reputation >= HOSTILE_THRESHOLD && damage <= GUARD_HIT_GRACE_MAX_DAMAGE;
 	}
 
 	public static void recordRaidDefense(ServerLevel world, UUID playerUuid) {
@@ -117,22 +154,54 @@ public final class GuardReputationManager {
 		getState(world.getServer()).decayAll(DECAY_STEP);
 	}
 
-	private static void cleanupTradeCooldown(long worldTime) {
-		if (lastCooldownCleanupTick != Long.MIN_VALUE && worldTime - lastCooldownCleanupTick < COOLDOWN_CLEANUP_INTERVAL_TICKS) {
+	/** Drops session-only caches; called when the server stops so an integrated server does not leak them into the next world. */
+	public static void clearSessionState() {
+		TRADE_REPUTATION_COOLDOWN.clear();
+		LAST_GUARD_HIT_TICK.clear();
+		lastCooldownCleanupTick = Long.MIN_VALUE;
+	}
+
+	/**
+	 * Parses operator input for {@code /guards reputation}: {@code 0.00} to {@code 1.00} with at most two decimals.
+	 *
+	 * @return the value, or {@code null} when the input is invalid
+	 */
+	public static Double parseReputationInput(String input) {
+		if (input == null) {
+			return null;
+		}
+		String normalized = input.trim();
+		if (!REPUTATION_INPUT_PATTERN.matcher(normalized).matches()) {
+			return null;
+		}
+		BigDecimal value = new BigDecimal(normalized);
+		if (value.compareTo(BigDecimal.ZERO) < 0 || value.compareTo(BigDecimal.ONE) > 0) {
+			return null;
+		}
+		return value.setScale(2, RoundingMode.UNNECESSARY).doubleValue();
+	}
+
+	public static String formatReputation(double value) {
+		return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP).toPlainString();
+	}
+
+	private static void cleanupSessionMaps(long worldTime) {
+		// The second clause recovers if game time went backwards (e.g. /time set or a new integrated-server world).
+		if (lastCooldownCleanupTick != Long.MIN_VALUE && worldTime >= lastCooldownCleanupTick
+				&& worldTime - lastCooldownCleanupTick < COOLDOWN_CLEANUP_INTERVAL_TICKS) {
 			return;
 		}
 		lastCooldownCleanupTick = worldTime;
 		long cutoff = worldTime - COOLDOWN_RETENTION_TICKS;
-		TRADE_REPUTATION_COOLDOWN.entrySet().removeIf(entry -> entry.getValue() < cutoff);
+		TRADE_REPUTATION_COOLDOWN.entrySet().removeIf(entry -> entry.getValue() < cutoff || entry.getValue() > worldTime);
+		LAST_GUARD_HIT_TICK.entrySet().removeIf(entry -> entry.getValue() < cutoff || entry.getValue() > worldTime);
 	}
 
-	private static UUID mix(UUID a, UUID b) {
-		long msb = a.getMostSignificantBits() ^ b.getMostSignificantBits();
-		long lsb = a.getLeastSignificantBits() ^ b.getLeastSignificantBits();
-		return new UUID(msb, lsb);
-	}
-
-	private static double legacyDeltaToNormalized(int legacyDelta) {
+	static double legacyDeltaToNormalized(int legacyDelta) {
 		return legacyDelta / (double) LEGACY_RANGE_SPAN;
+	}
+
+	/** Collision-free key; the old XOR of both UUIDs could merge unrelated player/villager pairs. */
+	private record TradeKey(UUID player, UUID villager) {
 	}
 }
