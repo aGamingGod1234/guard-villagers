@@ -7,6 +7,9 @@ import com.guardvillagers.GuardReputationManager;
 import com.guardvillagers.GuardSecurityLimits;
 import com.guardvillagers.GuardTacticsManager;
 import com.guardvillagers.GuardVillagersMod;
+import com.guardvillagers.command.commander.CommanderService;
+import com.guardvillagers.command.hierarchy.GuardHierarchy;
+import com.guardvillagers.command.order.Scope;
 import com.guardvillagers.data.GuardDiplomacyState;
 import com.guardvillagers.data.GuardTacticsState;
 import com.guardvillagers.entity.GuardEntity;
@@ -49,6 +52,7 @@ public final class GuardCommands {
 	private static final double ZONE_ASSIGN_RANGE = 96.0D;
 	/** Upper bound for one {@code groups assignmany} call; the roster never holds more owned guards than this per screen. */
 	private static final int MAX_BATCH_ASSIGN = 64;
+	private static final double APPOINT_RANGE = 8.0D;
 
 	private GuardCommands() {
 	}
@@ -101,6 +105,19 @@ public final class GuardCommands {
 												.executes(context -> assignMany(context)))))
 				)
 				.then(Commands.literal("count").executes(context -> count(context.getSource())))
+				// Voice-commander text path: the same interpreter, order book and acknowledgements as voice.
+				.then(Commands.literal("say")
+						.then(Commands.argument("text", StringArgumentType.greedyString())
+								.executes(context -> say(context.getSource(), StringArgumentType.getString(context, "text")))))
+				.then(Commands.literal("appoint")
+						.then(Commands.literal("commander").executes(context -> appoint(context.getSource(), true)))
+						.then(Commands.literal("captain").executes(context -> appoint(context.getSource(), false)))
+						.then(Commands.literal("auto").executes(context -> appointAuto(context.getSource()))))
+				.then(Commands.literal("commander")
+						.then(Commands.literal("auto")
+								.then(Commands.literal("on").executes(context -> commanderAuto(context.getSource(), true)))
+								.then(Commands.literal("off").executes(context -> commanderAuto(context.getSource(), false)))))
+				.then(Commands.literal("status").executes(context -> status(context.getSource())))
 				// Players your guards treat as friends: they will not be targeted, and they can ring your guards to a bell.
 				.then(Commands.literal("trust")
 						.then(Commands.literal("list").executes(context -> listTrusted(context.getSource())))
@@ -161,6 +178,7 @@ public final class GuardCommands {
 			source.sendFailure(Component.translatable("commands.guardvillagers.stay.no_group", groupName.trim()));
 			return 0;
 		}
+		CommanderService.onTypedOrder(player, typedScope(groupName));
 		Component message = groupName == null
 				? Component.translatable("commands.guardvillagers.stay", changed)
 				: Component.translatable("commands.guardvillagers.stay.group", changed, groupName.trim());
@@ -174,6 +192,7 @@ public final class GuardCommands {
 		for (GuardEntity guard : guards) {
 			guard.setHoldPosition(true);
 		}
+		CommanderService.onTypedOrder(player, Scope.ALL);
 		return reportOrders(source, guards.size(), Component.translatable("commands.guardvillagers.hold", guards.size()));
 	}
 
@@ -202,6 +221,7 @@ public final class GuardCommands {
 			source.sendFailure(Component.translatable("commands.guardvillagers.follow.no_group", groupName.trim()));
 			return 0;
 		}
+		CommanderService.onTypedOrder(player, typedScope(groupName));
 		int finalChanged = changed;
 		Component message = groupName == null
 				? Component.translatable("commands.guardvillagers.follow.all", finalChanged)
@@ -460,6 +480,79 @@ public final class GuardCommands {
 			source.sendSuccess(() -> Component.translatable("commands.guardvillagers.debug.enabled", shownRange), false);
 		}
 		return Command.SINGLE_SUCCESS;
+	}
+
+	private static Scope typedScope(String groupName) {
+		return groupName == null || groupName.isBlank() ? Scope.ALL : Scope.group(groupName.trim());
+	}
+
+	private static int say(CommandSourceStack source, String text) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		if (text.isBlank()) {
+			return 0;
+		}
+		CommanderService.hear(player, text, true);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	/** Appoints the owned guard the player looks at (8 blocks) as commander or captain of its group. */
+	private static int appoint(CommandSourceStack source, boolean commander) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		GuardEntity guard = lookedAtOwnedGuard(player);
+		if (guard == null) {
+			source.sendFailure(Component.translatable("commands.guardvillagers.appoint.no_guard", (int) APPOINT_RANGE));
+			return 0;
+		}
+		GuardHierarchy.AppointResult result = commander
+				? GuardHierarchy.appointCommander(source.getServer(), player.getUUID(), guard)
+				: GuardHierarchy.appointCaptain(source.getServer(), player.getUUID(), guard);
+		String name = guard.getName().getString();
+		switch (result) {
+			case APPOINTED -> source.sendSuccess(() -> commander
+					? Component.translatable("commands.guardvillagers.appoint.commander", name)
+					: Component.translatable("commands.guardvillagers.appoint.captain", name, guard.getGroupName()), false);
+			case NO_GROUP -> {
+				source.sendFailure(Component.translatable("commands.guardvillagers.appoint.no_group", name));
+				return 0;
+			}
+			case NOT_OWNED -> {
+				source.sendFailure(Component.translatable("commands.guardvillagers.appoint.no_guard", (int) APPOINT_RANGE));
+				return 0;
+			}
+		}
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private static int appointAuto(CommandSourceStack source) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		GuardHierarchy.clearAppointments(source.getServer(), player.getUUID());
+		source.sendSuccess(() -> Component.translatable("commands.guardvillagers.appoint.auto"), false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private static int commanderAuto(CommandSourceStack source, boolean enabled) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		CommanderService.setAutoCommand(source.getServer(), player.getUUID(), enabled);
+		source.sendSuccess(() -> Component.translatable(enabled
+				? "commands.guardvillagers.commander.auto_on" : "commands.guardvillagers.commander.auto_off"), false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private static int status(CommandSourceStack source) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		String line = CommanderService.statusLine(player);
+		source.sendSuccess(() -> Component.literal(line), false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private static GuardEntity lookedAtOwnedGuard(ServerPlayer player) {
+		net.minecraft.world.phys.Vec3 eye = player.getEyePosition();
+		net.minecraft.world.phys.Vec3 end = eye.add(player.getViewVector(1.0F).scale(APPOINT_RANGE));
+		var hit = net.minecraft.world.entity.projectile.ProjectileUtil.getEntityHitResult(player, eye, end,
+				player.getBoundingBox().expandTowards(end.subtract(eye)).inflate(1.0D),
+				entity -> entity instanceof GuardEntity guard && guard.isAlive() && guard.isOwnedBy(player.getUUID()),
+				APPOINT_RANGE * APPOINT_RANGE);
+		return hit != null && hit.getEntity() instanceof GuardEntity guard ? guard : null;
 	}
 
 	private static int reportOrders(CommandSourceStack source, int changed, Component message) {

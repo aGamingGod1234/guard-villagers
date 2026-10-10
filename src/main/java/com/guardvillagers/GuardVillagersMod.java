@@ -106,6 +106,7 @@ public class GuardVillagersMod implements ModInitializer {
 		registerDispenserBehavior();
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> GuardCommands.register(dispatcher));
 		GuardEvents.register();
+		com.guardvillagers.command.hierarchy.CommandModule.init();
 		LOGGER.info("Guard Villagers initialized");
 	}
 
