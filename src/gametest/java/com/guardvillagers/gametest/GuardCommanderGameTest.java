@@ -515,6 +515,26 @@ public class GuardCommanderGameTest {
 		});
 	}
 
+	// ---- trust ----
+
+	/** Trust resolves online players and already-known names only; an unknown name fails instead of a remote lookup. */
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void trustResolvesWithoutRemoteLookup(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		ServerPlayer friend = GuardTestSupport.survivalPlayer(helper, CENTER + 3.5, 1, CENTER + 0.5);
+		String friendName = friend.getGameProfile().name();
+		helper.runAfterDelay(2, () -> {
+			helper.assertTrue(GuardTestSupport.runCommand(owner, "guards trust add " + friendName) == 1, "online player not trusted");
+			helper.assertTrue(GuardTestSupport.runCommand(owner, "guards trust add gvNobody" + (helper.getTick() % 1000)) == 0,
+					"an unknown offline name was resolved");
+			helper.getLevel().getServer().getPlayerList().remove(friend);
+			helper.assertTrue(GuardTestSupport.runCommand(owner, "guards trust remove " + friendName) == 1,
+					"a trusted player who went offline could not be removed by name");
+			helper.succeed();
+		});
+	}
+
 	// ---- commander intuition ----
 
 	@GameTest(structure = ARENA, environment = ENV, maxTicks = 200)

@@ -37,7 +37,6 @@ import java.util.stream.Collectors;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.EntityArgument;
-import net.minecraft.commands.arguments.GameProfileArgument;
 import net.minecraft.commands.arguments.UuidArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
@@ -131,14 +130,20 @@ public final class GuardCommands {
 				// Players your guards treat as friends: they will not be targeted, and they can ring your guards to a bell.
 				.then(Commands.literal("trust")
 						.then(Commands.literal("list").executes(context -> listTrusted(context.getSource())))
+						// A plain word, not GameProfileArgument: that falls back to a blocking Mojang lookup on the
+						// server thread for any name not in the cache, which any player could trigger at will.
 						.then(Commands.literal("add")
-								.then(Commands.argument("players", GameProfileArgument.gameProfile())
+								.then(Commands.argument("player", StringArgumentType.word())
+										.suggests((context, builder) -> net.minecraft.commands.SharedSuggestionProvider.suggest(
+												context.getSource().getOnlinePlayerNames(), builder))
 										.executes(context -> changeTrust(context.getSource(),
-												GameProfileArgument.getGameProfiles(context, "players"), true))))
+												StringArgumentType.getString(context, "player"), true))))
 						.then(Commands.literal("remove")
-								.then(Commands.argument("players", GameProfileArgument.gameProfile())
+								.then(Commands.argument("player", StringArgumentType.word())
+										.suggests((context, builder) -> net.minecraft.commands.SharedSuggestionProvider.suggest(
+												trustedNames(context.getSource()), builder))
 										.executes(context -> changeTrust(context.getSource(),
-												GameProfileArgument.getGameProfiles(context, "players"), false)))))
+												StringArgumentType.getString(context, "player"), false)))))
 				.then(Commands.literal("reputation")
 						.requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
 						.then(Commands.literal("get")
@@ -402,6 +407,54 @@ public final class GuardCommands {
 		source.sendSuccess(() -> Component.translatable("commands.guardvillagers.count", owned, loaded,
 				GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER), false);
 		return owned;
+	}
+
+	private static int changeTrust(CommandSourceStack source, String name, boolean add) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		NameAndId target = resolveTrustTarget(source.getServer(), player.getUUID(), name);
+		if (target == null) {
+			source.sendFailure(Component.translatableWithFallback("commands.guardvillagers.trust.unknown",
+					"%s is not online. Trust them while they are on, or use their UUID.", name));
+			return 0;
+		}
+		return changeTrust(source, List.of(target), add);
+	}
+
+	/**
+	 * Resolves a trust target without any network lookup: an online player by name, a UUID, or (for players already
+	 * trusted) a name the server's profile cache knows for one of their UUIDs.
+	 */
+	private static NameAndId resolveTrustTarget(MinecraftServer server, UUID owner, String name) {
+		ServerPlayer online = server.getPlayerList().getPlayerByName(name);
+		if (online != null) {
+			return online.nameAndId();
+		}
+		try {
+			UUID id = UUID.fromString(name);
+			return server.services().nameToIdCache().get(id).orElse(new NameAndId(id, name));
+		} catch (IllegalArgumentException notUuid) {
+			// Fall through to the trusted list.
+		}
+		for (UUID trusted : GuardDiplomacyManager.getWhitelist(server, owner)) {
+			// get(UUID) only reads the cache; get(String) would query Mojang on a miss.
+			NameAndId known = server.services().nameToIdCache().get(trusted).orElse(null);
+			if (known != null && known.name().equalsIgnoreCase(name)) {
+				return known;
+			}
+		}
+		return null;
+	}
+
+	private static List<String> trustedNames(CommandSourceStack source) {
+		ServerPlayer player = source.getPlayer();
+		if (player == null) {
+			return List.of();
+		}
+		List<String> names = new ArrayList<>();
+		for (UUID trusted : GuardDiplomacyManager.getWhitelist(source.getServer(), player.getUUID())) {
+			names.add(source.getServer().services().nameToIdCache().get(trusted).map(NameAndId::name).orElse(trusted.toString()));
+		}
+		return names;
 	}
 
 	private static int changeTrust(CommandSourceStack source, Collection<NameAndId> targets, boolean add) throws CommandSyntaxException {
