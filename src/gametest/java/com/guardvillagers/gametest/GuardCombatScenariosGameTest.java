@@ -105,7 +105,7 @@ public class GuardCombatScenariosGameTest {
 		List<LivingEntity> friendlies = List.of(owner, otherOwner, rivalGuard, villageGuard, villager, golem);
 		List<GuardEntity> guards = List.of(guard, rivalGuard, villageGuard);
 
-		helper.onEachTick(() -> {
+		GuardTestSupport.onEachTick(helper, () -> {
 			for (GuardEntity g : guards) {
 				LivingEntity target = g.getTarget();
 				if (target != null && (friendlies.contains(target) || guards.contains(target))) {

@@ -351,7 +351,14 @@ final class CommanderBrain {
 			}
 			int needed = Math.min(threat.need, this.roster.size()) - threat.assigned;
 			for (GuardEntity guard : this.nearestAvailable(threat, busy, true, needed)) {
-				guard.setPriorityTarget(threat.entity);
+				// Only the mob that actually hurt the owner gets the owner-directed priority order. A
+				// hostile that is merely close is a normal assignment: as a priority order it outranked
+				// the real attacker (OWNER_DAMAGED) for the order's whole lifetime once the owner was hit.
+				if (attackedOwner) {
+					guard.setPriorityTarget(threat.entity);
+				} else {
+					guard.setMainTarget(threat.entity);
+				}
 				this.assignments.put(guard.getUUID(), threat.entity.getUUID());
 				busy.add(guard);
 				threat.assigned++;

@@ -161,6 +161,21 @@ final class GuardTestSupport {
 		return helper.relativeVec(entity.position());
 	}
 
+	/**
+	 * {@link GameTestHelper#onEachTick} that stops once the test has finished. Vanilla stores per-tick
+	 * actions and {@code runAfterDelay} callbacks in one hash map keyed by lambda identity, so on the
+	 * tick a delayed {@code succeed()} fires the per-tick check may run after it, see the entities that
+	 * {@code succeed()} just discarded as dead, and turn a pass into a failure.
+	 */
+	static void onEachTick(GameTestHelper helper, Runnable action) {
+		GameTestInfo info = testInfo(helper);
+		helper.onEachTick(() -> {
+			if (!info.isDone()) {
+				action.run();
+			}
+		});
+	}
+
 	/** Runs cleanup whether the test passes or fails, so mock players never leak into later tests. */
 	static void onFinish(GameTestHelper helper, Runnable cleanup) {
 		testInfo(helper).addListener(new GameTestListener() {

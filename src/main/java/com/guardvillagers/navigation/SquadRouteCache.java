@@ -96,7 +96,8 @@ public final class SquadRouteCache {
 		}
 	}
 
-	static void clear() {
+	/** Also called when the server stops so the next world starts clean. */
+	public static void clear() {
 		synchronized (SQUAD_ROUTES) {
 			SQUAD_ROUTES.clear();
 		}

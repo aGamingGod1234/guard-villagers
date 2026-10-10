@@ -176,6 +176,16 @@ public final class GuardMeleeAttackGoal extends Goal {
 		return this.guard.getGuardNavigation().startMovingToDynamic(hold, this.speed);
 	}
 
+	/**
+	 * True for a melee guard behind the frontline that is parked inside the support band. It stands
+	 * still on purpose, so combat tracking must not count it as stuck.
+	 */
+	public static boolean holdsSupportLine(GuardEntity guard, double distanceSq) {
+		return !guard.getMainHandItem().is(Items.BOW)
+				&& guard.getEngagementRank() >= MAX_FRONTLINE_ATTACKERS
+				&& distanceSq <= SUPPORT_HOLD_DISTANCE * SUPPORT_HOLD_DISTANCE;
+	}
+
 	static boolean isRangedThreat(LivingEntity target) {
 		return target instanceof RangedAttackMob
 				|| target.getMainHandItem().is(Items.BOW)

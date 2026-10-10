@@ -43,7 +43,13 @@ public final class GuardOwnershipIndex {
 			return;
 		}
 		if (guard.isRemoved()) {
-			removeLoaded(guardId);
+			// After a dimension change the new copy (same UUID) is tracked before the old one is
+			// removed; only drop the entry if it still points at this instance.
+			WeakReference<GuardEntity> reference = GUARD_REFERENCES.get(guardId);
+			GuardEntity current = reference == null ? null : reference.get();
+			if (current == null || current == guard) {
+				removeLoaded(guardId);
+			}
 			return;
 		}
 
