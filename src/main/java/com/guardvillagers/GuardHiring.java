@@ -4,6 +4,8 @@ import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.GuardRole;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
+import java.util.function.Consumer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -148,14 +150,31 @@ public final class GuardHiring {
 		}
 
 		guard.snapTo(spawn.getX() + 0.5D, spawn.getY(), spawn.getZ() + 0.5D, player.getYRot(), 0.0F);
-		guard.setOwnerUuid(player.getUUID());
-		guard.setStaying(false);
-		guard.setFollowOverride(true);
-		guard.setRole(role);
-		guard.applyPurchasedLoadout(world, upgrades);
-		guard.setSquadLeader(false);
-		if (world.addFreshEntity(guard)) {
-			return guard;
+		return spawnOwned(world, guard, player.getUUID(), configured -> {
+			configured.setStaying(false);
+			configured.setFollowOverride(true);
+			configured.setRole(role);
+			configured.applyPurchasedLoadout(world, upgrades);
+			configured.setSquadLeader(false);
+		});
+	}
+
+	/**
+	 * Gives {@code guard} to {@code ownerId}, runs {@code configure} and adds it to the world. Returns the guard, or
+	 * {@code null} if the world refused it. Setting the owner already writes a persisted ownership row, so any way
+	 * out without a spawned guard (refusal or exception, which is rethrown) removes that row again; otherwise the
+	 * owner would lose a personal slot to a guard that does not exist.
+	 */
+	public static GuardEntity spawnOwned(ServerLevel world, GuardEntity guard, UUID ownerId, Consumer<GuardEntity> configure) {
+		try {
+			guard.setOwnerUuid(ownerId);
+			configure.accept(guard);
+			if (world.addFreshEntity(guard)) {
+				return guard;
+			}
+		} catch (RuntimeException exception) {
+			GuardOwnershipIndex.untrack(guard);
+			throw exception;
 		}
 		GuardOwnershipIndex.untrack(guard);
 		return null;
