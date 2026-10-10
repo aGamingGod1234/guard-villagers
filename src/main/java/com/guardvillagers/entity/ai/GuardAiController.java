@@ -2,6 +2,7 @@ package com.guardvillagers.entity.ai;
 
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
+import com.guardvillagers.entity.goal.GuardMeleeAttackGoal;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -66,6 +67,8 @@ public final class GuardAiController {
 	private static final double HOLD_MELEE_REACH = 3.0D;
 	private static final double HOLD_BOW_REACH = 16.0D;
 	private static final int CORNERED_FIGHT_TICKS = 100;
+	private static final double CROWD_EXCUSE_DISTANCE_SQUARED = 6.0D * 6.0D;
+	private static final int MAX_CROWD_EXCUSE_TICKS = 100;
 
 	/** Shared across all guards; entries expire so unloaded guards cannot leak. */
 	public static final GuardEngagementTracker ENGAGEMENTS = new GuardEngagementTracker(30, 4096);
@@ -85,6 +88,7 @@ public final class GuardAiController {
 	private int noSightTicks;
 	private int progressWindowTicks;
 	private int stuckWindows;
+	private int crowdExcusedTicks;
 	private Vec3 progressSamplePos;
 	private double progressSampleTargetDistance = Double.MAX_VALUE;
 	private long lastAcceptedOwnerAlertTick = Long.MIN_VALUE;
@@ -632,10 +636,19 @@ public final class GuardAiController {
 			return;
 		}
 
-		boolean crowdBlocked = this.guard.getGuardNavigation().isCrowdBlocked();
 		boolean hasSight = this.guard.getSensing().hasLineOfSight(target);
 		double distanceSq = this.guard.distanceToSqr(target);
 		boolean moving = this.guard.getNavigation().isInProgress();
+		// A crowd only excuses a stall next to the fight, and covers lost sight only for a while: a
+		// squad clumped against a wall in front of a target it could not reach used to keep that
+		// target forever, because the jam reset the sight timer and counted as holding position.
+		boolean crowdBlocked = distanceSq <= CROWD_EXCUSE_DISTANCE_SQUARED
+				&& this.guard.getGuardNavigation().isCrowdBlocked();
+		if (!crowdBlocked || hasSight) {
+			this.crowdExcusedTicks = 0;
+		} else {
+			crowdBlocked = ++this.crowdExcusedTicks <= MAX_CROWD_EXCUSE_TICKS;
+		}
 
 		if (hasSight || crowdBlocked) {
 			this.noSightTicks = 0;
@@ -646,6 +659,7 @@ public final class GuardAiController {
 
 		boolean holdingPosition = distanceSq <= CLOSE_COMBAT_DISTANCE_SQUARED
 				|| (hasSight && this.guard.getMainHandItem().is(Items.BOW) && distanceSq <= BOW_HOLD_DISTANCE_SQUARED)
+				|| (hasSight && GuardMeleeAttackGoal.holdsSupportLine(this.guard, distanceSq))
 				|| crowdBlocked;
 		if (holdingPosition || this.progressSamplePos == null) {
 			this.startProgressWindow(distanceSq);
@@ -676,6 +690,7 @@ public final class GuardAiController {
 
 	private void resetCombatTracking() {
 		this.noSightTicks = 0;
+		this.crowdExcusedTicks = 0;
 		this.progressWindowTicks = 0;
 		this.stuckWindows = 0;
 		this.progressSamplePos = null;
@@ -788,7 +803,10 @@ public final class GuardAiController {
 	 * attack), or within {@link #STAY_COMBAT_LEASH} of the stay point while staying.
 	 */
 	private boolean isTargetStillTrackable(LivingEntity target, boolean ownerDirected) {
+		// attackable()/canBeSeenAsEnemy(): owner alerts used to lock guards onto armor stands,
+		// invulnerable mobs and invisible-to-all entities they can never damage.
 		if (target == null || !target.isAlive() || target.isRemoved() || target.level() != this.guard.level()
+				|| !target.attackable() || !target.canBeSeenAsEnemy()
 				|| this.guard.isAlly(target) || !this.guard.canTargetWithinZone(target.blockPosition())) {
 			return false;
 		}
