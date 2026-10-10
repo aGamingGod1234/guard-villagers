@@ -10,8 +10,9 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-import net.fabricmc.fabric.api.client.rendering.v1.EntityModelLayerRegistry;
-import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.ModelLayerRegistry;
+import net.minecraft.client.renderer.entity.EntityRenderers;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.MenuScreens;
 
 public class GuardVillagersClient implements ClientModInitializer {
@@ -25,11 +26,11 @@ public class GuardVillagersClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		ClientPlayNetworking.registerGlobalReceiver(GuardRosterSyncPayload.ID, (payload, context) ->
 			context.client().execute(() -> {
-				MinecraftClient client = context.client();
-				if (client.world == null) {
+				Minecraft client = context.client();
+				if (client.level == null) {
 					return;
 				}
-				ClientTacticsDataStore.WorldContext worldContext = ClientTacticsDataStore.resolveContext(client, client.world);
+				ClientTacticsDataStore.WorldContext worldContext = ClientTacticsDataStore.resolveContext(client, client.level);
 				ClientGuardRosterStore.getInstance().applyPayload(worldContext, payload);
 				ClientTacticsDataStore.getInstance().replaceGroupNames(worldContext, payload.groupNames());
 			})
@@ -43,28 +44,28 @@ public class GuardVillagersClient implements ClientModInitializer {
 			})
 		);
 		ClientPlayNetworking.registerGlobalReceiver(GuardDebugDataPayload.ID, (payload, context) ->
-			context.client().execute(() -> ClientGuardDebugData.applyPayload(payload, context.client().world))
+			context.client().execute(() -> ClientGuardDebugData.applyPayload(payload, context.client().level))
 		);
 
-		EntityModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_LAYER, GuardEntityModel::getTexturedModelData);
-		EntityModelLayerRegistry.registerModelLayer(
+		ModelLayerRegistry.registerModelLayer(GuardEntityModel.GUARD_LAYER, GuardEntityModel::getTexturedModelData);
+		ModelLayerRegistry.registerModelLayer(
 				GuardEntityModel.GUARD_BABY_LAYER,
 				GuardEntityModel::getTexturedModelData);
-		EntityModelLayerRegistry.registerModelLayer(
+		ModelLayerRegistry.registerModelLayer(
 				GuardEntityModel.GUARD_CLOTHING_LAYER,
 				GuardEntityModel::getClothingTexturedModelData);
-		EntityModelLayerRegistry.registerModelLayer(
+		ModelLayerRegistry.registerModelLayer(
 				GuardEntityModel.GUARD_CLOTHING_BABY_LAYER,
 				GuardEntityModel::getClothingTexturedModelData);
-		EntityRendererRegistry.register(GuardVillagersMod.GUARD_ENTITY_TYPE, GuardEntityRenderer::new);
+		EntityRenderers.register(GuardVillagersMod.GUARD_ENTITY_TYPE, GuardEntityRenderer::new);
 		MenuScreens.register(GuardVillagersMod.GUARD_TACTICS_SCREEN_HANDLER, GuardTacticsScreen::new);
 		GuardDebugRenderer.register();
 
 		ClientChunkEvents.CHUNK_LOAD.register((world, chunk) -> {
-			MinecraftClient client = MinecraftClient.getInstance();
+			Minecraft client = Minecraft.getInstance();
 			ClientTacticsDataStore.WorldContext context = ClientTacticsDataStore.resolveContext(client, world);
-			ClientTacticsDataStore.getInstance().markDiscovered(context, chunk.getPos().x, chunk.getPos().z);
-			TERRAIN_CACHE.invalidate(context, chunk.getPos().x, chunk.getPos().z);
+			ClientTacticsDataStore.getInstance().markDiscovered(context, chunk.getPos().x(), chunk.getPos().z());
+			TERRAIN_CACHE.invalidate(context, chunk.getPos().x(), chunk.getPos().z());
 		});
 
 		ClientTickEvents.END_CLIENT_TICK.register(client -> ClientTacticsDataStore.getInstance().tickSave());
@@ -74,12 +75,14 @@ public class GuardVillagersClient implements ClientModInitializer {
 			ClientGuardRosterStore.getInstance().clear();
 			ClientDebugState.reset();
 			ClientGuardDebugData.clear();
+			GuardDebugRenderer.reset();
 		});
 		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
 			ClientTacticsDataStore.getInstance().flush();
 			ClientGuardRosterStore.getInstance().clear();
 			ClientDebugState.reset();
 			ClientGuardDebugData.clear();
+			GuardDebugRenderer.reset();
 		});
 	}
 }

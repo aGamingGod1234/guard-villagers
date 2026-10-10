@@ -1,7 +1,6 @@
 package com.guardvillagers.client;
 
 import com.guardvillagers.entity.GuardEntity;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.HumanoidModel;
 import net.minecraft.client.model.geom.ModelLayers;
 import net.minecraft.client.renderer.entity.ArmorModelSet;
@@ -10,6 +9,7 @@ import net.minecraft.client.renderer.entity.HumanoidMobRenderer;
 import net.minecraft.client.renderer.entity.VillagerRenderer;
 import net.minecraft.client.renderer.entity.layers.HumanoidArmorLayer;
 import net.minecraft.client.renderer.entity.layers.VillagerProfessionLayer;
+import net.minecraft.client.renderer.entity.state.HumanoidRenderState;
 import net.minecraft.client.renderer.entity.state.VillagerDataHolderRenderState;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
@@ -21,13 +21,13 @@ import net.minecraft.world.entity.npc.villager.VillagerProfession;
 import net.minecraft.world.entity.npc.villager.VillagerType;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import org.jspecify.annotations.Nullable;
 
 public class GuardEntityRenderer
 		extends HumanoidMobRenderer<GuardEntity, GuardEntityRenderer.GuardRenderState, GuardEntityModel> {
 	private static final VillagerData FIXED_PLAINS_VILLAGER_DATA = new VillagerData(
-			BuiltInRegistries.VILLAGER_TYPE.wrapAsHolder(BuiltInRegistries.VILLAGER_TYPE.getValueOrThrow(VillagerType.PLAINS)),
-			BuiltInRegistries.VILLAGER_PROFESSION.wrapAsHolder(
-					BuiltInRegistries.VILLAGER_PROFESSION.getValueOrThrow(VillagerProfession.NONE)),
+			BuiltInRegistries.VILLAGER_TYPE.getOrThrow(VillagerType.PLAINS),
+			BuiltInRegistries.VILLAGER_PROFESSION.getOrThrow(VillagerProfession.NONE),
 			1);
 
 	public GuardEntityRenderer(EntityRendererProvider.Context context) {
@@ -59,7 +59,7 @@ public class GuardEntityRenderer
 	}
 
 	@Override
-	public Identifier getTexture(GuardRenderState state) {
+	public Identifier getTextureLocation(GuardRenderState state) {
 		return GuardSkinResolver.resolveTexture(state.skinProfileId);
 	}
 
@@ -69,25 +69,35 @@ public class GuardEntityRenderer
 	}
 
 	@Override
-	public void updateRenderState(GuardEntity entity, GuardRenderState state, float tickDelta) {
-		super.extractRenderState(entity, state, tickDelta);
+	public void extractRenderState(GuardEntity entity, GuardRenderState state, float partialTicks) {
+		super.extractRenderState(entity, state, partialTicks);
 		state.skinProfileId = entity.getSkinProfileId();
-		state.villagerData = FIXED_PLAINS_VILLAGER_DATA;
-		Minecraft client = Minecraft.getInstance();
-		if (client.player != null && client.crosshairPickEntity == entity && state.displayName == null) {
-			state.displayName = Component.literal(
-					"Lv " + entity.getLevel() + " | " + entity.getRole().name() + " | " + entity.getBehavior().name());
+	}
+
+	// MobRenderer only shows names for custom-named mobs; also show the stats label on the guard under the crosshair.
+	@Override
+	protected boolean shouldShowName(GuardEntity entity, double distanceToCameraSq) {
+		return super.shouldShowName(entity, distanceToCameraSq)
+				|| (entity == this.entityRenderDispatcher.crosshairPickEntity && !entity.isInvisible());
+	}
+
+	@Override
+	protected @Nullable Component getNameTag(GuardEntity entity) {
+		if (entity.hasCustomName() || entity != this.entityRenderDispatcher.crosshairPickEntity) {
+			return super.getNameTag(entity);
 		}
+		return Component.literal(
+				"Lv " + entity.getLevel() + " | " + entity.getRole().name() + " | " + entity.getBehavior().name());
 	}
 
 	@Override
 	protected HumanoidModel.ArmPose getArmPose(GuardEntity entity, HumanoidArm arm) {
+		ItemStack stack = entity.getItemHeldByArm(arm);
 		if (entity.isUsingItem()) {
-			boolean isActiveArm = entity.getActiveHand() == InteractionHand.MAIN_HAND
+			boolean isActiveArm = entity.getUsedItemHand() == InteractionHand.MAIN_HAND
 					? arm == entity.getMainArm()
 					: arm != entity.getMainArm();
 			if (isActiveArm) {
-				ItemStack stack = entity.getStackInArm(arm);
 				if (stack.is(Items.BOW)) {
 					return HumanoidModel.ArmPose.BOW_AND_ARROW;
 				}
@@ -96,16 +106,20 @@ public class GuardEntityRenderer
 				}
 			}
 		}
-		return super.getArmPose(entity, arm);
+		HumanoidModel.ArmPose pose = super.getArmPose(entity, arm);
+		// The base mob renderer returns EMPTY for any non-spear item, which swings swords and shields like bare hands.
+		if (pose == HumanoidModel.ArmPose.EMPTY && !stack.isEmpty()) {
+			return HumanoidModel.ArmPose.ITEM;
+		}
+		return pose;
 	}
 
-	public static class GuardRenderState extends BipedEntityRenderState implements VillagerDataHolderRenderState {
+	public static class GuardRenderState extends HumanoidRenderState implements VillagerDataHolderRenderState {
 		public String skinProfileId = "";
-		public VillagerData villagerData = FIXED_PLAINS_VILLAGER_DATA;
 
 		@Override
 		public VillagerData getVillagerData() {
-			return this.villagerData;
+			return FIXED_PLAINS_VILLAGER_DATA;
 		}
 	}
 }
