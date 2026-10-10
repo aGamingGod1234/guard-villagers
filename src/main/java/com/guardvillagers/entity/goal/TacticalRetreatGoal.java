@@ -7,16 +7,20 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.ai.goal.Goal;
 
+/** Falls back to a cleric, a bed, home, or away from the threat while health recovers. */
 public final class TacticalRetreatGoal extends Goal {
+	private static final int SAFE_POINT_REFRESH_TICKS = 40;
+
 	private final GuardEntity guard;
 	private final double speed;
+	private final AnchorHold hold = new AnchorHold();
 	private BlockPos safePoint;
-	private int recalculateTicks;
+	private long nextRefresh;
 
 	public TacticalRetreatGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
 		this.speed = speed;
-		this.setFlags(EnumSet.of(Flag.MOVE, Flag.TARGET));
+		this.setFlags(EnumSet.of(Flag.MOVE));
 	}
 
 	@Override
@@ -32,7 +36,8 @@ public final class TacticalRetreatGoal extends Goal {
 	@Override
 	public void start() {
 		this.safePoint = null;
-		this.recalculateTicks = 0;
+		this.nextRefresh = 0L;
+		this.hold.reset();
 	}
 
 	@Override
@@ -46,14 +51,11 @@ public final class TacticalRetreatGoal extends Goal {
 		if (!(this.guard.level() instanceof ServerLevel world)) {
 			return;
 		}
-
-		if (this.recalculateTicks-- <= 0 || this.safePoint == null) {
+		long now = world.getGameTime();
+		if (this.safePoint == null || now >= this.nextRefresh) {
 			this.safePoint = this.guard.findSafeRetreatPoint(world);
-			this.recalculateTicks = 20;
+			this.nextRefresh = now + SAFE_POINT_REFRESH_TICKS;
 		}
-
-		if (this.safePoint != null) {
-			this.guard.getGuardNavigation().startMovingToStatic(this.safePoint, this.speed);
-		}
+		this.hold.tick(this.guard, this.safePoint, this.speed);
 	}
 }

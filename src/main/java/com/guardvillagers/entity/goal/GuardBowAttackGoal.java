@@ -2,25 +2,56 @@ package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.ai.GuardAiIntent;
+import com.guardvillagers.navigation.GuardGrounding;
 import java.util.EnumSet;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.goal.Goal;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.BowItem;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
+/**
+ * Bow combat, modelled on vanilla RangedBowAttackGoal with three guard-specific additions:
+ * <ul>
+ * <li>Keeps a range band: approaches when out of range or without sight, backs off along a
+ * path-safe spot when a target gets inside {@link #KITE_DISTANCE}, otherwise holds and strafes.
+ * The old goal ran to a slot 2.5 blocks from the target for the first second of every fight.</li>
+ * <li>Holds a drawn arrow while a villager, owner or allied guard is in the line of fire and
+ * strafes sideways to clear it, instead of loosing an arrow that the ally filter then deletes.</li>
+ * <li>Raises the shield between shots against ranged or close threats, and never while drawing.</li>
+ * </ul>
+ */
 public final class GuardBowAttackGoal extends Goal {
 	private static final int MIN_PULL_TICKS = 20;
+	private static final int SHOT_INTERVAL_TICKS = 20;
+	private static final int MAX_BLOCKED_HOLD_TICKS = 60;
+	private static final double KITE_DISTANCE = 5.0D;
+	private static final double KITE_STEP = 5.0D;
+	private static final double SHIELD_CLOSE_DISTANCE_SQUARED = 6.0D * 6.0D;
+	private static final int REPATH_INTERVAL_TICKS = 10;
 
 	private final GuardEntity guard;
 	private final double speed;
-	private final float squaredRange;
-	private int targetVisibleTicks;
+	private final float attackRadiusSq;
+	private int seeTime;
+	private int attackTime = -1;
+	private int strafingTime = -1;
+	private boolean strafingClockwise;
+	private boolean strafingBackwards;
+	private int blockedHoldTicks;
+	private int repathTicks;
 
 	public GuardBowAttackGoal(GuardEntity guard, double speed, float range) {
 		this.guard = guard;
 		this.speed = speed;
-		this.squaredRange = range * range;
+		this.attackRadiusSq = range * range;
 		this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK));
 	}
 
@@ -31,69 +62,171 @@ public final class GuardBowAttackGoal extends Goal {
 
 	@Override
 	public boolean canContinueToUse() {
-		return this.hasValidTarget() || !this.guard.getNavigation().isDone();
+		return this.hasValidTarget();
+	}
+
+	@Override
+	public boolean requiresUpdateEveryTick() {
+		return true;
 	}
 
 	@Override
 	public void start() {
 		this.guard.setAggressive(true);
+		this.seeTime = 0;
+		this.attackTime = -1;
+		this.strafingTime = -1;
+		this.blockedHoldTicks = 0;
+		this.repathTicks = 0;
 	}
 
 	@Override
 	public void stop() {
 		this.guard.setAggressive(false);
-		this.targetVisibleTicks = 0;
-		this.guard.stopUsingItem();
+		this.seeTime = 0;
+		this.attackTime = -1;
+		if (this.guard.isUsingItem() && this.guard.getUsedItemHand() == InteractionHand.MAIN_HAND) {
+			this.guard.stopUsingItem();
+		}
+		this.guard.requestShield(false);
 		this.guard.getNavigation().stop();
 	}
 
 	@Override
 	public void tick() {
 		LivingEntity target = this.guard.getTarget();
-		if (target == null || !(this.guard.level() instanceof net.minecraft.server.level.ServerLevel world)) {
+		if (target == null || !(this.guard.level() instanceof ServerLevel world)) {
 			return;
 		}
 
 		double distanceSq = this.guard.distanceToSqr(target.getX(), target.getY(), target.getZ());
-		boolean canSeeTarget = this.guard.hasLineOfSight(target);
-		boolean sawTargetLastTick = this.targetVisibleTicks > 0;
-		if (canSeeTarget != sawTargetLastTick) {
-			this.targetVisibleTicks = 0;
+		boolean hasSight = this.guard.getSensing().hasLineOfSight(target);
+		if (hasSight != this.seeTime > 0) {
+			this.seeTime = 0;
 		}
-		if (canSeeTarget) {
-			this.targetVisibleTicks++;
-		} else {
-			this.targetVisibleTicks--;
-		}
+		this.seeTime += hasSight ? 1 : -1;
 
-		if (distanceSq <= (double) this.squaredRange && this.targetVisibleTicks >= 20) {
-			this.guard.getNavigation().stop();
-		} else {
-			this.guard.getGuardNavigation().startMovingToDynamic(this.guard.resolveCombatApproachSlot(world, target),
-					this.speed);
-		}
+		this.updateMovement(target, distanceSq, hasSight);
 
-		this.guard.getLookControl().setLookAt(target, 30.0F, 30.0F);
-		if (this.guard.isUsingItem()) {
-			if (!canSeeTarget && this.targetVisibleTicks < -60) {
+		boolean drawing = this.guard.isUsingItem() && this.guard.getUsedItemHand() == InteractionHand.MAIN_HAND;
+		if (drawing) {
+			if (!hasSight && this.seeTime < -60) {
 				this.guard.stopUsingItem();
-			} else if (canSeeTarget) {
-				int useTicks = this.guard.getTicksUsingItem();
-				if (useTicks >= MIN_PULL_TICKS) {
+			} else if (hasSight && this.guard.getTicksUsingItem() >= MIN_PULL_TICKS) {
+				if (this.isLineOfFireClear(world, target)) {
+					int pull = this.guard.getTicksUsingItem();
 					this.guard.stopUsingItem();
-					this.guard.performRangedAttack(target, BowItem.getPowerForTime(useTicks));
+					this.guard.performRangedAttack(target, BowItem.getPowerForTime(pull));
+					this.attackTime = SHOT_INTERVAL_TICKS;
+					this.blockedHoldTicks = 0;
+				} else if (++this.blockedHoldTicks > MAX_BLOCKED_HOLD_TICKS) {
+					this.guard.stopUsingItem();
+					this.attackTime = SHOT_INTERVAL_TICKS / 2;
+					this.blockedHoldTicks = 0;
+				} else if (this.blockedHoldTicks % 20 == 1) {
+					// Step sideways to get a clear lane.
+					this.strafingClockwise = !this.strafingClockwise;
+					this.strafingTime = 0;
 				}
 			}
-		} else if (this.targetVisibleTicks >= -60) {
-			this.guard.startUsingItem(InteractionHand.MAIN_HAND);
+			this.guard.requestShield(false);
+			return;
 		}
+
+		if (--this.attackTime <= 0 && this.seeTime >= -60) {
+			this.guard.requestShield(false);
+			if (this.guard.isUsingItem()) {
+				this.guard.stopUsingItem();
+			}
+			this.guard.startUsingItem(InteractionHand.MAIN_HAND);
+			return;
+		}
+
+		boolean threatened = GuardMeleeAttackGoal.isRangedThreat(target) || distanceSq <= SHIELD_CLOSE_DISTANCE_SQUARED;
+		this.guard.requestShield(threatened && hasSight);
+	}
+
+	private void updateMovement(LivingEntity target, double distanceSq, boolean hasSight) {
+		if (distanceSq > this.attackRadiusSq || this.seeTime < 20) {
+			this.strafingTime = -1;
+			if (--this.repathTicks <= 0) {
+				this.repathTicks = REPATH_INTERVAL_TICKS;
+				this.guard.getNavigation().moveTo(target, this.speed);
+			}
+			this.guard.getLookControl().setLookAt(target, 30.0F, 30.0F);
+			return;
+		}
+
+		if (distanceSq < KITE_DISTANCE * KITE_DISTANCE && this.tryKite(target)) {
+			this.guard.getLookControl().setLookAt(target, 30.0F, 30.0F);
+			return;
+		}
+
+		this.guard.getNavigation().stop();
+		this.strafingTime++;
+		if (this.strafingTime >= 20) {
+			if (this.guard.getRandom().nextFloat() < 0.3F) {
+				this.strafingClockwise = !this.strafingClockwise;
+			}
+			if (this.guard.getRandom().nextFloat() < 0.3F) {
+				this.strafingBackwards = !this.strafingBackwards;
+			}
+			this.strafingTime = 0;
+		}
+		if (distanceSq > this.attackRadiusSq * 0.75F) {
+			this.strafingBackwards = false;
+		} else if (distanceSq < this.attackRadiusSq * 0.25F) {
+			this.strafingBackwards = true;
+		}
+		// MoveControl.strafe refuses non-walkable steps on its own (vanilla isWalkable check).
+		this.guard.getMoveControl().strafe(this.strafingBackwards ? -0.5F : 0.5F, this.strafingClockwise ? 0.5F : -0.5F);
+		this.guard.lookAt(target, 30.0F, 30.0F);
+	}
+
+	/** Back away from a close target to a walkable spot inside the guard's zone. */
+	private boolean tryKite(LivingEntity target) {
+		if (this.repathTicks-- > 0 && this.guard.getNavigation().isInProgress()) {
+			return true;
+		}
+		this.repathTicks = REPATH_INTERVAL_TICKS;
+		Vec3 away = this.guard.position().subtract(target.position());
+		away = new Vec3(away.x, 0.0D, away.z);
+		if (away.lengthSqr() < 1.0E-4D) {
+			return false;
+		}
+		Vec3 destination = this.guard.position().add(away.normalize().scale(KITE_STEP));
+		BlockPos spot = GuardGrounding.findStandableNear(this.guard, Mth.floor(destination.x), Mth.floor(destination.z),
+				this.guard.getBlockY(), 2, 3, 1);
+		if (spot == null || !this.guard.canTargetWithinZone(spot)) {
+			return false;
+		}
+		this.guard.getGuardNavigation().startMovingToDynamic(Vec3.atBottomCenterOf(spot), this.speed * 1.15D);
+		return !this.guard.getGuardNavigation().isLastTargetUnreachable();
+	}
+
+	/**
+	 * True when no allied entity (villager, owner, golem, squadmate) and no bystander player sits
+	 * on the shot line.
+	 */
+	private boolean isLineOfFireClear(ServerLevel world, LivingEntity target) {
+		Vec3 from = this.guard.getEyePosition();
+		Vec3 to = new Vec3(target.getX(), target.getY(0.5D), target.getZ());
+		AABB sweep = new AABB(from, to).inflate(0.5D);
+		for (Entity entity : world.getEntities(this.guard, sweep,
+				entity -> entity != target && entity instanceof LivingEntity && entity.isAlive())) {
+			boolean protectedEntity = this.guard.isAlly(entity) || entity instanceof Player;
+			if (protectedEntity && entity.getBoundingBox().inflate(0.3D).clip(from, to).isPresent()) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private boolean hasValidTarget() {
 		LivingEntity target = this.guard.getTarget();
 		return this.guard.isAiIntent(GuardAiIntent.ENGAGE_TARGET)
-			&& target != null
-			&& target.isAlive()
-			&& this.guard.getMainHandItem().is(Items.BOW);
+				&& target != null
+				&& target.isAlive()
+				&& this.guard.getMainHandItem().is(Items.BOW);
 	}
 }

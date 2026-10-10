@@ -8,14 +8,17 @@ import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.level.pathfinder.PathType;
 
 /**
- * After a hunt ends (target lost/killed/aborted) while the guard is in water,
- * path back to the last known land position, then resume normal behavior.
+ * An otherwise idle guard that is swimming heads for the nearest dry standing spot (falling back
+ * to the last land position). This intent now ranks below follow and combat, so it no longer
+ * drags a guard back to the bank it came from while it is crossing water behind its owner.
  */
 public final class ReturnToLandGoal extends Goal {
+	private static final int RETARGET_TICKS = 40;
+
 	private final GuardEntity guard;
 	private final double speed;
-	private float oldWaterPenalty;
-	private int repathTicks;
+	private BlockPos destination;
+	private long nextRetarget;
 
 	public ReturnToLandGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
@@ -25,42 +28,38 @@ public final class ReturnToLandGoal extends Goal {
 
 	@Override
 	public boolean canUse() {
-		return this.guard.isAiIntent(GuardAiIntent.RETURN_TO_LAND)
-				&& this.guard.getLastLandPos() != null;
+		return this.guard.isAiIntent(GuardAiIntent.RETURN_TO_LAND);
 	}
 
 	@Override
 	public boolean canContinueToUse() {
-		return this.guard.isAiIntent(GuardAiIntent.RETURN_TO_LAND)
-				&& this.guard.getLastLandPos() != null;
+		return this.guard.isAiIntent(GuardAiIntent.RETURN_TO_LAND);
 	}
 
 	@Override
 	public void start() {
-		this.oldWaterPenalty = this.guard.getPathfindingMalus(PathType.WATER);
 		this.guard.setPathfindingMalus(PathType.WATER, 0.0F);
-		this.repathTicks = 0;
+		this.destination = null;
+		this.nextRetarget = 0L;
 	}
 
 	@Override
 	public void stop() {
 		this.guard.getNavigation().stop();
-		this.guard.setPathfindingMalus(PathType.WATER, this.oldWaterPenalty);
+		this.guard.setPathfindingMalus(PathType.WATER, GuardEntity.DEFAULT_WATER_MALUS);
+		this.destination = null;
 	}
 
 	@Override
 	public void tick() {
-		if (--this.repathTicks > 0) {
-			return;
+		long now = this.guard.level().getGameTime();
+		if (this.destination == null || now >= this.nextRetarget || this.guard.getNavigation().isDone()) {
+			this.nextRetarget = now + RETARGET_TICKS;
+			BlockPos exit = this.guard.getGuardNavigation().findNearbyDryExit();
+			this.destination = exit != null ? exit : this.guard.getLastLandPos();
 		}
-		this.repathTicks = 10;
-
-		BlockPos landPos = this.guard.getLastLandPos();
-		if (landPos == null) {
-			return;
+		if (this.destination != null) {
+			this.guard.getGuardNavigation().startMovingToStatic(this.destination, this.speed);
 		}
-		this.guard.getNavigation().moveTo(
-			landPos.getX() + 0.5D, landPos.getY(), landPos.getZ() + 0.5D, this.speed
-		);
 	}
 }
