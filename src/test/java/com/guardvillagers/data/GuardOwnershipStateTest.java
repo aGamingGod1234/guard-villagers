@@ -64,6 +64,26 @@ final class GuardOwnershipStateTest {
 	}
 
 	@Test
+	void keepsLastKnownLabelAndMarksDirtyWhenItChanges() {
+		GuardOwnershipState state = new GuardOwnershipState();
+		UUID guard = UUID.randomUUID();
+		state.record(guard, this.owner, 0L, "Bob", 2);
+		state.setDirty(false);
+
+		state.record(guard, this.owner, 10L, "Bob", 2);
+		assertFalse(state.isDirty());
+		state.record(guard, this.owner, 20L, "Bob", 3);
+		assertTrue(state.isDirty());
+		state.record(guard, this.owner, 30L);
+		assertEquals(3, state.get(guard).orElseThrow().groupIndex(), "a refresh without a label keeps the old one");
+
+		state.record(guard, this.owner, 40L, "x".repeat(200), 3);
+		Tag encoded = GuardOwnershipState.CODEC.encodeStart(NbtOps.INSTANCE, state).getOrThrow();
+		GuardOwnershipState decoded = GuardOwnershipState.CODEC.parse(NbtOps.INSTANCE, encoded).getOrThrow();
+		assertEquals(GuardOwnershipState.MAX_NAME_LENGTH, decoded.get(guard).orElseThrow().name().length());
+	}
+
+	@Test
 	void boundedByEvictingTheLeastRecentlySeenGuard() {
 		GuardOwnershipState state = new GuardOwnershipState();
 		UUID oldest = UUID.randomUUID();
