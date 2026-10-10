@@ -7,6 +7,14 @@
 	"entrypoints": {
 		"fabric-gametest": [
 			"com.guardvillagers.gametest.GuardCombatGameTest"
+		],
+		"fabric-client-gametest": [
+			"com.guardvillagers.gametest.client.GuardRenderClientGameTest",
+			"com.guardvillagers.gametest.client.GuardItemsClientGameTest",
+			"com.guardvillagers.gametest.client.GuardShopClientGameTest",
+			"com.guardvillagers.gametest.client.GuardTacticsClientGameTest",
+			"com.guardvillagers.gametest.client.GuardDebugOverlayClientGameTest",
+			"com.guardvillagers.gametest.client.GuardRosterSyncClientGameTest"
 		]
 	},
 	"depends": {
