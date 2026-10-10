@@ -11,13 +11,18 @@ import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 
+/**
+ * Carrier menu for the custom tactics screen. The real UI talks to the server through commands and the roster
+ * payload; on the server no click is ever forwarded to vanilla slot logic, so the menu cannot move items.
+ */
 public final class GuardTacticsScreenHandler extends ChestMenu {
 	private static final int TACTICS_SLOT_COUNT = 54;
 	private final GuardTacticsInventory tacticsInventory;
 	private final ServerPlayer owner;
 
+	/** Client-side constructor used by the registered {@code MenuType}. */
 	public GuardTacticsScreenHandler(int syncId, Inventory playerInventory) {
-		this(syncId, playerInventory, new SimpleContainer(54), null, null);
+		this(syncId, playerInventory, new SimpleContainer(TACTICS_SLOT_COUNT), null, null);
 	}
 
 	public GuardTacticsScreenHandler(int syncId, Inventory playerInventory, ServerPlayer owner) {
@@ -48,35 +53,20 @@ public final class GuardTacticsScreenHandler extends ChestMenu {
 
 	@Override
 	public void clicked(int slotIndex, int button, ContainerInput actionType, Player player) {
-		if (this.owner == null || this.tacticsInventory == null) {
+		if (this.owner == null) {
+			// Client-side prediction only; the server copy below is authoritative.
 			super.clicked(slotIndex, button, actionType, player);
 			return;
 		}
-
-		if (player != this.owner) {
+		if (player != this.owner || slotIndex < 0 || slotIndex >= TACTICS_SLOT_COUNT) {
 			return;
 		}
-
-		if (!this.getCarried().isEmpty()) {
+		if (actionType != ContainerInput.PICKUP && actionType != ContainerInput.QUICK_MOVE) {
 			return;
 		}
-
-		if (slotIndex >= 0 && slotIndex < TACTICS_SLOT_COUNT) {
-			if (actionType != ContainerInput.PICKUP && actionType != ContainerInput.QUICK_MOVE) {
-				return;
-			}
-			if (this.tacticsInventory.handleClick(slotIndex, button)) {
-				this.tacticsInventory.refresh();
-				this.broadcastChanges();
-			}
-			return;
+		if (this.tacticsInventory.handleClick(slotIndex, button)) {
+			this.tacticsInventory.refresh();
 		}
-
-		if (slotIndex >= TACTICS_SLOT_COUNT || slotIndex == -999) {
-			return;
-		}
-
-		super.clicked(slotIndex, button, actionType, player);
 	}
 
 	@Override
@@ -94,7 +84,7 @@ public final class GuardTacticsScreenHandler extends ChestMenu {
 		if (this.owner == null) {
 			return true;
 		}
-		return player == this.owner;
+		return player == this.owner && this.owner.isAlive();
 	}
 
 	public void refreshInventory() {

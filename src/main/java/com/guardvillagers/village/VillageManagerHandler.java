@@ -51,6 +51,10 @@ public final class VillageManagerHandler {
 	private VillageManagerHandler() {
 	}
 
+	public static void clearSessionState() {
+		DOOR_COUNT_CACHE.clear();
+	}
+
 	public static void maintainVillageGuards(ServerLevel world) {
 		if (world.getGameTime() % PROCESS_INTERVAL_TICKS != 0) {
 			return;

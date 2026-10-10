@@ -49,6 +49,13 @@ public final class GuardOwnershipIndex {
 		maybeCleanup(guard.level().getGameTime());
 	}
 
+	public static void clearSessionState() {
+		OWNER_TO_GUARDS.clear();
+		GUARD_TO_OWNER.clear();
+		GUARD_REFERENCES.clear();
+		lastCleanupTick = Long.MIN_VALUE;
+	}
+
 	public static void untrack(GuardEntity guard) {
 		if (guard == null) {
 			return;
