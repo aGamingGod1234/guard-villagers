@@ -3,6 +3,7 @@ package com.guardvillagers;
 import com.guardvillagers.command.GuardCommands;
 import com.guardvillagers.data.GuardDebugState;
 import com.guardvillagers.data.GuardDiplomacyState;
+import com.guardvillagers.data.GuardOwnershipState;
 import com.guardvillagers.data.GuardReputationState;
 import com.guardvillagers.data.GuardSavedData;
 import com.guardvillagers.data.GuardTacticsState;
@@ -114,6 +115,7 @@ public class GuardVillagersMod implements ModInitializer {
 				GuardUpgradeState.class,
 				GuardDebugState.class,
 				GuardDiplomacyState.class,
+				GuardOwnershipState.class,
 				GuardVillageState.class,
 				GuardTacticsState.class
 		};
