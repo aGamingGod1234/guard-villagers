@@ -181,6 +181,7 @@
 	"gui.guardvillagers.tactics.status.group_added": "Added group %s",
 	"gui.guardvillagers.tactics.status.reverted": "Unsaved moves reverted",
 	"gui.guardvillagers.tactics.status.no_connection": "Not connected: changes were not sent",
+	"gui.guardvillagers.tactics.status.queue_full": "Too many changes waiting to send: some were not sent. Wait a moment and save again",
 	"gui.guardvillagers.tactics.drag.move": "Move to %s",
 	"gui.guardvillagers.tactics.drag.same": "Already in %s",
 	"gui.guardvillagers.tactics.drag.unassign": "Remove from group",

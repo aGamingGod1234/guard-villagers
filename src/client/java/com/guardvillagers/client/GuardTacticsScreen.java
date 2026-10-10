@@ -2244,21 +2244,34 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		this.awaitingBatches = 0;
 		this.awaitingRejected = 0;
 		this.awaitingReasonKey = null;
+		// Rows with a command the queue refused stay pending (re-sending an assignment is harmless), so the
+		// player can save them again instead of waiting for a confirmation that can never arrive.
+		Map<UUID, Integer> unsent = new HashMap<>();
 		for (Map.Entry<Integer, List<UUID>> row : byRow.entrySet()) {
+			boolean rowSent = true;
 			for (String command : assignManyCommands(row.getKey(), row.getValue())) {
 				if (this.sendCommand(command)) {
 					this.awaitingBatches++;
+				} else {
+					rowSent = false;
 				}
 			}
+			if (!rowSent) {
+				row.getValue().forEach(guardId -> unsent.put(guardId, row.getKey()));
+			}
 		}
+		this.pendingAssignments.keySet().removeAll(unsent.keySet());
 		// Each accepted batch makes the server push a fresh roster; confirmation is checked against it.
 		this.awaitingConfirmation.putAll(this.pendingAssignments);
 		this.awaitingSentCount = this.awaitingConfirmation.size();
 		this.awaitingSince = System.currentTimeMillis();
 		this.awaitingCheckedRevision = this.rosterStore.revision();
 		this.pendingAssignments.clear();
+		this.pendingAssignments.putAll(unsent);
 		this.localRevision++;
-		this.setStatus(Component.translatable(KEY + "status.saving", this.awaitingSentCount), TEXT_SECONDARY);
+		if (unsent.isEmpty()) {
+			this.setStatus(Component.translatable(KEY + "status.saving", this.awaitingSentCount), TEXT_SECONDARY);
+		}
 	}
 
 	/**
@@ -2658,10 +2671,13 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	// ---------------------------------------------------------------- helpers
 
 	private boolean sendCommand(String command) {
-		if (GuardCommandQueue.enqueue(command)) {
-			return true;
+		switch (GuardCommandQueue.enqueue(command)) {
+			case QUEUED -> {
+				return true;
+			}
+			case QUEUE_FULL -> this.setStatus(tr("status.queue_full"), STATUS_ERROR);
+			case NO_CONNECTION -> this.setStatus(tr("status.no_connection"), STATUS_ERROR);
 		}
-		this.setStatus(tr("status.no_connection"), STATUS_ERROR);
 		return false;
 	}
 
