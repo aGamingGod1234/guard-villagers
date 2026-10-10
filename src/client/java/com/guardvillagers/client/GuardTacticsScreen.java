@@ -1,5 +1,6 @@
 package com.guardvillagers.client;
 
+import com.guardvillagers.network.GuardGroupResultPayload;
 import com.guardvillagers.tactics.GuardTacticsScreenHandler;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -313,6 +314,10 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private boolean viewRosterLoaded;
 	private SortMode sortMode = SortMode.GEAR;
 	private final BitSet collapsedRows = new BitSet();
+	// Groups whose loaded members are all following / all staying, so the header buttons can show the state.
+	private final BitSet groupAllFollowing = new BitSet();
+	private final BitSet groupAllStaying = new BitSet();
+	private boolean autoCollapseChecked;
 
 	// Sidebar list geometry and scroll
 	private int listTop;
@@ -339,6 +344,11 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private long awaitingSince;
 	private int awaitingSentCount;
 	private int awaitingCheckedRevision = -1;
+	// Per-batch results from GuardGroupResultPayload; the timeout only applies if they never arrive.
+	private int awaitingBatches;
+	private int awaitingRejected;
+	private String awaitingReasonKey;
+	private int awaitingReasonRow;
 	private boolean showUnsavedDialog;
 	private Runnable pendingAction;
 	private int saveLabelKey = Integer.MIN_VALUE;
@@ -444,6 +454,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		this.addRenderableWidget(this.groupRenameField);
 		this.editingRow = -1;
 		this.listScrollAnimated = this.listScrollTarget;
+		this.rosterStore.clearGroupResults();
 
 		if (this.minecraft != null && this.minecraft.player != null) {
 			this.chunkMapWidget.ensureCameraCentered(this.minecraft.player.chunkPosition());
@@ -460,6 +471,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
 		this.computeLayout();
+		this.processGroupResults();
 		this.checkAwaitingConfirmation();
 		graphics.fill(this.panelX, this.panelY, this.panelX + this.panelWidth, this.panelY + this.panelHeight, PANEL_BACKGROUND);
 		graphics.outline(this.panelX, this.panelY, this.panelWidth, this.panelHeight, PANEL_BORDER);
@@ -1310,14 +1322,35 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			members.clear();
 		}
 		this.unassignedList.clear();
+		this.groupAllFollowing.clear();
+		this.groupAllStaying.clear();
+		this.groupAllFollowing.set(0, groupCount);
+		this.groupAllStaying.set(0, groupCount);
+		BitSet anyLoaded = new BitSet();
 		for (ClientGuardRosterStore.GuardRosterEntry guard : roster) {
+			// The roster is re-sent about once a second; a pending move the server now matches is no longer a change.
+			Integer pending = this.pendingAssignments.get(guard.guardUuid());
+			if (pending != null && pending == guard.groupIndex()) {
+				this.pendingAssignments.remove(guard.guardUuid());
+			}
 			int group = this.displayGroup(guard);
+			if (group >= 0 && guard.loaded()) {
+				anyLoaded.set(group);
+				if (!guard.following()) {
+					this.groupAllFollowing.clear(group);
+				}
+				if (!guard.staying()) {
+					this.groupAllStaying.clear(group);
+				}
+			}
 			if (group >= 0) {
 				this.groupMembers.get(group).add(guard);
 			} else {
 				this.unassignedList.add(guard);
 			}
 		}
+		this.groupAllFollowing.and(anyLoaded);
+		this.groupAllStaying.and(anyLoaded);
 		Comparator<ClientGuardRosterStore.GuardRosterEntry> sorter = this.sortMode.comparator;
 		for (int row = 0; row < groupCount; row++) {
 			this.groupMembers.get(row).sort(sorter);
@@ -1367,6 +1400,10 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		boolean showNewGroup = this.viewGroupCount == 0 || (dragging && canCreate);
 		int newGroupH = this.viewGroupCount == 0 ? 30 : GROUP_HEADER_HEIGHT;
 
+		if (!this.autoCollapseChecked && this.viewRosterLoaded) {
+			this.autoCollapseChecked = true;
+			this.autoCollapse(listW, listH);
+		}
 		int total = 0;
 		for (int row = 0; row < this.viewGroupCount; row++) {
 			total += this.groupBlockHeight(row, listW) + GROUP_GAP;
@@ -1401,10 +1438,37 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 		if (this.listMaxScroll > 0) {
 			this.renderScrollbar(graphics, x + w - 4, this.listTop, 3, listH, scroll, this.listMaxScroll, total);
+			// Fade plus arrows make it obvious there is more list than fits (round-1 screenshots hid a group).
+			int arrowX = x + (w - SCROLLBAR_SPACE) / 2;
 			if (scroll < this.listMaxScroll) {
-				graphics.fillGradient(x + 1, this.listBottom - 10, x + w - SCROLLBAR_SPACE, this.listBottom, 0x000E131A, 0xAA0E131A);
+				graphics.fillGradient(x + 1, this.listBottom - 10, x + w - SCROLLBAR_SPACE, this.listBottom, 0x000E131A, 0xCC0E131A);
+				this.drawArrow(graphics, arrowX, this.listBottom - 5, true, KEY_COLOR);
+			}
+			if (scroll > 0) {
+				graphics.fillGradient(x + 1, this.listTop, x + w - SCROLLBAR_SPACE, this.listTop + 8, 0xCC0E131A, 0x000E131A);
+				this.drawUpArrow(graphics, arrowX, this.listTop + 2, KEY_COLOR);
 			}
 		}
+	}
+
+	// On small windows, start with every group but the first collapsed to chips so the list fits.
+	private void autoCollapse(int listW, int listH) {
+		int expanded = 0;
+		for (int row = 0; row < this.viewGroupCount; row++) {
+			expanded += this.groupBlockHeight(row, listW) + GROUP_GAP;
+		}
+		expanded += 11 + this.trayHeight(listW);
+		if (expanded > listH) {
+			for (int row = 1; row < this.viewGroupCount; row++) {
+				this.collapsedRows.set(row);
+			}
+		}
+	}
+
+	private void drawUpArrow(GuiGraphicsExtractor graphics, int x, int y, int color) {
+		graphics.fill(x, y, x + 1, y + 1, color);
+		graphics.fill(x - 1, y + 1, x + 2, y + 2, color);
+		graphics.fill(x - 2, y + 2, x + 3, y + 3, color);
 	}
 
 	private int groupBlockHeight(int row, int listW) {
@@ -1477,8 +1541,8 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		int stayX = x + w - 2 - stayW;
 		int followX = stayX - 2 - followW;
 		int buttonY = y + 1;
-		this.drawSmallButton(graphics, stayLabel, stayX, buttonY, stayW, inList && !dragging && this.contains(stayX, buttonY, stayW, SMALL_BUTTON_HEIGHT, mouseX, mouseY));
-		this.drawSmallButton(graphics, followLabel, followX, buttonY, followW, inList && !dragging && this.contains(followX, buttonY, followW, SMALL_BUTTON_HEIGHT, mouseX, mouseY));
+		this.drawSmallButton(graphics, stayLabel, stayX, buttonY, stayW, inList && !dragging && this.contains(stayX, buttonY, stayW, SMALL_BUTTON_HEIGHT, mouseX, mouseY), this.groupAllStaying.get(row));
+		this.drawSmallButton(graphics, followLabel, followX, buttonY, followW, inList && !dragging && this.contains(followX, buttonY, followW, SMALL_BUTTON_HEIGHT, mouseX, mouseY), this.groupAllFollowing.get(row));
 		String count = this.countText(members.size());
 		int countX = followX - 3 - this.font.width(count);
 		graphics.text(this.font, count, countX, y + 3, TEXT_SECONDARY, false);
@@ -1587,6 +1651,16 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		this.drawSmallItem(graphics, roleIcon(guard), x + 12, y + 3);
 
 		CardText text = this.cardText(guard);
+		if (!guard.loaded()) {
+			// Unloaded guards only have a name and group; show that plainly instead of empty stats.
+			String notLoaded = text.notLoaded(this.font);
+			int notLoadedWidth = this.font.width(notLoaded);
+			graphics.text(this.font, notLoaded, x + w - 3 - notLoadedWidth, y + 3, TEXT_MUTED, false);
+			graphics.text(this.font, text.rowName(this.font, x + w - 6 - notLoadedWidth - (x + 22)), x + 22, y + 3, TEXT_MUTED, false);
+			graphics.fill(x, y, x + w, y + MEMBER_ROW_HEIGHT, 0x660E141B);
+			this.dimIfDragSource(graphics, guard, x, y, w, MEMBER_ROW_HEIGHT);
+			return;
+		}
 		boolean showDistance = w >= 130 && !text.distance.isEmpty();
 		int barW = w >= 130 ? 30 : 16;
 		int right = x + w - 3;
@@ -1600,6 +1674,13 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		int levelWidth = this.font.width(level);
 		graphics.text(this.font, level, right - levelWidth, y + 3, TEXT_SECONDARY, false);
 		right -= levelWidth + 3;
+		// One-letter order badge: F follow, S stay, H hold (full words in the tooltip).
+		String badge = orderBadge(guard);
+		if (!badge.isEmpty()) {
+			int badgeWidth = this.font.width(badge);
+			graphics.text(this.font, badge, right - badgeWidth, y + 3, orderColor(guard), false);
+			right -= badgeWidth + 3;
+		}
 		graphics.text(this.font, text.rowName(this.font, right - (x + 22)), x + 22, y + 3, TEXT_PRIMARY, false);
 		this.dimIfDragSource(graphics, guard, x, y, w, MEMBER_ROW_HEIGHT);
 	}
@@ -1610,8 +1691,11 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		graphics.outline(x, y, CHIP_WIDTH, CHIP_HEIGHT, hovered ? CARD_HOVER_BORDER : ROW_BORDER);
 		this.drawPendingMarker(graphics, guard, x, y, CHIP_HEIGHT);
 		this.drawSmallItem(graphics, roleIcon(guard), x + 2, y + 2);
-		graphics.text(this.font, this.cardText(guard).levelNumber, x + 12, y + 2, TEXT_PRIMARY, false);
+		graphics.text(this.font, guard.loaded() ? this.cardText(guard).levelNumber : "?", x + 12, y + 2, guard.loaded() ? TEXT_PRIMARY : TEXT_MUTED, false);
 		this.drawHealthBar(graphics, guard, x + 24, y + 5, 10, 2);
+		if (!guard.loaded()) {
+			graphics.fill(x, y, x + CHIP_WIDTH, y + CHIP_HEIGHT, 0x660E141B);
+		}
 		this.dimIfDragSource(graphics, guard, x, y, CHIP_WIDTH, CHIP_HEIGHT);
 	}
 
@@ -1623,9 +1707,14 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		this.drawSmallItem(graphics, GUARD_HEAD_ICON, x + 2, y + 2);
 		CardText text = this.cardText(guard);
 		int levelWidth = this.font.width(text.levelNumber);
-		graphics.text(this.font, text.levelNumber, x + TRAY_CHIP_WIDTH - 3 - levelWidth, y + 3, TEXT_SECONDARY, false);
-		graphics.text(this.font, text.miniName(this.font, TRAY_CHIP_WIDTH - 17 - levelWidth), x + 12, y + 3, TEXT_PRIMARY, false);
+		if (guard.loaded()) {
+			graphics.text(this.font, text.levelNumber, x + TRAY_CHIP_WIDTH - 3 - levelWidth, y + 3, TEXT_SECONDARY, false);
+		}
+		graphics.text(this.font, text.miniName(this.font, TRAY_CHIP_WIDTH - 17 - (guard.loaded() ? levelWidth : 0)), x + 12, y + 3, guard.loaded() ? TEXT_PRIMARY : TEXT_MUTED, false);
 		this.drawHealthBar(graphics, guard, x + 12, y + TRAY_CHIP_HEIGHT - 2, TRAY_CHIP_WIDTH - 14, 1);
+		if (!guard.loaded()) {
+			graphics.fill(x, y, x + TRAY_CHIP_WIDTH, y + TRAY_CHIP_HEIGHT, 0x660E141B);
+		}
 		this.dimIfDragSource(graphics, guard, x, y, TRAY_CHIP_WIDTH, TRAY_CHIP_HEIGHT);
 	}
 
@@ -1645,13 +1734,45 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		}
 	}
 
-	/**
-	 * Role icon for a roster entry. The roster payload has no role yet, so every guard shows a sword; once
-	 * GuardRosterSyncPayload.GuardSummary carries the role, map it in ClientGuardRosterStore.toEntry and return
-	 * BOW_ICON for bowmen here.
-	 */
+	/** Role icon from the roster's GuardRole name; unknown roles show a sword. */
 	private static ItemStack roleIcon(ClientGuardRosterStore.GuardRosterEntry guard) {
-		return SWORD_ICON;
+		return "BOWMAN".equals(guard.role()) ? BOW_ICON : SWORD_ICON;
+	}
+
+	private static String orderBadge(ClientGuardRosterStore.GuardRosterEntry guard) {
+		if (guard.holding()) {
+			return "H";
+		}
+		if (guard.staying()) {
+			return "S";
+		}
+		if (guard.following()) {
+			return "F";
+		}
+		return "";
+	}
+
+	private static int orderColor(ClientGuardRosterStore.GuardRosterEntry guard) {
+		if (guard.holding()) {
+			return 0xFFFFA65C;
+		}
+		return guard.staying() ? KEY_COLOR : STATUS_SUCCESS;
+	}
+
+	private static String orderKey(ClientGuardRosterStore.GuardRosterEntry guard) {
+		if (guard.holding()) {
+			return "holding";
+		}
+		if (guard.staying()) {
+			return "staying";
+		}
+		return guard.following() ? "following" : "free";
+	}
+
+	/** "CROWD_CONTROL" -> lang key with a readable fallback ("Crowd Control"). */
+	private static MutableComponent enumText(String kind, String enumName) {
+		String lower = enumName.toLowerCase(Locale.ROOT);
+		return Component.translatableWithFallback(KEY + kind + "." + lower, prettyDimension(lower));
 	}
 
 	private void drawSmallItem(GuiGraphicsExtractor graphics, ItemStack stack, int x, int y) {
@@ -1672,9 +1793,10 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		graphics.fill(x, y, x + Math.max(1, Math.round(w * ratio)), y + h, color);
 	}
 
-	private void drawSmallButton(GuiGraphicsExtractor graphics, Component label, int x, int y, int w, boolean hovered) {
-		graphics.fill(x, y, x + w, y + SMALL_BUTTON_HEIGHT, hovered ? STYLE_DARK[1] : STYLE_DARK[0]);
-		graphics.outline(x, y, w, SMALL_BUTTON_HEIGHT, hovered ? TEXT_PRIMARY : STYLE_DARK[2]);
+	private void drawSmallButton(GuiGraphicsExtractor graphics, Component label, int x, int y, int w, boolean hovered, boolean on) {
+		int[] style = on ? STYLE_ON : STYLE_DARK;
+		graphics.fill(x, y, x + w, y + SMALL_BUTTON_HEIGHT, hovered ? style[1] : style[0]);
+		graphics.outline(x, y, w, SMALL_BUTTON_HEIGHT, hovered ? TEXT_PRIMARY : style[2]);
 		graphics.text(this.font, label, x + 3, y + 2, TEXT_PRIMARY, false);
 	}
 
@@ -1868,8 +1990,27 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	}
 
 	private List<Component> buildGuardTooltip(ClientGuardRosterStore.GuardRosterEntry guard, int group) {
-		List<Component> tooltip = new ArrayList<>(8);
+		List<Component> tooltip = new ArrayList<>(10);
 		tooltip.add(Component.literal(guard.displayName()));
+		String groupName = group < 0 ? UNASSIGNED.getString() : (group < this.groupNames.size() ? this.groupNames.get(group) : guard.groupName());
+		boolean pending = this.pendingAssignments.containsKey(guard.guardUuid());
+		if (!guard.loaded()) {
+			tooltip.add(tr("guard.not_loaded").withStyle(ChatFormatting.GRAY));
+			tooltip.add(Component.translatable(KEY + (pending ? "guard.group_pending" : "guard.group"), groupName)
+				.withStyle(pending ? ChatFormatting.YELLOW : ChatFormatting.GRAY));
+			tooltip.add(GUARD_DRAG_HINT);
+			return tooltip;
+		}
+		if (!guard.role().isEmpty()) {
+			tooltip.add(enumText("role", guard.role()).withStyle(ChatFormatting.AQUA));
+		}
+		tooltip.add(Component.translatable(KEY + "guard.orders", tr("order." + orderKey(guard))).withStyle(ChatFormatting.GRAY));
+		if (!guard.behavior().isEmpty()) {
+			tooltip.add(Component.translatable(KEY + "guard.behavior", enumText("behavior", guard.behavior())).withStyle(ChatFormatting.GRAY));
+		}
+		if (guard.hasHome()) {
+			tooltip.add(tr("guard.has_home").withStyle(ChatFormatting.GRAY));
+		}
 		if (guard.maxHealth() > 0.0F) {
 			tooltip.add(Component.translatable(KEY + "guard.health", Mth.ceil(guard.health()), Mth.ceil(guard.maxHealth())).withStyle(ChatFormatting.GRAY));
 		}
@@ -1888,8 +2029,6 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		tooltip.add(guard.distance() >= 0.0D
 			? Component.translatable(KEY + "guard.distance", String.format(Locale.ROOT, "%.1f", guard.distance())).withStyle(ChatFormatting.GRAY)
 			: tr("guard.distance_unknown").withStyle(ChatFormatting.GRAY));
-		String groupName = group < 0 ? UNASSIGNED.getString() : (group < this.groupNames.size() ? this.groupNames.get(group) : guard.groupName());
-		boolean pending = this.pendingAssignments.containsKey(guard.guardUuid());
 		tooltip.add(Component.translatable(KEY + (pending ? "guard.group_pending" : "guard.group"), groupName)
 			.withStyle(pending ? ChatFormatting.YELLOW : ChatFormatting.GRAY));
 		tooltip.add(GUARD_DRAG_HINT);
@@ -2102,9 +2241,14 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			}
 			byRow.computeIfAbsent(entry.getValue(), ignored -> new ArrayList<>()).add(entry.getKey());
 		}
+		this.awaitingBatches = 0;
+		this.awaitingRejected = 0;
+		this.awaitingReasonKey = null;
 		for (Map.Entry<Integer, List<UUID>> row : byRow.entrySet()) {
 			for (String command : assignManyCommands(row.getKey(), row.getValue())) {
-				this.sendCommand(command);
+				if (this.sendCommand(command)) {
+					this.awaitingBatches++;
+				}
 			}
 		}
 		// Each accepted batch makes the server push a fresh roster; confirmation is checked against it.
@@ -2148,12 +2292,62 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		return commands;
 	}
 
+	/** Applies GuardGroupResultPayloads: rejected edits roll back with the server's reason instead of a timeout guess. */
+	private void processGroupResults() {
+		GuardGroupResultPayload result;
+		while ((result = this.rosterStore.pollGroupResult()) != null) {
+			switch (result.action()) {
+				case ASSIGN -> {
+					if (this.awaitingBatches <= 0) {
+						break;
+					}
+					this.awaitingBatches--;
+					this.awaitingRejected += result.rejected();
+					if (result.rejected() > 0 && this.awaitingReasonKey == null && !result.reasonKey().isBlank()) {
+						this.awaitingReasonKey = result.reasonKey();
+						this.awaitingReasonRow = result.groupRow();
+					}
+					if (this.awaitingBatches == 0 && this.awaitingRejected > 0) {
+						// Drop the optimistic view; the roster (re-sent every second) shows what the server kept.
+						int sent = this.awaitingSentCount;
+						this.awaitingConfirmation.clear();
+						this.localRevision++;
+						this.setStatus(Component.translatable(KEY + "status.rejected_reason", this.awaitingRejected, sent,
+							this.reasonText(this.awaitingReasonKey, this.awaitingReasonRow)), STATUS_ERROR);
+					}
+				}
+				case ADD, RENAME -> {
+					if (result.rejected() > 0) {
+						// The next roster sync restores the server's group list and names.
+						this.localRevision++;
+						this.setStatus(Component.translatable(KEY + (result.action() == GuardGroupResultPayload.Action.ADD ? "status.add_failed" : "status.rename_failed"),
+							this.reasonText(result.reasonKey(), result.groupRow())), STATUS_ERROR);
+					}
+				}
+			}
+		}
+	}
+
+	/** Translates a server reason key; arguments are filled for the keys the group commands send. */
+	private Component reasonText(String reasonKey, int row) {
+		if (reasonKey == null || reasonKey.isBlank()) {
+			return tr("status.reason_unknown");
+		}
+		if (reasonKey.endsWith(".limit")) {
+			return Component.translatable(reasonKey, ClientTacticsDataStore.MAX_GROUPS);
+		}
+		if (reasonKey.endsWith(".invalid_uuids")) {
+			return Component.translatable(reasonKey, MAX_UUIDS_PER_COMMAND);
+		}
+		return Component.translatable(reasonKey, row + 1, this.viewGroupCount);
+	}
+
 	private void checkAwaitingConfirmation() {
 		if (this.awaitingConfirmation.isEmpty()) {
 			return;
 		}
 		if (GuardCommandQueue.pending() > 0) {
-			// Commands still held back by the spam guard; the timeout starts once they are all sent.
+			// Commands still held back by the spam guard; the fallback timeout starts once they are all sent.
 			this.awaitingSince = System.currentTimeMillis();
 		}
 		int revision = this.rosterStore.revision();
@@ -2173,7 +2367,8 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			}
 		}
 		if (System.currentTimeMillis() - this.awaitingSince > SAVE_CONFIRM_TIMEOUT_MILLIS) {
-			// The server answers failed assigns with a chat error and no roster update, so silence means rejected.
+			// Fallback for servers without GuardGroupResultPayload: no confirming roster in time means rejected.
+			this.awaitingBatches = 0;
 			int rejected = this.awaitingConfirmation.size();
 			this.awaitingConfirmation.clear();
 			this.localRevision++;
@@ -2852,6 +3047,15 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 				this.miniName = ellipsize(font, this.name, width);
 			}
 			return this.miniName;
+		}
+
+		private String notLoaded;
+
+		private String notLoaded(Font font) {
+			if (this.notLoaded == null) {
+				this.notLoaded = tr("guard.not_loaded.short").getString();
+			}
+			return this.notLoaded;
 		}
 
 		private String rowName(Font font, int width) {

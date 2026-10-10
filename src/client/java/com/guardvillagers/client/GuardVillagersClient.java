@@ -3,6 +3,7 @@ package com.guardvillagers.client;
 import com.guardvillagers.GuardVillagersMod;
 import com.guardvillagers.network.GuardDebugDataPayload;
 import com.guardvillagers.network.GuardDebugSyncPayload;
+import com.guardvillagers.network.GuardGroupResultPayload;
 import com.guardvillagers.network.GuardRosterSyncPayload;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
@@ -34,6 +35,9 @@ public class GuardVillagersClient implements ClientModInitializer {
 				ClientGuardRosterStore.getInstance().applyPayload(worldContext, payload);
 				ClientTacticsDataStore.getInstance().replaceGroupNames(worldContext, payload.groupNames());
 			})
+		);
+		ClientPlayNetworking.registerGlobalReceiver(GuardGroupResultPayload.ID, (payload, context) ->
+			context.client().execute(() -> ClientGuardRosterStore.getInstance().pushGroupResult(payload))
 		);
 		ClientPlayNetworking.registerGlobalReceiver(GuardDebugSyncPayload.ID, (payload, context) ->
 			context.client().execute(() -> {
