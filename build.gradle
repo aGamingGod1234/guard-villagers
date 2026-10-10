@@ -17,6 +17,27 @@ repositories {
 	// See https://docs.gradle.org/current/userguide/declaring_repositories.html
 	// for more information about repositories.
 	mavenCentral()
+	// Simple Voice Chat plugin API (compile only; players install SVC themselves).
+	maven {
+		url = 'https://maven.maxhenkel.de/repository/public'
+		mavenContent { releasesOnly() }
+		content { includeGroup 'de.maxhenkel.voicechat' }
+	}
+	// Simple Voice Chat mod jar for dev runs only (runServer/runClient), never bundled.
+	maven {
+		name = 'Modrinth'
+		url = 'https://api.modrinth.com/maven'
+		content { includeGroup 'maven.modrinth' }
+	}
+}
+
+configurations {
+	// SVC is All Rights Reserved: it lives only on the dev run classpath, not in the jar or the gametest run.
+	voicechatDevRuntime {
+		canBeConsumed = false
+		canBeResolved = true
+		transitive = false
+	}
 }
 
 loom {
@@ -74,11 +95,20 @@ dependencies {
 	testImplementation platform("org.junit:junit-bom:5.14.4")
 	testImplementation "org.junit.jupiter:junit-jupiter"
 	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
-	
+
+	// Optional Simple Voice Chat integration (com.guardvillagers.compat.voicechat only).
+	compileOnly "de.maxhenkel.voicechat:voicechat-api:2.6.20"
+	// voicechat-fabric 2.6.21+26.1.2 (Modrinth project 9eGKb6K1, version BvX8YEGO).
+	voicechatDevRuntime "maven.modrinth:9eGKb6K1:BvX8YEGO"
+
 }
 
 test {
 	useJUnitPlatform()
+}
+
+tasks.matching { it.name == 'runServer' || it.name == 'runClient' }.configureEach {
+	classpath(configurations.voicechatDevRuntime)
 }
 
 processResources {

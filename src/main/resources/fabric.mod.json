@@ -20,6 +20,9 @@
 		],
 		"client": [
 			"com.guardvillagers.client.GuardVillagersClient"
+		],
+		"voicechat": [
+			"com.guardvillagers.compat.voicechat.GuardVoicechatPlugin"
 		]
 	},
 	"mixins": [
@@ -30,5 +33,8 @@
 		"minecraft": "~26.1.2",
 		"java": ">=25",
 		"fabric-api": ">=0.155.3+26.1.2"
+	},
+	"suggests": {
+		"voicechat": ">=2.6.21"
 	}
 }
