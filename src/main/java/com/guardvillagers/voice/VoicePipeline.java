@@ -71,6 +71,8 @@ public final class VoicePipeline implements AutoCloseable {
 	private volatile Function<UUID, String> promptHints = player -> null;
 	private volatile Supplier<Optional<VoiceBridge>> bridge = VoiceBridge::current;
 	private volatile boolean closed;
+	/** The HTTP transport {@link #create} built for this pipeline; closed with it. */
+	private AutoCloseable transport;
 
 	/**
 	 * @param stt null when no key is configured
@@ -92,8 +94,9 @@ public final class VoicePipeline implements AutoCloseable {
 	public static VoicePipeline create(VoiceConfig config, Optional<String> apiKey, Executor serverExecutor) {
 		SpeechToText stt = null;
 		TextToSpeech tts = null;
+		OpenAiHttp http = null;
 		if (apiKey.isPresent()) {
-			OpenAiHttp http = OpenAiHttp.create(config.openai().baseUrl(), apiKey.get());
+			http = OpenAiHttp.create(config.openai().baseUrl(), apiKey.get());
 			stt = new OpenAiSpeechToText(http, config.openai().sttModel(), config.openai().sttLanguage(),
 					Duration.ofMillis(config.openai().sttTimeoutMs()));
 			if (config.tts().enabled()) {
@@ -101,8 +104,10 @@ public final class VoicePipeline implements AutoCloseable {
 						Duration.ofMillis(config.openai().ttsTimeoutMs()));
 			}
 		}
-		return new VoicePipeline(config, stt, tts, VoiceRateLimiter.fromConfig(config), serverExecutor,
+		VoicePipeline pipeline = new VoicePipeline(config, stt, tts, VoiceRateLimiter.fromConfig(config), serverExecutor,
 				System::currentTimeMillis);
+		pipeline.transport = http;
+		return pipeline;
 	}
 
 	public VoiceConfig config() {
@@ -417,12 +422,21 @@ public final class VoicePipeline implements AutoCloseable {
 		}
 	}
 
-	/** Cancels in-flight OpenAI requests and stops delivering results. */
+	/** Cancels in-flight OpenAI requests, stops delivering results and shuts the HTTP client down. */
 	@Override
 	public void close() {
 		closed = true;
 		for (CompletableFuture<?> request : inFlight.toArray(CompletableFuture[]::new)) request.cancel(true);
 		inFlight.clear();
 		cache.clear();
+		AutoCloseable owned = transport;
+		transport = null;
+		if (owned != null) {
+			try {
+				owned.close();
+			} catch (Exception exception) {
+				LOGGER.debug("Guard voice HTTP client did not close cleanly: {}", exception.toString());
+			}
+		}
 	}
 }

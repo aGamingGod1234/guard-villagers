@@ -103,6 +103,10 @@ public final class VoiceCommandBridge {
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
 			PROMPT_HINTS.clear();
 			CONSENT.clear();
+			// The LLM interpreter owns an HTTP client and executor; do not leave them running after the server.
+			OrderInterpreter previous = CommanderService.interpreter();
+			CommanderService.setInterpreter(OrderInterpreter.grammarOnly());
+			previous.close();
 		});
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
 			CONSENT.put(handler.getPlayer().getUUID(), storedConsent(server, handler.getPlayer().getUUID()));

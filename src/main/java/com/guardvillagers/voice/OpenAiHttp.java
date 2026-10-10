@@ -27,13 +27,15 @@ import java.util.concurrent.Flow;
  * Every response body is read with a hard byte cap, every request has a timeout, and 429 responses carry a
  * capped Retry-After. The key goes only into the Authorization header.
  */
-public final class OpenAiHttp {
+public final class OpenAiHttp implements AutoCloseable {
 	public static final long MAX_RETRY_AFTER_MILLIS = 300_000L;
 	private static final long DEFAULT_RATE_LIMIT_BACKOFF_MILLIS = 1_000L;
 	private final URI baseUrl;
 	private final String apiKey;
 	private final HttpClient client;
 	private final java.util.function.LongSupplier wallClockMillis;
+	/** The executor {@link #create} made for the client; null when the caller supplied the client. */
+	private java.util.concurrent.ExecutorService ownedExecutor;
 
 	public OpenAiHttp(String baseUrl, String apiKey, HttpClient client) {
 		this(baseUrl, apiKey, client, System::currentTimeMillis);
@@ -50,12 +52,22 @@ public final class OpenAiHttp {
 
 	/** A client on virtual threads with a 5 s connect timeout. */
 	public static OpenAiHttp create(String baseUrl, String apiKey) {
+		java.util.concurrent.ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 		HttpClient client = HttpClient.newBuilder()
 				.connectTimeout(Duration.ofSeconds(5))
 				.followRedirects(HttpClient.Redirect.NEVER)
-				.executor(Executors.newVirtualThreadPerTaskExecutor())
+				.executor(executor)
 				.build();
-		return new OpenAiHttp(baseUrl, apiKey, client);
+		OpenAiHttp http = new OpenAiHttp(baseUrl, apiKey, client);
+		http.ownedExecutor = executor;
+		return http;
+	}
+
+	/** Aborts open exchanges and stops the client's selector thread and executor. */
+	@Override
+	public void close() {
+		client.shutdownNow();
+		if (ownedExecutor != null) ownedExecutor.shutdownNow();
 	}
 
 	public CompletableFuture<byte[]> postJson(String endpoint, String json, Duration timeout, int maxBytes,
