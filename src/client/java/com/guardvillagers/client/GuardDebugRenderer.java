@@ -3,173 +3,193 @@ package com.guardvillagers.client;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.GuardRole;
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.VertexConsumer;
-import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext;
-import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents;
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelExtractionContext;
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.PlayerInfo;
-import net.minecraft.client.renderer.LightTexture;
-import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.core.BlockPos;
+import net.minecraft.gizmos.GizmoStyle;
+import net.minecraft.gizmos.Gizmos;
+import net.minecraft.network.chat.Style;
+import net.minecraft.util.ARGB;
+import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.util.LightCoordsUtil;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import org.joml.Matrix4f;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
+/**
+ * Operator debug overlay. Geometry is emitted as per-frame gizmos at the end of level extraction (the same
+ * pipeline vanilla debug renderers use); labels are submitted as text with a background during submit
+ * collection so they keep the readable look of the old overlay.
+ */
 public final class GuardDebugRenderer {
 	private static final int CACHE_REFRESH_TICKS = 10;
 	private static final int CIRCLE_SEGMENTS = 64;
 	private static final double DETECTION_RANGE = 32.0D;
 	private static final double CIRCLE_Y_OFFSET = 0.01D;
 	private static final float LABEL_SCALE = 0.020F;
-	private static final float LINE_HALF_WIDTH = 0.015F;
+	private static final double LABEL_Y_OFFSET = 0.75D;
+	private static final int LABEL_LINE_COUNT = 9;
+	private static final float LINE_WIDTH = 2.5F;
+	private static final float PATH_OUTLINE_WIDTH = 2.0F;
 	private static final int PATH_TRAIL_KEEP_BEHIND = 3;
 	// Path nodes snap to integer block Y. When a guard walks on partial blocks (slabs,
-	// stairs, carpets) the actual ground surface is above pos.getY(), so the fill must
-	// float high enough to stay above those surfaces. Height adds a thin slab body so the
-	// marker is visible from any camera angle instead of collapsing to zero area edge-on.
-	private static final double PATH_FILL_Y_BASE = 0.06D;
-	private static final double PATH_FILL_HEIGHT = 0.09D;
-	private static final double PATH_OUTLINE_Y_BASE = 0.055D;
-	private static final double PATH_OUTLINE_HEIGHT = 0.1D;
-	private static final double PATH_OUTLINE_THICKNESS = 0.075D;
-	private static final float PATH_CURRENT_R = 0.42F;
-	private static final float PATH_CURRENT_G = 1.00F;
-	private static final float PATH_CURRENT_B = 0.34F;
-	private static final float PATH_NODE_R = 0.95F;
-	private static final float PATH_NODE_G = 0.95F;
-	private static final float PATH_NODE_B = 0.20F;
-	private static final float PATH_DESTINATION_R = 1.00F;
-	private static final float PATH_DESTINATION_G = 0.38F;
-	private static final float PATH_DESTINATION_B = 0.34F;
+	// stairs, carpets) the actual ground surface is above pos.getY(), so the marker must
+	// float high enough to stay above those surfaces and keep a thin body so it stays
+	// visible edge-on.
+	private static final double PATH_MARKER_Y_BASE = 0.06D;
+	private static final double PATH_MARKER_HEIGHT = 0.09D;
 	private static final float PATH_FILL_ALPHA = 0.50F;
 	private static final float PATH_OUTLINE_ALPHA = 0.82F;
+	private static final GizmoStyle PATH_CURRENT_STYLE = pathStyle(0.42F, 1.00F, 0.34F);
+	private static final GizmoStyle PATH_NODE_STYLE = pathStyle(0.95F, 0.95F, 0.20F);
+	private static final GizmoStyle PATH_DESTINATION_STYLE = pathStyle(1.00F, 0.38F, 0.34F);
+	private static final int CIRCLE_COLOR = ARGB.colorFromFloat(1.0F, 0.0F, 0.9F, 0.25F);
+	private static final int TARGET_LINE_COLOR = ARGB.colorFromFloat(1.0F, 0.95F, 0.95F, 0.20F);
 	private static final float[][] CIRCLE_POINTS = buildCirclePoints();
+
 	private static final List<GuardEntity> CACHED_GUARDS = new ArrayList<>();
+	private static final List<GuardLabel> LABEL_POOL = new ArrayList<>();
+	private static int activeLabelCount;
+	private static ClientLevel cachedLevel;
 	private static long lastCacheTick = Long.MIN_VALUE;
 	private static double lastCacheRange = -1.0D;
+	private static long lastLabelTick = Long.MIN_VALUE;
 
 	private GuardDebugRenderer() {
 	}
 
 	public static void register() {
-		WorldRenderEvents.AFTER_ENTITIES.register(GuardDebugRenderer::render);
+		LevelRenderEvents.END_EXTRACTION.register(GuardDebugRenderer::extract);
+		LevelRenderEvents.COLLECT_SUBMITS.register(GuardDebugRenderer::submitLabels);
 	}
 
-	private static void render(WorldRenderContext context) {
+	/** Drops every cached entity reference and timer; call on disconnect so nothing leaks into the next world. */
+	public static void reset() {
+		CACHED_GUARDS.clear();
+		for (GuardLabel label : LABEL_POOL) {
+			label.clear();
+		}
+		activeLabelCount = 0;
+		cachedLevel = null;
+		lastCacheTick = Long.MIN_VALUE;
+		lastCacheRange = -1.0D;
+		lastLabelTick = Long.MIN_VALUE;
+	}
+
+	private static void extract(LevelExtractionContext context) {
+		activeLabelCount = 0;
 		Minecraft client = Minecraft.getInstance();
-		if (client.level == null || client.player == null) {
+		ClientLevel level = context.level();
+		LocalPlayer player = client.player;
+		if (level == null || player == null) {
 			return;
 		}
 		if (!ClientDebugState.isEnabled()) {
-			CACHED_GUARDS.clear();
+			if (cachedLevel != null) {
+				reset();
+			}
 			ClientGuardDebugData.clear();
 			return;
 		}
 
 		double range = Math.max(1.0D, ClientDebugState.getRange());
-		updateGuardCache(client, range);
+		long tick = level.getGameTime();
+		updateGuardCache(level, player, range, tick);
 		if (CACHED_GUARDS.isEmpty()) {
 			return;
 		}
 
-		PoseStack matrices = context.matrices();
-		MultiBufferSource vertexConsumers = context.consumers();
-		Vec3 cameraPos = context.worldState().cameraRenderState.pos;
+		boolean rebuildLabels = tick != lastLabelTick;
+		lastLabelTick = tick;
+		float partialTick = context.deltaTracker().getGameTimeDeltaPartialTick(false);
 		double maxDistanceSq = range * range;
-		ClientTacticsDataStore.WorldContext worldContext = ClientTacticsDataStore.resolveContext(client, client.level);
-
-		matrices.pushPose();
-		matrices.translate(-cameraPos.x, -cameraPos.y, -cameraPos.z);
+		ClientTacticsDataStore.WorldContext worldContext = null;
 
 		for (GuardEntity guard : CACHED_GUARDS) {
-			if (!guard.isAlive() || guard.squaredDistanceTo(client.player) > maxDistanceSq) {
+			if (!isRenderable(guard, level, player, maxDistanceSq)) {
 				continue;
 			}
 			ClientGuardDebugData.GuardDebugSnapshot snapshot = ClientGuardDebugData.get(guard.getId());
-			renderDetectionCircle(matrices, vertexConsumers, guard, cameraPos);
-			renderPathHighlights(matrices, vertexConsumers, guard, snapshot);
-			renderTargetLine(matrices, vertexConsumers, guard, snapshot, client, cameraPos);
-			renderLabels(matrices, vertexConsumers, guard, client, worldContext);
-		}
+			LivingEntity target = resolveTarget(guard, snapshot, level);
+			Vec3 position = guard.getPosition(partialTick);
 
-		matrices.popPose();
-		ClientGuardDebugData.pruneMissing(client.level);
+			emitDetectionCircle(position);
+			emitPathHighlights(snapshot);
+			if (target != null && target.isAlive()) {
+				Gizmos.line(guard.getEyePosition(partialTick), target.getEyePosition(partialTick), TARGET_LINE_COLOR, LINE_WIDTH);
+			}
+
+			GuardLabel label = obtainLabel(activeLabelCount++);
+			label.x = position.x;
+			label.y = position.y + guard.getBbHeight() + LABEL_Y_OFFSET;
+			label.z = position.z;
+			// Label text only changes with game state, so rebuild it once per tick rather than every frame.
+			if (rebuildLabels || label.guardId != guard.getId()) {
+				if (worldContext == null) {
+					worldContext = ClientTacticsDataStore.resolveContext(client, level);
+				}
+				label.guardId = guard.getId();
+				buildLabelLines(label, guard, target, client, worldContext);
+			}
+		}
 	}
 
-	private static void updateGuardCache(Minecraft client, double range) {
-		if (client.level == null || client.player == null) {
-			CACHED_GUARDS.clear();
-			lastCacheTick = Long.MIN_VALUE;
-			return;
-		}
-		long tick = client.level.getGameTime();
-		if (lastCacheTick != Long.MIN_VALUE && tick - lastCacheTick < CACHE_REFRESH_TICKS && Math.abs(lastCacheRange - range) < 0.001D) {
+	private static boolean isRenderable(GuardEntity guard, ClientLevel level, LocalPlayer player, double maxDistanceSq) {
+		return !guard.isRemoved()
+				&& guard.isAlive()
+				&& guard.level() == level
+				&& guard.distanceToSqr(player) <= maxDistanceSq;
+	}
+
+	private static void updateGuardCache(ClientLevel level, LocalPlayer player, double range, long tick) {
+		boolean sameLevel = level == cachedLevel;
+		boolean fresh = sameLevel
+				&& lastCacheTick != Long.MIN_VALUE
+				&& tick >= lastCacheTick
+				&& tick - lastCacheTick < CACHE_REFRESH_TICKS
+				&& Math.abs(lastCacheRange - range) < 0.001D;
+		if (fresh) {
 			return;
 		}
 
+		cachedLevel = level;
 		lastCacheTick = tick;
 		lastCacheRange = range;
 		double rangeSq = range * range;
 		CACHED_GUARDS.clear();
-		CACHED_GUARDS.addAll(client.level.getEntitiesOfClass(
-			GuardEntity.class,
-			client.player.getBoundingBox().inflate(range),
-			guard -> guard.isAlive()
-				&& guard.distanceToSqr(client.player) <= rangeSq
-		));
+		CACHED_GUARDS.addAll(level.getEntitiesOfClass(
+				GuardEntity.class,
+				player.getBoundingBox().inflate(range),
+				guard -> guard.isAlive() && guard.distanceToSqr(player) <= rangeSq));
+		ClientGuardDebugData.pruneMissing(level);
 	}
 
-	private static void renderDetectionCircle(
-		PoseStack matrices,
-		MultiBufferSource vertexConsumers,
-		GuardEntity guard,
-		Vec3 cameraPos
-	) {
-		VertexConsumer consumer = vertexConsumers.getBuffer(RenderTypes.debugFilledBox());
-		Matrix4f matrix = matrices.last().pose();
-		double centerX = guard.getX();
-		double centerY = guard.getY() + CIRCLE_Y_OFFSET;
-		double centerZ = guard.getZ();
-
-		for (int i = 0; i < CIRCLE_SEGMENTS; i++) {
-			double x1 = centerX + DETECTION_RANGE * CIRCLE_POINTS[i][0];
-			double z1 = centerZ + DETECTION_RANGE * CIRCLE_POINTS[i][1];
-			double x2 = centerX + DETECTION_RANGE * CIRCLE_POINTS[i + 1][0];
-			double z2 = centerZ + DETECTION_RANGE * CIRCLE_POINTS[i + 1][1];
-
-			renderLineSegment(
-				consumer,
-				matrix,
-				cameraPos,
-				x1,
-				centerY,
-				z1,
-				x2,
-				centerY,
-				z2,
-				0.0F,
-				0.9F,
-				0.25F,
-				1.0F
-			);
+	private static void emitDetectionCircle(Vec3 center) {
+		double y = center.y + CIRCLE_Y_OFFSET;
+		Vec3 previous = new Vec3(center.x + DETECTION_RANGE * CIRCLE_POINTS[0][0], y, center.z + DETECTION_RANGE * CIRCLE_POINTS[0][1]);
+		for (int i = 1; i <= CIRCLE_SEGMENTS; i++) {
+			Vec3 next = new Vec3(center.x + DETECTION_RANGE * CIRCLE_POINTS[i][0], y, center.z + DETECTION_RANGE * CIRCLE_POINTS[i][1]);
+			Gizmos.line(previous, next, CIRCLE_COLOR, LINE_WIDTH);
+			previous = next;
 		}
 	}
 
-	private static void renderPathHighlights(
-		PoseStack matrices,
-		MultiBufferSource vertexConsumers,
-		GuardEntity guard,
-		ClientGuardDebugData.GuardDebugSnapshot snapshot
-	) {
+	private static void emitPathHighlights(ClientGuardDebugData.GuardDebugSnapshot snapshot) {
 		if (snapshot == null || snapshot.pathNodes().isEmpty()) {
 			return;
 		}
@@ -179,156 +199,115 @@ public final class GuardDebugRenderer {
 			return;
 		}
 
-		int firstVisibleIndex = Math.max(0, currentPathIndex - PATH_TRAIL_KEEP_BEHIND);
-		VertexConsumer filled = vertexConsumers.getBuffer(RenderTypes.debugFilledBox());
-		for (int i = 0; i < nodes.size(); i++) {
-			if (i < firstVisibleIndex) {
-				continue;
-			}
+		int lastIndex = nodes.size() - 1;
+		for (int i = Math.max(0, currentPathIndex - PATH_TRAIL_KEEP_BEHIND); i <= lastIndex; i++) {
+			GizmoStyle style = i == currentPathIndex
+					? PATH_CURRENT_STYLE
+					: i == lastIndex ? PATH_DESTINATION_STYLE : PATH_NODE_STYLE;
 			BlockPos node = nodes.get(i);
-			if (i == currentPathIndex) {
-				drawPathMarkerCarpet(matrices, filled, node, PATH_CURRENT_R, PATH_CURRENT_G, PATH_CURRENT_B);
-				continue;
-			}
-			if (i == nodes.size() - 1) {
-				drawPathMarkerCarpet(
-					matrices,
-					filled,
-					node,
-					PATH_DESTINATION_R,
-					PATH_DESTINATION_G,
-					PATH_DESTINATION_B
-				);
-				continue;
-			}
-			drawPathMarkerCarpet(matrices, filled, node, PATH_NODE_R, PATH_NODE_G, PATH_NODE_B);
+			double minY = node.getY() + PATH_MARKER_Y_BASE;
+			Gizmos.cuboid(
+					new AABB(node.getX(), minY, node.getZ(), node.getX() + 1.0D, minY + PATH_MARKER_HEIGHT, node.getZ() + 1.0D),
+					style);
 		}
-	}
-
-	private static void renderTargetLine(
-		PoseStack matrices,
-		MultiBufferSource vertexConsumers,
-		GuardEntity guard,
-		ClientGuardDebugData.GuardDebugSnapshot snapshot,
-		Minecraft client,
-		Vec3 cameraPos
-	) {
-		LivingEntity target = resolveTarget(guard, snapshot, client);
-		if (target == null || !target.isAlive()) {
-			return;
-		}
-
-		Vec3 origin = guard.getEyePos();
-		Vec3 destination = target.getEyePosition();
-		VertexConsumer consumer = vertexConsumers.getBuffer(RenderTypes.debugFilledBox());
-		Matrix4f matrix = matrices.last().pose();
-		renderLineSegment(
-			consumer,
-			matrix,
-			cameraPos,
-			origin.x,
-			origin.y,
-			origin.z,
-			destination.x,
-			destination.y,
-			destination.z,
-			0.95F,
-			0.95F,
-			0.20F,
-			1.0F
-		);
 	}
 
 	private static LivingEntity resolveTarget(
-		GuardEntity guard,
-		ClientGuardDebugData.GuardDebugSnapshot snapshot,
-		Minecraft client
+			GuardEntity guard,
+			ClientGuardDebugData.GuardDebugSnapshot snapshot,
+			ClientLevel level
 	) {
-		if (snapshot != null && snapshot.targetEntityId() >= 0 && client.level != null) {
-			Entity synced = client.level.getEntity(snapshot.targetEntityId());
+		if (snapshot != null && snapshot.targetEntityId() >= 0) {
+			Entity synced = level.getEntity(snapshot.targetEntityId());
 			if (synced instanceof LivingEntity living) {
 				return living;
 			}
 		}
+		// Mob targets are server-side only, so this is normally null on a remote client.
 		return guard.getTarget();
 	}
 
-	private static void renderLabels(
-		PoseStack matrices,
-		MultiBufferSource vertexConsumers,
-		GuardEntity guard,
-		Minecraft client,
-		ClientTacticsDataStore.WorldContext worldContext
-	) {
-		Font textRenderer = client.font;
-		List<DebugLabelLine> lines = buildLabelLines(guard, client, worldContext);
-		if (lines.isEmpty()) {
+	private static void submitLabels(LevelRenderContext context) {
+		if (activeLabelCount == 0) {
 			return;
 		}
+		Minecraft client = Minecraft.getInstance();
+		Font font = client.font;
+		CameraRenderState camera = context.levelState().cameraRenderState;
+		PoseStack poseStack = context.poseStack();
+		SubmitNodeCollector collector = context.submitNodeCollector();
+		int background = client.options.getBackgroundColor(0.25F);
+		int lineStep = font.lineHeight + 2;
 
-		matrices.pushPose();
-		matrices.translate(guard.getX(), guard.getY() + guard.getHeight() + 0.75D, guard.getZ());
-		matrices.mulPose(client.gameRenderer.getMainCamera().rotation());
-		matrices.scale(-LABEL_SCALE, -LABEL_SCALE, LABEL_SCALE);
-		Matrix4f matrix = matrices.last().pose();
-		int background = (int) (client.options.getBackgroundOpacity(0.25F) * 255.0F) << 24;
-		float lineY = -(lines.size() - 1) * (textRenderer.lineHeight + 2);
-		for (DebugLabelLine line : lines) {
-			float lineX = -textRenderer.width(line.text()) / 2.0F;
-			textRenderer.drawInBatch(
-				line.text(),
-				lineX,
-				lineY,
-				line.color(),
-				false,
-				matrix,
-				vertexConsumers,
-				Font.DisplayMode.NORMAL,
-				background,
-				LightTexture.FULL_BRIGHT
-			);
-			lineY += textRenderer.lineHeight + 2;
+		for (int i = 0; i < activeLabelCount; i++) {
+			GuardLabel label = LABEL_POOL.get(i);
+			poseStack.pushPose();
+			poseStack.translate(label.x - camera.pos.x, label.y - camera.pos.y, label.z - camera.pos.z);
+			poseStack.mulPose(camera.orientation);
+			poseStack.scale(LABEL_SCALE, -LABEL_SCALE, LABEL_SCALE);
+			float lineY = -(label.lineCount - 1) * lineStep;
+			for (int line = 0; line < label.lineCount; line++) {
+				collector.submitText(
+						poseStack,
+						-label.widths[line] / 2.0F,
+						lineY,
+						label.texts[line],
+						false,
+						Font.DisplayMode.NORMAL,
+						LightCoordsUtil.FULL_BRIGHT,
+						label.colors[line],
+						background,
+						0);
+				lineY += lineStep;
+			}
+			poseStack.popPose();
 		}
-		matrices.popPose();
 	}
 
-	private static List<DebugLabelLine> buildLabelLines(GuardEntity guard, Minecraft client, ClientTacticsDataStore.WorldContext worldContext) {
-		List<DebugLabelLine> lines = new ArrayList<>(9);
+	private static GuardLabel obtainLabel(int index) {
+		while (LABEL_POOL.size() <= index) {
+			LABEL_POOL.add(new GuardLabel());
+		}
+		return LABEL_POOL.get(index);
+	}
+
+	private static void buildLabelLines(
+			GuardLabel label,
+			GuardEntity guard,
+			LivingEntity target,
+			Minecraft client,
+			ClientTacticsDataStore.WorldContext worldContext
+	) {
+		Font font = client.font;
+		label.lineCount = 0;
 		int hp = Math.max(0, Mth.floor(guard.getHealth()));
 		int maxHp = Math.max(1, Mth.floor(guard.getMaxHealth()));
-		lines.add(line("HP: " + hp + "/" + maxHp, 0xFF5555));
+		label.add(font, "HP: " + hp + "/" + maxHp, 0xFF5555);
 
 		int level = guard.getLevel();
-		lines.add(line("Level: " + level, 0x55FF55));
+		label.add(font, "Level: " + level, 0x55FF55);
 
 		int xp = guard.getExperience();
-		String xpLine = level >= 10 ? "XP: " + xp + "/MAX" : "XP: " + xp + "/" + (level * 120);
-		lines.add(line(xpLine, 0x55FFFF));
+		label.add(font, level >= 10 ? "XP: " + xp + "/MAX" : "XP: " + xp + "/" + (level * 120), 0x55FFFF);
 
-		lines.add(line("Role: " + titleCase(guard.getRole().name()), 0xFFFF55));
+		label.add(font, "Role: " + titleCase(guard.getRole().name()), 0xFFFF55);
 
-		LivingEntity target = guard.getTarget();
-		String targetValue = target == null ? "None" : target.getName().getString();
-		lines.add(line("Target: " + targetValue, 0xFF55FF));
+		String targetValue = target == null || !target.isAlive() ? "None" : target.getName().getString();
+		label.add(font, "Target: " + targetValue, 0xFF55FF);
 
-		String typeValue = guard.getRole() == GuardRole.BOWMAN ? "Bowmen" : "Swordsmen";
-		lines.add(line("Type: " + typeValue, 0xF5E6A9));
+		label.add(font, "Type: " + (guard.getRole() == GuardRole.BOWMAN ? "Bowmen" : "Swordsmen"), 0xF5E6A9);
 
 		UUID ownerUuid = guard.getOwnerUuid();
 		String ownerValue = ownerUuid == null ? "Nil" : resolveOwnerName(ownerUuid, client);
-		lines.add(line("Owned: " + ownerValue, ownerUuid == null ? 0xAAAAAA : 0xFFFFFF));
+		label.add(font, "Owned: " + ownerValue, ownerUuid == null ? 0xAAAAAA : 0xFFFFFF);
 
-		RegionColor regionColor = ClientTacticsDataStore.getInstance().getRegionColor(worldContext, guard.getBlockX() >> 4, guard.getBlockZ() >> 4);
+		RegionColor regionColor = ClientTacticsDataStore.getInstance()
+				.getRegionColor(worldContext, guard.getBlockX() >> 4, guard.getBlockZ() >> 4);
 		String zoneValue = regionColor == RegionColor.NONE ? "Nil" : regionColor.label();
-		lines.add(line("Zone: " + zoneValue, regionColor == RegionColor.NONE ? 0xAAAAAA : 0x5555FF));
+		label.add(font, "Zone: " + zoneValue, regionColor == RegionColor.NONE ? 0xAAAAAA : 0x5555FF);
 
 		String groupValue = guard.getGroupIndex() < 0 ? "Nil" : guard.getGroupName();
-		lines.add(line("Group: " + groupValue, guard.getGroupIndex() < 0 ? 0xAAAAAA : 0xFFAA00));
-		return lines;
-	}
-
-	private static DebugLabelLine line(String text, int color) {
-		return new DebugLabelLine(text, color);
+		label.add(font, "Group: " + groupValue, guard.getGroupIndex() < 0 ? 0xAAAAAA : 0xFFAA00);
 	}
 
 	private static String resolveOwnerName(UUID ownerUuid, Minecraft client) {
@@ -353,8 +332,7 @@ public final class GuardDebugRenderer {
 		}
 		String[] parts = value.toLowerCase(Locale.ROOT).split("_");
 		StringBuilder builder = new StringBuilder();
-		for (int i = 0; i < parts.length; i++) {
-			String part = parts[i];
+		for (String part : parts) {
 			if (part.isEmpty()) {
 				continue;
 			}
@@ -369,182 +347,15 @@ public final class GuardDebugRenderer {
 		return builder.length() == 0 ? "Nil" : builder.toString();
 	}
 
-	private static void drawPathMarkerCarpet(PoseStack matrices, VertexConsumer consumer, BlockPos pos, float r, float g, float b) {
-		double minX = pos.getX();
-		double maxX = minX + 1.0D;
-		double minZ = pos.getZ();
-		double maxZ = minZ + 1.0D;
-
-		double fillMinY = pos.getY() + PATH_FILL_Y_BASE;
-		double fillMaxY = fillMinY + PATH_FILL_HEIGHT;
-		drawFilledSlab(matrices, consumer, minX, fillMinY, minZ, maxX, fillMaxY, maxZ, r, g, b, PATH_FILL_ALPHA);
-
-		float outlineR = brightenChannel(r);
-		float outlineG = brightenChannel(g);
-		float outlineB = brightenChannel(b);
-		double outlineMinY = pos.getY() + PATH_OUTLINE_Y_BASE;
-		double outlineMaxY = outlineMinY + PATH_OUTLINE_HEIGHT;
-
-		drawFilledSlab(matrices, consumer, minX, outlineMinY, minZ, maxX, outlineMaxY, minZ + PATH_OUTLINE_THICKNESS,
-			outlineR, outlineG, outlineB, PATH_OUTLINE_ALPHA);
-		drawFilledSlab(matrices, consumer, minX, outlineMinY, maxZ - PATH_OUTLINE_THICKNESS, maxX, outlineMaxY, maxZ,
-			outlineR, outlineG, outlineB, PATH_OUTLINE_ALPHA);
-		drawFilledSlab(matrices, consumer, minX, outlineMinY, minZ + PATH_OUTLINE_THICKNESS,
-			minX + PATH_OUTLINE_THICKNESS, outlineMaxY, maxZ - PATH_OUTLINE_THICKNESS,
-			outlineR, outlineG, outlineB, PATH_OUTLINE_ALPHA);
-		drawFilledSlab(matrices, consumer, maxX - PATH_OUTLINE_THICKNESS, outlineMinY, minZ + PATH_OUTLINE_THICKNESS,
-			maxX, outlineMaxY, maxZ - PATH_OUTLINE_THICKNESS,
-			outlineR, outlineG, outlineB, PATH_OUTLINE_ALPHA);
+	private static GizmoStyle pathStyle(float r, float g, float b) {
+		return GizmoStyle.strokeAndFill(
+				ARGB.colorFromFloat(PATH_OUTLINE_ALPHA, brighten(r), brighten(g), brighten(b)),
+				PATH_OUTLINE_WIDTH,
+				ARGB.colorFromFloat(PATH_FILL_ALPHA, r, g, b));
 	}
 
-	private static float brightenChannel(float channel) {
+	private static float brighten(float channel) {
 		return Math.min(1.0F, channel + 0.24F);
-	}
-
-	/**
-	 * Draws a thin 3D box so debug markers stay visible from any camera angle. Flat quads
-	 * collapse to zero screen area when the camera is level with the surface they sit on,
-	 * and their Y can also fall inside partial blocks (slabs, carpets, stairs) that raise
-	 * the walk surface above the PathNode's integer Y. Emitting all six faces with both
-	 * windings guarantees the marker renders regardless of cull state or view direction.
-	 */
-	private static void drawFilledSlab(
-		PoseStack matrices,
-		VertexConsumer consumer,
-		double minX,
-		double minY,
-		double minZ,
-		double maxX,
-		double maxY,
-		double maxZ,
-		float r,
-		float g,
-		float b,
-		float a
-	) {
-		Matrix4f matrix = matrices.last().pose();
-		// Top (normal +Y)
-		quad(consumer, matrix, minX, maxY, maxZ, maxX, maxY, maxZ, maxX, maxY, minZ, minX, maxY, minZ, r, g, b, a);
-		quad(consumer, matrix, minX, maxY, minZ, maxX, maxY, minZ, maxX, maxY, maxZ, minX, maxY, maxZ, r, g, b, a);
-		// Bottom (normal -Y)
-		quad(consumer, matrix, minX, minY, minZ, maxX, minY, minZ, maxX, minY, maxZ, minX, minY, maxZ, r, g, b, a);
-		quad(consumer, matrix, minX, minY, maxZ, maxX, minY, maxZ, maxX, minY, minZ, minX, minY, minZ, r, g, b, a);
-		// North (-Z face)
-		quad(consumer, matrix, minX, minY, minZ, minX, maxY, minZ, maxX, maxY, minZ, maxX, minY, minZ, r, g, b, a);
-		quad(consumer, matrix, maxX, minY, minZ, maxX, maxY, minZ, minX, maxY, minZ, minX, minY, minZ, r, g, b, a);
-		// South (+Z face)
-		quad(consumer, matrix, maxX, minY, maxZ, maxX, maxY, maxZ, minX, maxY, maxZ, minX, minY, maxZ, r, g, b, a);
-		quad(consumer, matrix, minX, minY, maxZ, minX, maxY, maxZ, maxX, maxY, maxZ, maxX, minY, maxZ, r, g, b, a);
-		// West (-X face)
-		quad(consumer, matrix, minX, minY, maxZ, minX, maxY, maxZ, minX, maxY, minZ, minX, minY, minZ, r, g, b, a);
-		quad(consumer, matrix, minX, minY, minZ, minX, maxY, minZ, minX, maxY, maxZ, minX, minY, maxZ, r, g, b, a);
-		// East (+X face)
-		quad(consumer, matrix, maxX, minY, minZ, maxX, maxY, minZ, maxX, maxY, maxZ, maxX, minY, maxZ, r, g, b, a);
-		quad(consumer, matrix, maxX, minY, maxZ, maxX, maxY, maxZ, maxX, maxY, minZ, maxX, minY, minZ, r, g, b, a);
-	}
-
-	private static void quad(
-		VertexConsumer consumer,
-		Matrix4f matrix,
-		double x1,
-		double y1,
-		double z1,
-		double x2,
-		double y2,
-		double z2,
-		double x3,
-		double y3,
-		double z3,
-		double x4,
-		double y4,
-		double z4,
-		float r,
-		float g,
-		float b,
-		float a
-	) {
-		quadVertex(consumer, matrix, x1, y1, z1, r, g, b, a);
-		quadVertex(consumer, matrix, x2, y2, z2, r, g, b, a);
-		quadVertex(consumer, matrix, x3, y3, z3, r, g, b, a);
-		quadVertex(consumer, matrix, x4, y4, z4, r, g, b, a);
-	}
-
-	private static void quadVertex(VertexConsumer consumer, Matrix4f matrix, double x, double y, double z, float r, float g, float b, float a) {
-		consumer.addVertex(matrix, (float) x, (float) y, (float) z).setColor(r, g, b, a);
-	}
-
-	/**
-	 * Renders a line segment between two world-space points as a thin camera-facing quad.
-	 */
-	private static void renderLineSegment(
-		VertexConsumer consumer,
-		Matrix4f matrix,
-		Vec3 cameraPos,
-		double x1,
-		double y1,
-		double z1,
-		double x2,
-		double y2,
-		double z2,
-		float r,
-		float g,
-		float b,
-		float a
-	) {
-		double dx = x2 - x1;
-		double dy = y2 - y1;
-		double dz = z2 - z1;
-		double length = Math.sqrt(dx * dx + dy * dy + dz * dz);
-		if (length < 1.0E-6D) {
-			return;
-		}
-
-		double midX = (x1 + x2) * 0.5D;
-		double midY = (y1 + y2) * 0.5D;
-		double midZ = (z1 + z2) * 0.5D;
-		double camDx = midX - cameraPos.x;
-		double camDy = midY - cameraPos.y;
-		double camDz = midZ - cameraPos.z;
-
-		double crossX = dy * camDz - dz * camDy;
-		double crossY = dz * camDx - dx * camDz;
-		double crossZ = dx * camDy - dy * camDx;
-		double crossLen = Math.sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ);
-		if (crossLen < 1.0E-6D) {
-			crossX = -dz;
-			crossY = 0.0D;
-			crossZ = dx;
-			crossLen = Math.sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ);
-			if (crossLen < 1.0E-6D) {
-				return;
-			}
-		}
-
-		double scale = LINE_HALF_WIDTH / crossLen;
-		double offX = crossX * scale;
-		double offY = crossY * scale;
-		double offZ = crossZ * scale;
-
-		float ax = (float) (x1 + offX);
-		float ay = (float) (y1 + offY);
-		float az = (float) (z1 + offZ);
-
-		float bx = (float) (x1 - offX);
-		float by = (float) (y1 - offY);
-		float bz = (float) (z1 - offZ);
-
-		float cx = (float) (x2 - offX);
-		float cy = (float) (y2 - offY);
-		float cz = (float) (z2 - offZ);
-
-		float ex = (float) (x2 + offX);
-		float ey = (float) (y2 + offY);
-		float ez = (float) (z2 + offZ);
-
-		consumer.addVertex(matrix, ax, ay, az).setColor(r, g, b, a);
-		consumer.addVertex(matrix, bx, by, bz).setColor(r, g, b, a);
-		consumer.addVertex(matrix, cx, cy, cz).setColor(r, g, b, a);
-		consumer.addVertex(matrix, ex, ey, ez).setColor(r, g, b, a);
 	}
 
 	private static float[][] buildCirclePoints() {
@@ -557,6 +368,32 @@ public final class GuardDebugRenderer {
 		return points;
 	}
 
-	private record DebugLabelLine(String text, int color) {
+	/** Reusable per-guard label buffer so the overlay does not allocate label containers every frame. */
+	private static final class GuardLabel {
+		private final FormattedCharSequence[] texts = new FormattedCharSequence[LABEL_LINE_COUNT];
+		private final int[] widths = new int[LABEL_LINE_COUNT];
+		private final int[] colors = new int[LABEL_LINE_COUNT];
+		private int lineCount;
+		private int guardId = -1;
+		private double x;
+		private double y;
+		private double z;
+
+		private void add(Font font, String text, int rgb) {
+			FormattedCharSequence sequence = FormattedCharSequence.forward(text, Style.EMPTY);
+			this.texts[this.lineCount] = sequence;
+			this.widths[this.lineCount] = font.width(sequence);
+			// Font uses the alpha channel as-is, so 0xRRGGBB colors would draw fully transparent.
+			this.colors[this.lineCount] = ARGB.opaque(rgb);
+			this.lineCount++;
+		}
+
+		private void clear() {
+			for (int i = 0; i < LABEL_LINE_COUNT; i++) {
+				this.texts[i] = null;
+			}
+			this.lineCount = 0;
+			this.guardId = -1;
+		}
 	}
 }
