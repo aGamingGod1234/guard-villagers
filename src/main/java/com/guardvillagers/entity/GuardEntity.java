@@ -42,8 +42,11 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.permissions.LevelBasedPermissionSet;
-import net.minecraft.server.permissions.PermissionLevel;
+import net.minecraft.commands.Commands;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.entity.EntityReference;
+import net.minecraft.world.entity.npc.villager.VillagerData;
+import net.minecraft.world.entity.npc.villager.VillagerType;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.Mth;
@@ -120,6 +123,13 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 			EntityDataSerializers.OPTIONAL_BLOCK_POS);
 	private static final EntityDataAccessor<Integer> SYNCED_PATROL_RADIUS = SynchedEntityData.defineId(GuardEntity.class,
 			EntityDataSerializers.INT);
+	private static final EntityDataAccessor<Optional<EntityReference<LivingEntity>>> SYNCED_OWNER = SynchedEntityData
+			.defineId(GuardEntity.class, EntityDataSerializers.OPTIONAL_LIVING_ENTITY_REFERENCE);
+	private static final EntityDataAccessor<Integer> SYNCED_GROUP_INDEX = SynchedEntityData.defineId(GuardEntity.class,
+			EntityDataSerializers.INT);
+	/** Only the type (biome robe) is used; profession and level stay at their defaults. */
+	private static final EntityDataAccessor<VillagerData> SYNCED_VILLAGER_DATA = SynchedEntityData.defineId(
+			GuardEntity.class, EntityDataSerializers.VILLAGER_DATA);
 
 	private static final Identifier LEVEL_HEALTH_MODIFIER_ID = GuardVillagersMod.id("guard_level_health");
 	private static final Identifier LEVEL_DAMAGE_MODIFIER_ID = GuardVillagersMod.id("guard_level_damage");
@@ -177,6 +187,11 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	private static final String STAY_ORIGIN_Z_KEY = "StayOriginZ";
 	public static final int STAY_RADIUS = 3;
 	private static final String HAS_LAST_LAND_KEY = "HasLastLand";
+	private static final String HOLD_POSITION_KEY = "GuardHoldPosition";
+	private static final String HOLD_X_KEY = "HoldX";
+	private static final String HOLD_Y_KEY = "HoldY";
+	private static final String HOLD_Z_KEY = "HoldZ";
+	private static final String VILLAGER_DATA_KEY = "GuardVillagerData";
 	private static final int MIN_GROUP_INDEX = -1;
 	private static final int MAX_GROUP_INDEX = Integer.MAX_VALUE / 2;
 	private static final int MISSING_LOADOUT_LEVEL = -1;
@@ -313,6 +328,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	private boolean shieldRequested;
 	private BlockPos unstickSamplePos;
 	private boolean gearChecked;
+	private BlockPos holdOrigin;
+	private boolean villagerTypeChosen;
 	private int unstickSamples;
 	private UUID lastRallyAttackerUuid;
 	private long lastRallyTick = Long.MIN_VALUE;
@@ -346,6 +363,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	public SpawnGroupData finalizeSpawn(ServerLevelAccessor world, DifficultyInstance difficulty, EntitySpawnReason spawnReason,
 			SpawnGroupData entityData) {
 		SpawnGroupData data = super.finalizeSpawn(world, difficulty, spawnReason, entityData);
+		this.chooseVillagerTypeFromBiome();
 		if ((spawnReason == EntitySpawnReason.SPAWN_ITEM_USE || spawnReason == EntitySpawnReason.DISPENSER
 				|| spawnReason == EntitySpawnReason.COMMAND) && this.getMainHandItem().isEmpty()) {
 			this.applyNaturalLoadout(world.getLevel());
@@ -397,6 +415,9 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		builder.define(DEBUG_ACTIVE, false);
 		builder.define(SYNCED_HOME, Optional.empty());
 		builder.define(SYNCED_PATROL_RADIUS, 0);
+		builder.define(SYNCED_OWNER, Optional.empty());
+		builder.define(SYNCED_GROUP_INDEX, MIN_GROUP_INDEX);
+		builder.define(SYNCED_VILLAGER_DATA, Villager.createDefaultVillagerData());
 	}
 
 	public boolean isDebugActive() {
@@ -471,6 +492,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	public void setOwnerUuid(UUID ownerUuid) {
 		UUID previousOwner = this.ownerUuid;
 		this.ownerUuid = ownerUuid;
+		this.syncOwnerData();
 		if (ownerUuid != null && !ownerUuid.equals(previousOwner)) {
 			this.squadId = ownerUuid;
 		}
@@ -563,6 +585,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	public void setStaying(boolean staying) {
+		this.holdOrigin = null;
 		this.staying = staying;
 		if (staying) {
 			this.stayOrigin = this.blockPosition();
@@ -587,6 +610,9 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		this.followOverride = followOverride;
 		if (!followOverride) {
 			this.setCatchUpSpeedActive(false);
+		}
+		if (followOverride) {
+			this.holdOrigin = null;
 		}
 		if (changed && followOverride) {
 			// A follow order overrides whatever the guard was fighting or walking to.
@@ -613,6 +639,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 
 	public void setHome(BlockPos home, int patrolRadius) {
 		this.setFollowOverride(false);
+		this.holdOrigin = null;
 		this.home = home.immutable();
 		this.setPatrolRadius(patrolRadius);
 		this.syncHomeData();
@@ -636,6 +663,12 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		this.syncHomeData();
 	}
 
+	private void syncOwnerData() {
+		this.entityData.set(SYNCED_OWNER, this.ownerUuid == null
+				? Optional.empty()
+				: Optional.of(EntityReference.of(this.ownerUuid)));
+	}
+
 	private void syncHomeData() {
 		this.entityData.set(SYNCED_HOME, Optional.ofNullable(this.home));
 		this.entityData.set(SYNCED_PATROL_RADIUS, this.patrolRadius);
@@ -647,6 +680,54 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 
 	public int getSyncedPatrolRadius() {
 		return this.entityData.get(SYNCED_PATROL_RADIUS);
+	}
+
+	/** Owner UUID as seen by clients (null when unowned). */
+	public UUID getSyncedOwnerUuid() {
+		return this.entityData.get(SYNCED_OWNER).map(EntityReference::getUUID).orElse(null);
+	}
+
+	/** Group index as seen by clients (-1 = unassigned). */
+	public int getSyncedGroupIndex() {
+		return this.entityData.get(SYNCED_GROUP_INDEX);
+	}
+
+	/** Biome villager type for robe rendering, chosen from the spawn biome and persisted. */
+	public Holder<VillagerType> getVillagerTypeHolder() {
+		return this.entityData.get(SYNCED_VILLAGER_DATA).type();
+	}
+
+	private void chooseVillagerTypeFromBiome() {
+		ResourceKey<VillagerType> typeKey = VillagerType.byBiome(this.level().getBiome(this.blockPosition()));
+		this.entityData.set(SYNCED_VILLAGER_DATA, this.entityData.get(SYNCED_VILLAGER_DATA)
+				.withType(BuiltInRegistries.VILLAGER_TYPE.getOrThrow(typeKey)));
+		this.villagerTypeChosen = true;
+	}
+
+	/**
+	 * Hold mode: the guard stands on its current block, fights only what it can reach from there
+	 * (bowmen shoot from position) and never paths away. Follow, stay and home orders clear it.
+	 */
+	public void setHoldPosition(boolean hold) {
+		if (hold) {
+			this.staying = false;
+			this.stayOrigin = null;
+			this.followOverride = false;
+			this.setCatchUpSpeedActive(false);
+			this.holdOrigin = this.blockPosition().immutable();
+			this.clearCombatTarget();
+		} else {
+			this.holdOrigin = null;
+		}
+		this.aiController.invalidateStatus();
+	}
+
+	public boolean isHoldingPosition() {
+		return this.holdOrigin != null;
+	}
+
+	public BlockPos getHoldOrigin() {
+		return this.holdOrigin;
 	}
 
 	public BlockPos getLastLandPos() {
@@ -671,6 +752,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 
 	public void setGroupIndex(int groupIndex) {
 		this.groupIndex = Mth.clamp(groupIndex, MIN_GROUP_INDEX, MAX_GROUP_INDEX);
+		this.entityData.set(SYNCED_GROUP_INDEX, this.groupIndex);
 	}
 
 	public int getGroupColumn() {
@@ -726,9 +808,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	public void rallyTo(BlockPos rallyPoint, int ticks) {
+		// Temporary: stay/follow/home state is untouched, so the guard resumes it once the rally ends.
 		this.aiController.rallyTo(rallyPoint, ticks);
-		this.staying = false;
-		this.stayOrigin = null;
 	}
 
 	public boolean canExecuteBehaviorGoals() {
@@ -1141,6 +1222,11 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 					player.sendOverlayMessage(Component.literal("The guard distrusts you due to village reputation."));
 					return InteractionResult.SUCCESS;
 				}
+				int ownedGuards = GuardOwnershipIndex.countOwnedGuards(world.getServer(), player.getUUID());
+				if (com.guardvillagers.GuardSecurityLimits.remainingPersonalGuardSlots(ownedGuards) <= 0) {
+					player.sendOverlayMessage(Component.literal("You already command as many guards as you can."));
+					return InteractionResult.SUCCESS;
+				}
 				int hirePrice = com.guardvillagers.GuardHirePricing.getHirePrice(this.getLevel());
 				if (!player.getAbilities().instabuild && stack.getCount() < hirePrice) {
 					player.sendOverlayMessage(Component.literal("Need " + hirePrice + " emerald(s) to hire this guard."));
@@ -1424,6 +1510,14 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	@Override
+	public void aiStep() {
+		// PathfinderMob does not advance the swing animation (only Monster/Player do), so without
+		// this guards never visibly swung their weapon.
+		this.updateSwingTime();
+		super.aiStep();
+	}
+
+	@Override
 	protected void customServerAiStep(ServerLevel world) {
 		super.customServerAiStep(world);
 		if (this.tickCount % 20 == 0) {
@@ -1445,6 +1539,9 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		if (!this.gearChecked) {
 			this.gearChecked = true;
 			this.ensureWeapon(world);
+			if (!this.villagerTypeChosen) {
+				this.chooseVillagerTypeFromBiome();
+			}
 		}
 
 		if (!this.initialSpreadResolved && this.tickCount <= INITIAL_SPREAD_TICKS) {
@@ -1483,8 +1580,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 
 		BlockPos spreadTarget = this.resolveAnchorSlot(GuardMovementSlotResolver.AnchorKind.SPAWN_SPREAD,
 				this.blockPosition(), true);
-		if (spreadTarget.distSqr(this.blockPosition()) < 1.0D
-				|| !GuardVillagersMod.canGuardSpawnAt(world, spreadTarget)) {
+		if (spreadTarget.distSqr(this.blockPosition()) < 1.0D || !GuardGrounding.isStandable(this, spreadTarget)) {
 			return;
 		}
 
@@ -1494,10 +1590,6 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	private void tickInitialSpawnDispersal(ServerLevel world) {
 		BlockPos spreadTarget = this.pendingInitialSpreadTarget;
 		if (spreadTarget == null) {
-			return;
-		}
-		if (!GuardVillagersMod.canGuardSpawnAt(world, spreadTarget)) {
-			this.pendingInitialSpreadTarget = null;
 			return;
 		}
 
@@ -1876,12 +1968,12 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 			if (attacker instanceof Player player && this.isCreativeOperator(player)) {
 				return true;
 			}
-			if (!this.isAlly(attacker)) {
+			// A forgiven accidental hit from a player triggers neither retaliation nor a group rally.
+			boolean retaliate = !(attacker instanceof Player player)
+					|| GuardReputationManager.onGuardHitByPlayer(world, player.getUUID(), amount);
+			if (retaliate && !this.isAlly(attacker)) {
 				this.aiController.receiveDamageAlert(attacker, world.getGameTime());
 				this.rallyNearbyGuards(world, attacker);
-			}
-			if (attacker instanceof Player player) {
-				GuardReputationManager.recordGuardHarm(world, player.getUUID());
 			}
 		}
 
@@ -1895,10 +1987,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		if (!serverPlayer.getAbilities().instabuild) {
 			return false;
 		}
-		if (!(serverPlayer.createCommandSourceStack().permissions() instanceof LevelBasedPermissionSet leveled)) {
-			return false;
-		}
-		return leveled.level().isEqualOrHigherThan(PermissionLevel.GAMEMASTERS);
+		return Commands.hasPermission(Commands.LEVEL_GAMEMASTERS).test(serverPlayer.createCommandSourceStack());
 	}
 
 	@Override
@@ -2052,6 +2141,15 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		view.putString(GENERATED_NAME_KEY, this.generatedName == null ? "" : this.generatedName);
 		view.putInt(SPECIAL_PROFILE_KEY, this.specialProfile);
 		view.putLong(NOTCH_APPLE_COOLDOWN_UNTIL_KEY, this.notchAppleCooldownUntil);
+		view.putBoolean(HOLD_POSITION_KEY, this.holdOrigin != null);
+		if (this.holdOrigin != null) {
+			view.putInt(HOLD_X_KEY, this.holdOrigin.getX());
+			view.putInt(HOLD_Y_KEY, this.holdOrigin.getY());
+			view.putInt(HOLD_Z_KEY, this.holdOrigin.getZ());
+		}
+		if (this.villagerTypeChosen) {
+			view.store(VILLAGER_DATA_KEY, VillagerData.CODEC, this.entityData.get(SYNCED_VILLAGER_DATA));
+		}
 		boolean hasLastLand = this.lastLandPos != null;
 		view.putBoolean(HAS_LAST_LAND_KEY, hasLastLand);
 		if (hasLastLand) {
@@ -2141,6 +2239,19 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 					view.getIntOr(LAST_LAND_Y_KEY, 0),
 					view.getIntOr(LAST_LAND_Z_KEY, 0));
 		}
+		if (view.getBooleanOr(HOLD_POSITION_KEY, false)) {
+			this.holdOrigin = new BlockPos(
+					view.getIntOr(HOLD_X_KEY, 0),
+					view.getIntOr(HOLD_Y_KEY, 0),
+					view.getIntOr(HOLD_Z_KEY, 0));
+		} else {
+			this.holdOrigin = null;
+		}
+		Optional<VillagerData> villagerData = view.read(VILLAGER_DATA_KEY, VillagerData.CODEC);
+		villagerData.ifPresent(data -> this.entityData.set(SYNCED_VILLAGER_DATA, data));
+		this.villagerTypeChosen = villagerData.isPresent();
+		this.syncOwnerData();
+		this.entityData.set(SYNCED_GROUP_INDEX, this.groupIndex);
 		this.setCatchUpSpeedActive(false);
 		this.applyLevelModifiers();
 		if (this.level() instanceof ServerLevel) {

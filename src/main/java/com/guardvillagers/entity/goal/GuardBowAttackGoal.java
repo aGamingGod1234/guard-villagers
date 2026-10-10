@@ -147,6 +147,11 @@ public final class GuardBowAttackGoal extends Goal {
 	}
 
 	private void updateMovement(LivingEntity target, double distanceSq, boolean hasSight) {
+		if (this.guard.isHoldingPosition()) {
+			this.guard.getNavigation().stop();
+			this.guard.getLookControl().setLookAt(target, 30.0F, 30.0F);
+			return;
+		}
 		if (distanceSq > this.attackRadiusSq || this.seeTime < 20) {
 			this.strafingTime = -1;
 			if (--this.repathTicks <= 0) {

@@ -125,6 +125,10 @@ public final class GuardMeleeAttackGoal extends Goal {
 	}
 
 	private boolean moveTowards(LivingEntity target, double distanceSq, boolean frontline) {
+		if (this.guard.isHoldingPosition()) {
+			this.guard.getNavigation().stop();
+			return true;
+		}
 		if (frontline) {
 			return this.guard.getNavigation().moveTo(target, this.speed);
 		}

@@ -71,7 +71,9 @@ public class GuardAiGameTest {
 			}
 			double meanNearest = nearestSum / guards.size();
 			helper.assertTrue(overlappingPairs == 0, overlappingPairs + " guard pairs overlapping after 12s");
-			helper.assertTrue(meanNearest >= 1.2D, "guards not spread out, mean nearest neighbour " + meanNearest);
+			// Slots are 1.5 apart and snap to block centres, so neighbours end 1-1.5 blocks apart;
+			// stacked guards measure ~0.
+			helper.assertTrue(meanNearest >= 1.0D, "guards not spread out, mean nearest neighbour " + meanNearest);
 			helper.succeed();
 		});
 	}

@@ -9,8 +9,10 @@ import net.minecraft.core.BlockPos;
  * {@link #ARRIVE_DISTANCE_SQUARED}, so guards parked at an anchor do not fidget back and forth.
  */
 final class AnchorHold {
-	static final double DEPART_DISTANCE_SQUARED = 1.75D * 1.75D;
-	static final double ARRIVE_DISTANCE_SQUARED = 1.0D;
+	// Slots are ~1.5 blocks apart, so the dead zone must stay below that; the path follower ends
+	// within ~0.45 blocks of the target block centre.
+	static final double DEPART_DISTANCE_SQUARED = 1.25D * 1.25D;
+	static final double ARRIVE_DISTANCE_SQUARED = 0.6D * 0.6D;
 
 	private boolean moving;
 

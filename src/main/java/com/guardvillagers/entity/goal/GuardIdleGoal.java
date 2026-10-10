@@ -23,6 +23,17 @@ public final class GuardIdleGoal extends WaterAvoidingRandomStrollGoal {
 		if (!this.guard.isAiIntent(GuardAiIntent.IDLE)) {
 			return false;
 		}
+		if (this.guard.isHoldingPosition()) {
+			// Only walk back if knocked off the hold block; never stroll.
+			BlockPos hold = this.guard.getHoldOrigin();
+			if (hold.distSqr(this.guard.blockPosition()) < 1.0D) {
+				return false;
+			}
+			this.wantedX = hold.getX() + 0.5D;
+			this.wantedY = hold.getY();
+			this.wantedZ = hold.getZ() + 0.5D;
+			return true;
+		}
 		if (this.guard.isStaying()) {
 			BlockPos origin = this.guard.getStayOrigin();
 			if (origin == null) {

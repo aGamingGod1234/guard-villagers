@@ -65,6 +65,8 @@ public final class GuardAiController {
 	private static final int ENGAGEMENT_REPORT_INTERVAL_TICKS = 10;
 	private static final double GOLEM_ALERT_RANGE = 24.0D;
 	private static final int CORNERED_TICKS = 40;
+	private static final double HOLD_MELEE_REACH = 3.0D;
+	private static final double HOLD_BOW_REACH = 16.0D;
 	private static final int CORNERED_FIGHT_TICKS = 100;
 
 	/** Shared across all guards; entries expire so unloaded guards cannot leak. */
@@ -355,6 +357,10 @@ public final class GuardAiController {
 		if (this.shouldSeekAir()) {
 			return GuardAiIntent.SEEK_AIR;
 		}
+		if (this.guard.isHoldingPosition()) {
+			// Hold: fight what is in reach, otherwise stand (IDLE re-centres on the hold block).
+			return combatTarget != null ? GuardAiIntent.ENGAGE_TARGET : GuardAiIntent.IDLE;
+		}
 		if (this.shouldRetreat(combatTarget, world.getGameTime())) {
 			return GuardAiIntent.RETREAT;
 		}
@@ -461,7 +467,7 @@ public final class GuardAiController {
 	}
 
 	private boolean shouldFollowOwner(ServerLevel world) {
-		if (!this.guard.hasOwner() || this.guard.isStaying() || !this.ownerTrusted) {
+		if (!this.guard.hasOwner() || this.guard.isStaying() || this.guard.isHoldingPosition() || !this.ownerTrusted) {
 			return false;
 		}
 		ServerPlayer owner = this.guard.resolveOnlineOwner(world);
@@ -557,7 +563,7 @@ public final class GuardAiController {
 		BlockPos pos = this.guard.blockPosition();
 		this.ownerTrusted = GuardReputationManager.isTrustedByGuards(world, ownerUuid, pos);
 		this.ownerHostile = GuardReputationManager.shouldGuardsTurnHostile(world, ownerUuid, pos);
-		boolean followMode = !this.guard.isStaying() && (this.guard.hasFollowOverride() || this.guard.getHome().isEmpty());
+		boolean followMode = !this.guard.isStaying() && !this.guard.isHoldingPosition() && (this.guard.hasFollowOverride() || this.guard.getHome().isEmpty());
 		this.followLeashOwner = followMode && this.ownerTrusted ? this.guard.resolveOwner(world) : null;
 	}
 
@@ -802,7 +808,13 @@ public final class GuardAiController {
 				|| this.guard.isAlly(target) || !this.guard.canTargetWithinZone(target.blockPosition())) {
 			return false;
 		}
-		if (this.guard.isStaying()) {
+		if (this.guard.isHoldingPosition()) {
+			double reach = this.guard.getMainHandItem().is(Items.BOW) ? HOLD_BOW_REACH : HOLD_MELEE_REACH;
+			if (this.guard.distanceToSqr(target) > reach * reach) {
+				return false;
+			}
+		}
+		if (this.guard.isStaying() && this.rallyTicks <= 0) {
 			BlockPos stayOrigin = this.guard.getStayOrigin();
 			if (stayOrigin != null && stayOrigin.distToCenterSqr(target.position()) > STAY_COMBAT_LEASH * STAY_COMBAT_LEASH) {
 				return false;
