@@ -3,11 +3,10 @@ package com.guardvillagers.entity.goal;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.GuardRole;
 import com.guardvillagers.entity.ai.GuardAiIntent;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.ai.goal.Goal;
-import net.minecraft.server.world.ServerWorld;
-
 import java.util.EnumSet;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.goal.Goal;
 
 public final class GuardMeleeAttackGoal extends Goal {
 	private static final int ATTACK_INTERVAL_TICKS = 20;
@@ -24,16 +23,16 @@ public final class GuardMeleeAttackGoal extends Goal {
 	public GuardMeleeAttackGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
 		this.speed = speed;
-		this.setControls(EnumSet.of(Control.MOVE, Control.LOOK));
+		this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK));
 	}
 
 	@Override
-	public boolean canStart() {
+	public boolean canUse() {
 		return this.hasValidTarget();
 	}
 
 	@Override
-	public boolean shouldContinue() {
+	public boolean canContinueToUse() {
 		return this.hasValidTarget();
 	}
 
@@ -62,26 +61,26 @@ public final class GuardMeleeAttackGoal extends Goal {
 		}
 
 		LivingEntity target = this.guard.getTarget();
-		if (target == null || !(this.guard.getEntityWorld() instanceof ServerWorld world)) {
+		if (target == null || !(this.guard.level() instanceof ServerLevel world)) {
 			this.guard.getNavigation().stop();
 			return;
 		}
 
-		double distanceSq = this.guard.squaredDistanceTo(target);
+		double distanceSq = this.guard.distanceToSqr(target);
 		if (distanceSq <= this.getSquaredAttackRange(target)) {
 			this.guard.getNavigation().stop();
 			this.repathTicks = 0;
-			this.guard.getLookControl().lookAt(target, ATTACK_LOOK_CHANGE, ATTACK_LOOK_CHANGE);
+			this.guard.getLookControl().setLookAt(target, ATTACK_LOOK_CHANGE, ATTACK_LOOK_CHANGE);
 			if (this.attackCooldown <= 0) {
-				this.attackCooldown = this.getTickCount(ATTACK_INTERVAL_TICKS);
-				this.guard.tryAttack(world, target);
+				this.attackCooldown = this.adjustedTickDelay(ATTACK_INTERVAL_TICKS);
+				this.guard.doHurtTarget(world, target);
 			}
 			return;
 		}
 
-		this.guard.getLookControl().lookAt(target, CHASE_LOOK_YAW, CHASE_LOOK_PITCH);
+		this.guard.getLookControl().setLookAt(target, CHASE_LOOK_YAW, CHASE_LOOK_PITCH);
 		if (this.repathTicks-- <= 0) {
-			this.repathTicks = this.getTickCount(CHASE_REPATH_INTERVAL_TICKS);
+			this.repathTicks = this.adjustedTickDelay(CHASE_REPATH_INTERVAL_TICKS);
 			this.guard.getGuardNavigation().startMovingToDynamic(
 					this.guard.resolveCombatApproachSlot(world, target),
 					this.speed);
@@ -97,7 +96,7 @@ public final class GuardMeleeAttackGoal extends Goal {
 	}
 
 	private double getSquaredAttackRange(LivingEntity target) {
-		double attackReach = this.guard.getWidth() * 2.0F;
-		return attackReach * attackReach + target.getWidth();
+		double attackReach = this.guard.getBbWidth() * 2.0F;
+		return attackReach * attackReach + target.getBbWidth();
 	}
 }

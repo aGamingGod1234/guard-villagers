@@ -2,11 +2,10 @@ package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.ai.GuardAiIntent;
-import net.minecraft.entity.ai.goal.Goal;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.BlockPos;
-
 import java.util.EnumSet;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.ai.goal.Goal;
 
 public final class TacticalRetreatGoal extends Goal {
 	private final GuardEntity guard;
@@ -17,16 +16,16 @@ public final class TacticalRetreatGoal extends Goal {
 	public TacticalRetreatGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
 		this.speed = speed;
-		this.setControls(EnumSet.of(Control.MOVE, Control.TARGET));
+		this.setFlags(EnumSet.of(Flag.MOVE, Flag.TARGET));
 	}
 
 	@Override
-	public boolean canStart() {
+	public boolean canUse() {
 		return this.guard.isAiIntent(GuardAiIntent.RETREAT);
 	}
 
 	@Override
-	public boolean shouldContinue() {
+	public boolean canContinueToUse() {
 		return this.guard.isAiIntent(GuardAiIntent.RETREAT);
 	}
 
@@ -44,7 +43,7 @@ public final class TacticalRetreatGoal extends Goal {
 
 	@Override
 	public void tick() {
-		if (!(this.guard.getEntityWorld() instanceof ServerWorld world)) {
+		if (!(this.guard.level() instanceof ServerLevel world)) {
 			return;
 		}
 

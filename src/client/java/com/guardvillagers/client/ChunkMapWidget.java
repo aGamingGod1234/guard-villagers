@@ -1,12 +1,11 @@
 package com.guardvillagers.client;
 
-import net.minecraft.client.gl.RenderPipelines;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.util.math.ChunkPos;
-
 import java.util.Comparator;
 import java.util.List;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.world.level.ChunkPos;
 
 public final class ChunkMapWidget {
 	private static final double MIN_ZOOM = 0.05D;
@@ -60,8 +59,8 @@ public final class ChunkMapWidget {
 	}
 
 	public void render(
-			DrawContext context,
-			ClientWorld world,
+			GuiGraphics context,
+			ClientLevel world,
 			ClientTacticsDataStore.WorldContext worldContext,
 			int mouseX,
 			int mouseY) {
@@ -141,7 +140,7 @@ public final class ChunkMapWidget {
 			double mouseY,
 			int button,
 			boolean shiftDown,
-			ClientWorld world,
+			ClientLevel world,
 			ClientTacticsDataStore.WorldContext worldContext) {
 		if (!this.contains(mouseX, mouseY) || world == null || worldContext == null) {
 			return false;
@@ -180,7 +179,7 @@ public final class ChunkMapWidget {
 			int button,
 			double deltaX,
 			double deltaY,
-			ClientWorld world,
+			ClientLevel world,
 			ClientTacticsDataStore.WorldContext worldContext) {
 		if (world == null || worldContext == null) {
 			return false;
@@ -278,7 +277,7 @@ public final class ChunkMapWidget {
 			int maxZ = Math.max(this.selectionStart.z, this.selectionEnd.z);
 			for (int chunkX = minX; chunkX <= maxX; chunkX++) {
 				for (int chunkZ = minZ; chunkZ <= maxZ; chunkZ++) {
-					long chunkKey = ChunkPos.toLong(chunkX, chunkZ);
+					long chunkKey = ChunkPos.asLong(chunkX, chunkZ);
 					this.dataStore.setRegionColor(worldContext, chunkKey, paintColor);
 				}
 			}
@@ -291,7 +290,7 @@ public final class ChunkMapWidget {
 	}
 
 	private void renderChunkTerrain(
-			DrawContext context,
+			GuiGraphics context,
 			ClientTacticsDataStore.WorldContext worldContext,
 			int chunkX,
 			int chunkZ,
@@ -311,7 +310,7 @@ public final class ChunkMapWidget {
 			return;
 		}
 
-		context.drawTexture(
+		context.blit(
 				RenderPipelines.GUI_TEXTURED,
 				tile.textureId(),
 				left,
@@ -325,7 +324,7 @@ public final class ChunkMapWidget {
 	}
 
 	private void drawZoneHighlight(
-			DrawContext context,
+			GuiGraphics context,
 			ClientTacticsDataStore.WorldContext worldContext,
 			int chunkX,
 			int chunkZ,

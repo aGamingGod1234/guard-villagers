@@ -2,24 +2,23 @@ package com.guardvillagers.data;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import net.minecraft.datafixer.DataFixTypes;
-import net.minecraft.util.Uuids;
-import net.minecraft.world.PersistentState;
-import net.minecraft.world.PersistentStateType;
-
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import net.minecraft.core.UUIDUtil;
+import net.minecraft.util.datafix.DataFixTypes;
+import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.saveddata.SavedDataType;
 
-public final class GuardDebugState extends PersistentState {
-	private static final Codec<Map<UUID, DebugSettings>> SETTINGS_CODEC = Codec.unboundedMap(Uuids.STRING_CODEC, DebugSettings.CODEC);
+public final class GuardDebugState extends SavedData {
+	private static final Codec<Map<UUID, DebugSettings>> SETTINGS_CODEC = Codec.unboundedMap(UUIDUtil.STRING_CODEC, DebugSettings.CODEC);
 
 	public static final Codec<GuardDebugState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
 		SETTINGS_CODEC.optionalFieldOf("players", Map.of()).forGetter(GuardDebugState::entriesForCodec)
 	).apply(instance, GuardDebugState::new));
 
-	public static final PersistentStateType<GuardDebugState> TYPE = new PersistentStateType<>(
+	public static final SavedDataType<GuardDebugState> TYPE = new SavedDataType<>(
 		"guardvillagers_debug",
 		GuardDebugState::new,
 		CODEC,
@@ -46,7 +45,7 @@ public final class GuardDebugState extends PersistentState {
 			return;
 		}
 		this.settings.put(playerId, current.withEnabled(enabled));
-		this.markDirty();
+		this.setDirty();
 	}
 
 	public double getRange(UUID playerId) {
@@ -60,7 +59,7 @@ public final class GuardDebugState extends PersistentState {
 			return;
 		}
 		this.settings.put(playerId, current.withRange(normalizedRange));
-		this.markDirty();
+		this.setDirty();
 	}
 
 	public void toggle(UUID playerId) {

@@ -2,13 +2,12 @@ package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.ai.GuardBehaviorExecutor;
-import net.minecraft.entity.ai.goal.Goal;
-import net.minecraft.entity.raid.RaiderEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.village.raid.Raid;
-
 import java.util.EnumSet;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.ai.goal.Goal;
+import net.minecraft.world.entity.raid.Raid;
+import net.minecraft.world.entity.raid.Raider;
 
 public final class RaidTacticsGoal extends Goal {
 	private final GuardEntity guard;
@@ -18,24 +17,24 @@ public final class RaidTacticsGoal extends Goal {
 	public RaidTacticsGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
 		this.speed = speed;
-		this.setControls(EnumSet.of(Control.MOVE, Control.TARGET));
+		this.setFlags(EnumSet.of(Flag.MOVE, Flag.TARGET));
 	}
 
 	@Override
-	public boolean canStart() {
+	public boolean canUse() {
 		if (!(this.guard.isBehaviorExecutor(GuardBehaviorExecutor.RAID_OFFENSIVE)
 				|| this.guard.isBehaviorExecutor(GuardBehaviorExecutor.RAID_DEFENSIVE))) {
 			return false;
 		}
-		if (!(this.guard.getEntityWorld() instanceof ServerWorld world)) {
+		if (!(this.guard.level() instanceof ServerLevel world)) {
 			return false;
 		}
-		this.raid = world.getRaidAt(this.guard.getBlockPos());
+		this.raid = world.getRaidAt(this.guard.blockPosition());
 		return this.raid != null && this.raid.isActive();
 	}
 
 	@Override
-	public boolean shouldContinue() {
+	public boolean canContinueToUse() {
 		if (this.raid == null || !this.raid.isActive()) {
 			return false;
 		}
@@ -50,14 +49,14 @@ public final class RaidTacticsGoal extends Goal {
 
 	@Override
 	public void tick() {
-		if (!(this.guard.getEntityWorld() instanceof ServerWorld world) || this.raid == null) {
+		if (!(this.guard.level() instanceof ServerLevel world) || this.raid == null) {
 			return;
 		}
 
 		if (this.guard.isBehaviorExecutor(GuardBehaviorExecutor.RAID_OFFENSIVE)) {
-			RaiderEntity target = findNearestRaider(world);
+			Raider target = findNearestRaider(world);
 			if (target != null) {
-				if (this.guard.squaredDistanceTo(target) > 16.0D) {
+				if (this.guard.distanceToSqr(target) > 16.0D) {
 					this.guard.getGuardNavigation().startMovingToDynamic(this.guard.resolveCombatApproachSlot(world, target),
 							this.speed);
 				} else {
@@ -74,7 +73,7 @@ public final class RaidTacticsGoal extends Goal {
 		if (this.guard.isBehaviorExecutor(GuardBehaviorExecutor.RAID_DEFENSIVE)) {
 			BlockPos center = this.raid.getCenter();
 			BlockPos slot = this.guard.resolveGroundMovementSlot(world, center, 1.75D, false);
-			double distanceSq = this.guard.squaredDistanceTo(slot.getX() + 0.5D, slot.getY(), slot.getZ() + 0.5D);
+			double distanceSq = this.guard.distanceToSqr(slot.getX() + 0.5D, slot.getY(), slot.getZ() + 0.5D);
 			if (distanceSq > 25.0D) {
 				this.guard.getGuardNavigation().startMovingToStatic(slot, this.speed);
 			} else {
@@ -83,15 +82,15 @@ public final class RaidTacticsGoal extends Goal {
 		}
 	}
 
-	private RaiderEntity findNearestRaider(ServerWorld world) {
-		RaiderEntity best = null;
+	private Raider findNearestRaider(ServerLevel world) {
+		Raider best = null;
 		double bestDistance = Double.MAX_VALUE;
-		for (RaiderEntity raider : world.getEntitiesByClass(
-			RaiderEntity.class,
-			this.guard.getBoundingBox().expand(48.0D),
-			entity -> entity.isAlive() && this.guard.canTargetWithinZone(entity.getBlockPos()))
+		for (Raider raider : world.getEntitiesOfClass(
+			Raider.class,
+			this.guard.getBoundingBox().inflate(48.0D),
+			entity -> entity.isAlive() && this.guard.canTargetWithinZone(entity.blockPosition()))
 		) {
-			double distanceSq = this.guard.squaredDistanceTo(raider);
+			double distanceSq = this.guard.distanceToSqr(raider);
 			if (distanceSq < bestDistance) {
 				bestDistance = distanceSq;
 				best = raider;

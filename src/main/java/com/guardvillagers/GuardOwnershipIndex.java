@@ -1,10 +1,9 @@
 package com.guardvillagers;
 
 import com.guardvillagers.entity.GuardEntity;
-import net.minecraft.entity.Entity;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.world.ServerWorld;
-
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.Entity;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
@@ -28,7 +27,7 @@ public final class GuardOwnershipIndex {
 			return;
 		}
 
-		UUID guardId = guard.getUuid();
+		UUID guardId = guard.getUUID();
 		if (guard.isRemoved()) {
 			removeGuard(guardId);
 			return;
@@ -47,14 +46,14 @@ public final class GuardOwnershipIndex {
 
 		OWNER_TO_GUARDS.computeIfAbsent(ownerUuid, ignored -> ConcurrentHashMap.newKeySet()).add(guardId);
 		GUARD_REFERENCES.put(guardId, new WeakReference<>(guard));
-		maybeCleanup(guard.getEntityWorld().getTime());
+		maybeCleanup(guard.level().getGameTime());
 	}
 
 	public static void untrack(GuardEntity guard) {
 		if (guard == null) {
 			return;
 		}
-		removeGuard(guard.getUuid());
+		removeGuard(guard.getUUID());
 	}
 
 	public static List<GuardEntity> getOwnedGuards(MinecraftServer server, UUID ownerUuid) {
@@ -107,7 +106,7 @@ public final class GuardOwnershipIndex {
 			return cached;
 		}
 
-		for (ServerWorld world : server.getWorlds()) {
+		for (ServerLevel world : server.getAllLevels()) {
 			Entity entity = world.getEntity(guardId);
 			if (entity instanceof GuardEntity guard && !guard.isRemoved()) {
 				GUARD_REFERENCES.put(guardId, new WeakReference<>(guard));

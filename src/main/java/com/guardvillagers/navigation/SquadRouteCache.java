@@ -1,15 +1,15 @@
 package com.guardvillagers.navigation;
 
-import net.minecraft.entity.ai.pathing.Path;
-import net.minecraft.entity.ai.pathing.PathNode;
-import net.minecraft.registry.RegistryKey;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.World;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import net.minecraft.core.BlockPos;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.pathfinder.Node;
+import net.minecraft.world.level.pathfinder.Path;
 
 public class SquadRouteCache {
     /**
@@ -28,7 +28,7 @@ public class SquadRouteCache {
      * Starts from the guard's current position and ensures validity.
      * Returns a DEFENSIVE COPY so consumers don't mutate each other's Path state.
      */
-    public static Path getSquadRoute(RegistryKey<World> worldKey, UUID groupId, BlockPos origin, BlockPos target, long currentTick) {
+    public static Path getSquadRoute(ResourceKey<Level> worldKey, UUID groupId, BlockPos origin, BlockPos target, long currentTick) {
         if (worldKey == null || groupId == null || target == null) {
             return null;
         }
@@ -46,12 +46,12 @@ public class SquadRouteCache {
             return null;
         }
 
-        if (entry.targetPos.getSquaredDistance(target) > MAX_TARGET_DRIFT_SQR) {
+        if (entry.targetPos.distSqr(target) > MAX_TARGET_DRIFT_SQR) {
             SQUAD_ROUTES.remove(key);
             return null;
         }
 
-        if (origin.getSquaredDistance(entry.originPos) > MAX_ORIGIN_DRIFT_SQR) {
+        if (origin.distSqr(entry.originPos) > MAX_ORIGIN_DRIFT_SQR) {
             // Not invalidated globally, but invalid for this specific guard's distance
             return null;
         }
@@ -63,7 +63,7 @@ public class SquadRouteCache {
     /**
      * Caches a successfully computed route for a squad.
      */
-    public static void cacheSquadRoute(RegistryKey<World> worldKey, UUID groupId, BlockPos origin, BlockPos target, Path path, long currentTick) {
+    public static void cacheSquadRoute(ResourceKey<Level> worldKey, UUID groupId, BlockPos origin, BlockPos target, Path path, long currentTick) {
         if (worldKey == null || groupId == null || target == null || path == null) {
             return;
         }
@@ -82,7 +82,7 @@ public class SquadRouteCache {
         }
     }
 
-    public static void invalidateSquadRoute(RegistryKey<World> worldKey, UUID groupId, BlockPos target) {
+    public static void invalidateSquadRoute(ResourceKey<Level> worldKey, UUID groupId, BlockPos target) {
         if (worldKey == null || groupId == null || target == null) {
             return;
         }
@@ -99,19 +99,19 @@ public class SquadRouteCache {
             return null;
         }
 
-        int length = original.getLength();
-        List<PathNode> nodes = new ArrayList<>(length);
+        int length = original.getNodeCount();
+        List<Node> nodes = new ArrayList<>(length);
         for (int i = 0; i < length; i++) {
             nodes.add(original.getNode(i));
         }
-        return new Path(nodes, original.getTarget(), original.reachesTarget());
+        return new Path(nodes, original.getTarget(), original.canReach());
     }
 
     private static BlockPos quantize(BlockPos pos) {
-        return pos.toImmutable();
+        return pos.immutable();
     }
 
-    private record CacheKey(RegistryKey<World> worldKey, UUID groupId, BlockPos quantizedTarget) {
+    private record CacheKey(ResourceKey<Level> worldKey, UUID groupId, BlockPos quantizedTarget) {
     }
 
     private record CachedRoute(Path path, long computeTick, BlockPos originPos, BlockPos targetPos) {

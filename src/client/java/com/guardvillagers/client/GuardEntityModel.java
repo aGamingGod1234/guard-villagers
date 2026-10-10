@@ -1,116 +1,116 @@
 package com.guardvillagers.client;
 
-import net.minecraft.client.model.Dilation;
-import net.minecraft.client.model.ModelData;
-import net.minecraft.client.model.ModelPart;
-import net.minecraft.client.model.ModelPartBuilder;
-import net.minecraft.client.model.ModelPartData;
-import net.minecraft.client.model.ModelTransform;
-import net.minecraft.client.model.TexturedModelData;
-import net.minecraft.client.render.entity.model.BipedEntityModel;
-import net.minecraft.client.render.entity.model.EntityModelLayer;
-import net.minecraft.client.render.entity.model.ModelWithHat;
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.util.Arm;
-import net.minecraft.util.Identifier;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.model.HumanoidModel;
+import net.minecraft.client.model.VillagerLikeModel;
+import net.minecraft.client.model.geom.ModelLayerLocation;
+import net.minecraft.client.model.geom.ModelPart;
+import net.minecraft.client.model.geom.PartPose;
+import net.minecraft.client.model.geom.builders.CubeDeformation;
+import net.minecraft.client.model.geom.builders.CubeListBuilder;
+import net.minecraft.client.model.geom.builders.LayerDefinition;
+import net.minecraft.client.model.geom.builders.MeshDefinition;
+import net.minecraft.client.model.geom.builders.PartDefinition;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.entity.HumanoidArm;
 
-public final class GuardEntityModel extends BipedEntityModel<GuardEntityRenderer.GuardRenderState>
-		implements ModelWithHat<GuardEntityRenderer.GuardRenderState> {
-	public static final EntityModelLayer GUARD_LAYER = new EntityModelLayer(Identifier.of("guardvillagers", "guard"),
+public final class GuardEntityModel extends HumanoidModel<GuardEntityRenderer.GuardRenderState>
+		implements VillagerLikeModel<GuardEntityRenderer.GuardRenderState> {
+	public static final ModelLayerLocation GUARD_LAYER = new ModelLayerLocation(Identifier.fromNamespaceAndPath("guardvillagers", "guard"),
 			"main");
-	public static final EntityModelLayer GUARD_BABY_LAYER = new EntityModelLayer(
-			Identifier.of("guardvillagers", "guard"),
+	public static final ModelLayerLocation GUARD_BABY_LAYER = new ModelLayerLocation(
+			Identifier.fromNamespaceAndPath("guardvillagers", "guard"),
 			"baby");
-	public static final EntityModelLayer GUARD_CLOTHING_LAYER = new EntityModelLayer(
-			Identifier.of("guardvillagers", "guard"),
+	public static final ModelLayerLocation GUARD_CLOTHING_LAYER = new ModelLayerLocation(
+			Identifier.fromNamespaceAndPath("guardvillagers", "guard"),
 			"clothing");
-	public static final EntityModelLayer GUARD_CLOTHING_BABY_LAYER = new EntityModelLayer(
-			Identifier.of("guardvillagers", "guard"),
+	public static final ModelLayerLocation GUARD_CLOTHING_BABY_LAYER = new ModelLayerLocation(
+			Identifier.fromNamespaceAndPath("guardvillagers", "guard"),
 			"clothing_baby");
 
 	public GuardEntityModel(ModelPart root) {
 		super(root);
 	}
 
-	public static TexturedModelData getTexturedModelData() {
+	public static LayerDefinition getTexturedModelData() {
 		return createTexturedModelData(false);
 	}
 
-	public static TexturedModelData getClothingTexturedModelData() {
+	public static LayerDefinition getClothingTexturedModelData() {
 		return createTexturedModelData(true);
 	}
 
-	private static TexturedModelData createTexturedModelData(boolean includeJacket) {
-		ModelData modelData = BipedEntityModel.getModelData(Dilation.NONE, 0.0F);
-		ModelPartData root = modelData.getRoot();
-		ModelPartData head = root.addChild(
+	private static LayerDefinition createTexturedModelData(boolean includeJacket) {
+		MeshDefinition modelData = HumanoidModel.createMesh(CubeDeformation.NONE, 0.0F);
+		PartDefinition root = modelData.getRoot();
+		PartDefinition head = root.addOrReplaceChild(
 				"head",
-				ModelPartBuilder.create()
-						.uv(0, 0)
-						.cuboid(-4.0F, -10.0F, -4.0F, 8.0F, 10.0F, 8.0F)
-						.uv(24, 0)
-						.cuboid(-1.0F, -3.0F, -6.0F, 2.0F, 4.0F, 2.0F),
-				ModelTransform.NONE);
-		ModelPartData hat = head.addChild(
+				CubeListBuilder.create()
+						.texOffs(0, 0)
+						.addBox(-4.0F, -10.0F, -4.0F, 8.0F, 10.0F, 8.0F)
+						.texOffs(24, 0)
+						.addBox(-1.0F, -3.0F, -6.0F, 2.0F, 4.0F, 2.0F),
+				PartPose.ZERO);
+		PartDefinition hat = head.addOrReplaceChild(
 				"hat",
-				ModelPartBuilder.create().uv(32, 0).cuboid(
+				CubeListBuilder.create().texOffs(32, 0).addBox(
 						-4.0F,
 						-10.0F,
 						-4.0F,
 						8.0F,
 						10.0F,
 						8.0F,
-						new Dilation(0.5F)),
-				ModelTransform.NONE);
-		hat.addChild(
+						new CubeDeformation(0.5F)),
+				PartPose.ZERO);
+		hat.addOrReplaceChild(
 				"hat_rim",
-				ModelPartBuilder.create().uv(30, 47).cuboid(-8.0F, -8.0F, -6.0F, 16.0F, 16.0F, 1.0F),
-				ModelTransform.rotation(-1.5707964F, 0.0F, 0.0F));
+				CubeListBuilder.create().texOffs(30, 47).addBox(-8.0F, -8.0F, -6.0F, 16.0F, 16.0F, 1.0F),
+				PartPose.rotation(-1.5707964F, 0.0F, 0.0F));
 
-		ModelPartData body = root.addChild(
+		PartDefinition body = root.addOrReplaceChild(
 				"body",
-				ModelPartBuilder.create().uv(16, 20).cuboid(-4.0F, 0.0F, -3.0F, 8.0F, 12.0F, 6.0F),
-				ModelTransform.NONE);
+				CubeListBuilder.create().texOffs(16, 20).addBox(-4.0F, 0.0F, -3.0F, 8.0F, 12.0F, 6.0F),
+				PartPose.ZERO);
 		if (includeJacket) {
-			body.addChild(
+			body.addOrReplaceChild(
 					"jacket",
-					ModelPartBuilder.create().uv(0, 38).cuboid(
+					CubeListBuilder.create().texOffs(0, 38).addBox(
 							-4.0F,
 							0.0F,
 							-3.0F,
 							8.0F,
 							20.0F,
 							6.0F,
-							new Dilation(0.5F)),
-					ModelTransform.NONE);
+							new CubeDeformation(0.5F)),
+					PartPose.ZERO);
 		}
-		root.addChild(
+		root.addOrReplaceChild(
 				"right_arm",
-				ModelPartBuilder.create()
-						.uv(44, 22)
-						.cuboid(-3.0F, -2.0F, -2.0F, 4.0F, 8.0F, 4.0F)
-						.uv(44, 26)
-						.cuboid(-3.0F, 6.0F, -2.0F, 4.0F, 4.0F, 4.0F),
-				ModelTransform.origin(-5.0F, 2.0F, 0.0F));
-		root.addChild(
+				CubeListBuilder.create()
+						.texOffs(44, 22)
+						.addBox(-3.0F, -2.0F, -2.0F, 4.0F, 8.0F, 4.0F)
+						.texOffs(44, 26)
+						.addBox(-3.0F, 6.0F, -2.0F, 4.0F, 4.0F, 4.0F),
+				PartPose.offset(-5.0F, 2.0F, 0.0F));
+		root.addOrReplaceChild(
 				"left_arm",
-				ModelPartBuilder.create()
-						.uv(44, 22)
-						.mirrored()
-						.cuboid(-1.0F, -2.0F, -2.0F, 4.0F, 8.0F, 4.0F)
-						.uv(44, 26)
-						.mirrored()
-						.cuboid(-1.0F, 6.0F, -2.0F, 4.0F, 4.0F, 4.0F),
-				ModelTransform.origin(5.0F, 2.0F, 0.0F));
-		root.addChild(
+				CubeListBuilder.create()
+						.texOffs(44, 22)
+						.mirror()
+						.addBox(-1.0F, -2.0F, -2.0F, 4.0F, 8.0F, 4.0F)
+						.texOffs(44, 26)
+						.mirror()
+						.addBox(-1.0F, 6.0F, -2.0F, 4.0F, 4.0F, 4.0F),
+				PartPose.offset(5.0F, 2.0F, 0.0F));
+		root.addOrReplaceChild(
 				"right_leg",
-				ModelPartBuilder.create().uv(0, 22).cuboid(-2.0F, 0.0F, -2.0F, 4.0F, 12.0F, 4.0F),
-				ModelTransform.origin(-2.0F, 12.0F, 0.0F));
-		root.addChild(
+				CubeListBuilder.create().texOffs(0, 22).addBox(-2.0F, 0.0F, -2.0F, 4.0F, 12.0F, 4.0F),
+				PartPose.offset(-2.0F, 12.0F, 0.0F));
+		root.addOrReplaceChild(
 				"left_leg",
-				ModelPartBuilder.create().uv(0, 22).mirrored().cuboid(-2.0F, 0.0F, -2.0F, 4.0F, 12.0F, 4.0F),
-				ModelTransform.origin(2.0F, 12.0F, 0.0F));
-		return TexturedModelData.of(modelData, 64, 64);
+				CubeListBuilder.create().texOffs(0, 22).mirror().addBox(-2.0F, 0.0F, -2.0F, 4.0F, 12.0F, 4.0F),
+				PartPose.offset(2.0F, 12.0F, 0.0F));
+		return LayerDefinition.create(modelData, 64, 64);
 	}
 
 	@Override
@@ -120,7 +120,7 @@ public final class GuardEntityModel extends BipedEntityModel<GuardEntityRenderer
 	}
 
 	@Override
-	public void rotateArms(GuardEntityRenderer.GuardRenderState state, MatrixStack matrices) {
-		this.setArmAngle(state, Arm.RIGHT, matrices);
+	public void rotateArms(GuardEntityRenderer.GuardRenderState state, PoseStack matrices) {
+		this.setArmAngle(state, HumanoidArm.RIGHT, matrices);
 	}
 }

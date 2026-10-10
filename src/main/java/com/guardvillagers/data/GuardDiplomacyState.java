@@ -2,11 +2,6 @@ package com.guardvillagers.data;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import net.minecraft.datafixer.DataFixTypes;
-import net.minecraft.util.Uuids;
-import net.minecraft.world.PersistentState;
-import net.minecraft.world.PersistentStateType;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -14,16 +9,20 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import net.minecraft.core.UUIDUtil;
+import net.minecraft.util.datafix.DataFixTypes;
+import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.saveddata.SavedDataType;
 
-public final class GuardDiplomacyState extends PersistentState {
-	private static final Codec<Set<UUID>> UUID_SET_CODEC = Uuids.STRING_CODEC.listOf().xmap(HashSet::new, ArrayList::new);
-	private static final Codec<Map<UUID, DiplomacyLists>> DIPLOMACY_MAP_CODEC = Codec.unboundedMap(Uuids.STRING_CODEC, DiplomacyLists.CODEC);
+public final class GuardDiplomacyState extends SavedData {
+	private static final Codec<Set<UUID>> UUID_SET_CODEC = UUIDUtil.STRING_CODEC.listOf().xmap(HashSet::new, ArrayList::new);
+	private static final Codec<Map<UUID, DiplomacyLists>> DIPLOMACY_MAP_CODEC = Codec.unboundedMap(UUIDUtil.STRING_CODEC, DiplomacyLists.CODEC);
 
 	public static final Codec<GuardDiplomacyState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
 		DIPLOMACY_MAP_CODEC.optionalFieldOf("diplomacy", Map.of()).forGetter(GuardDiplomacyState::entriesForCodec)
 	).apply(instance, GuardDiplomacyState::new));
 
-	public static final PersistentStateType<GuardDiplomacyState> TYPE = new PersistentStateType<>(
+	public static final SavedDataType<GuardDiplomacyState> TYPE = new SavedDataType<>(
 		"guardvillagers_diplomacy",
 		GuardDiplomacyState::new,
 		CODEC,
@@ -45,7 +44,7 @@ public final class GuardDiplomacyState extends PersistentState {
 
 	public DiplomacyLists getOrCreate(UUID owner) {
 		return this.entries.computeIfAbsent(owner, ignored -> {
-			this.markDirty();
+			this.setDirty();
 			return new DiplomacyLists(new HashSet<>(), new HashSet<>());
 		});
 	}
@@ -61,7 +60,7 @@ public final class GuardDiplomacyState extends PersistentState {
 			lists.blacklist().remove(target);
 			added = true;
 		}
-		this.markDirty();
+		this.setDirty();
 		return added;
 	}
 
@@ -76,7 +75,7 @@ public final class GuardDiplomacyState extends PersistentState {
 			lists.whitelist().remove(target);
 			added = true;
 		}
-		this.markDirty();
+		this.setDirty();
 		return added;
 	}
 

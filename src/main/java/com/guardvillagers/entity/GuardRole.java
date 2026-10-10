@@ -1,6 +1,6 @@
 package com.guardvillagers.entity;
 
-import net.minecraft.util.math.random.Random;
+import net.minecraft.util.RandomSource;
 
 public enum GuardRole {
 	SWORDSMAN(0),
@@ -20,7 +20,7 @@ public enum GuardRole {
 		return id == BOWMAN.id ? BOWMAN : SWORDSMAN;
 	}
 
-	public static GuardRole random(Random random) {
+	public static GuardRole random(RandomSource random) {
 		return random.nextBoolean() ? SWORDSMAN : BOWMAN;
 	}
 }

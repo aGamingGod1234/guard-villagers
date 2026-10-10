@@ -3,19 +3,18 @@ package com.guardvillagers.data;
 import com.guardvillagers.GuardSecurityLimits;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import net.minecraft.datafixer.DataFixTypes;
-import net.minecraft.util.Uuids;
-import net.minecraft.world.PersistentState;
-import net.minecraft.world.PersistentStateType;
-
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import net.minecraft.core.UUIDUtil;
+import net.minecraft.util.datafix.DataFixTypes;
+import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.saveddata.SavedDataType;
 
-public final class GuardReputationState extends PersistentState {
+public final class GuardReputationState extends SavedData {
 	private static final double MIN_REPUTATION = 0.0D;
 	private static final double MAX_REPUTATION = 1.0D;
 	private static final int LEGACY_SCHEMA_VERSION = 1;
@@ -25,13 +24,13 @@ public final class GuardReputationState extends PersistentState {
 	private static final double LEGACY_REPUTATION_SPAN = LEGACY_MAX_REPUTATION - LEGACY_MIN_REPUTATION;
 	public static final double DEFAULT_REPUTATION = 0.50D;
 
-	private static final Codec<Map<UUID, Double>> NORMALIZED_REPUTATION_CODEC = Codec.unboundedMap(Uuids.STRING_CODEC, Codec.DOUBLE);
+	private static final Codec<Map<UUID, Double>> NORMALIZED_REPUTATION_CODEC = Codec.unboundedMap(UUIDUtil.STRING_CODEC, Codec.DOUBLE);
 	public static final Codec<GuardReputationState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
 		Codec.INT.optionalFieldOf("schema_version", LEGACY_SCHEMA_VERSION).forGetter(GuardReputationState::schemaVersionForCodec),
 		NORMALIZED_REPUTATION_CODEC.optionalFieldOf("reputation", Map.of()).forGetter(GuardReputationState::reputationForCodec)
 	).apply(instance, GuardReputationState::fromCodecData));
 
-	public static final PersistentStateType<GuardReputationState> TYPE = new PersistentStateType<>(
+	public static final SavedDataType<GuardReputationState> TYPE = new SavedDataType<>(
 		"guardvillagers_reputation",
 		GuardReputationState::new,
 		CODEC,
@@ -61,21 +60,21 @@ public final class GuardReputationState extends PersistentState {
 			return existing;
 		}
 		this.putBounded(playerId, DEFAULT_REPUTATION);
-		this.markDirty();
+		this.setDirty();
 		return DEFAULT_REPUTATION;
 	}
 
 	public double add(UUID playerId, double delta) {
 		double updated = clamp(this.get(playerId) + delta);
 		this.putBounded(playerId, updated);
-		this.markDirty();
+		this.setDirty();
 		return updated;
 	}
 
 	public void set(UUID playerId, double value) {
 		double clamped = clamp(value);
 		this.putBounded(playerId, clamped);
-		this.markDirty();
+		this.setDirty();
 	}
 
 	public int trackedPlayerCount() {
@@ -96,7 +95,7 @@ public final class GuardReputationState extends PersistentState {
 			}
 		}
 		if (changed) {
-			this.markDirty();
+			this.setDirty();
 		}
 	}
 
@@ -111,7 +110,7 @@ public final class GuardReputationState extends PersistentState {
 	private static GuardReputationState fromCodecData(int schemaVersion, Map<UUID, Double> rawValues) {
 		if (schemaVersion < CURRENT_SCHEMA_VERSION) {
 			GuardReputationState migrated = new GuardReputationState(CURRENT_SCHEMA_VERSION, migrateLegacyValues(rawValues));
-			migrated.markDirty();
+			migrated.setDirty();
 			return migrated;
 		}
 		return new GuardReputationState(CURRENT_SCHEMA_VERSION, sanitizeNormalizedValues(rawValues));

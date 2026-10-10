@@ -2,19 +2,7 @@ package com.guardvillagers.client;
 
 import com.guardvillagers.GuardVillagersMod;
 import com.mojang.blaze3d.opengl.GlStateManager;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.MapColor;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.texture.NativeImage;
-import net.minecraft.client.texture.NativeImageBackedTexture;
-import net.minecraft.client.texture.TextureManager;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.ChunkPos;
-import net.minecraft.world.Heightmap;
-import net.minecraft.world.chunk.ChunkStatus;
-import net.minecraft.world.chunk.WorldChunk;
+import com.mojang.blaze3d.platform.NativeImage;
 import org.lwjgl.opengl.GL11;
 
 import java.util.HashMap;
@@ -25,6 +13,18 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.renderer.texture.DynamicTexture;
+import net.minecraft.client.renderer.texture.TextureManager;
+import net.minecraft.core.BlockPos;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.material.MapColor;
 
 public final class ChunkTerrainCache {
 	private static final int MAX_TILES_PER_WORLD_DIMENSION = 4_096;
@@ -43,7 +43,7 @@ public final class ChunkTerrainCache {
 		return TILE_RESOLUTION;
 	}
 
-	public void prepareVisibleTiles(ClientTacticsDataStore.WorldContext context, ClientWorld world, List<ChunkPos> visibleChunks) {
+	public void prepareVisibleTiles(ClientTacticsDataStore.WorldContext context, ClientLevel world, List<ChunkPos> visibleChunks) {
 		if (context == null || world == null || visibleChunks == null || visibleChunks.isEmpty()) {
 			return;
 		}
@@ -56,13 +56,13 @@ public final class ChunkTerrainCache {
 		int asyncQueued = 0;
 
 		for (ChunkPos chunkPos : visibleChunks) {
-			long chunkKey = ChunkPos.toLong(chunkPos.x, chunkPos.z);
+			long chunkKey = ChunkPos.asLong(chunkPos.x, chunkPos.z);
 			TileKey tileKey = new TileKey(worldKey, chunkKey);
 			if (cache.containsKey(chunkKey) || this.pendingGeneration.containsKey(tileKey)) {
 				continue;
 			}
 
-			WorldChunk chunk = world.getChunkManager().getChunk(chunkPos.x, chunkPos.z, ChunkStatus.FULL, false);
+			LevelChunk chunk = world.getChunkSource().getChunk(chunkPos.x, chunkPos.z, ChunkStatus.FULL, false);
 			if (chunk == null) {
 				continue;
 			}
@@ -92,7 +92,7 @@ public final class ChunkTerrainCache {
 		if (cache == null) {
 			return null;
 		}
-		return cache.get(ChunkPos.toLong(chunkX, chunkZ));
+		return cache.get(ChunkPos.asLong(chunkX, chunkZ));
 	}
 
 	public void invalidate(ClientTacticsDataStore.WorldContext context, int chunkX, int chunkZ) {
@@ -101,7 +101,7 @@ public final class ChunkTerrainCache {
 		}
 
 		String worldKey = this.worldKey(context);
-		long chunkKey = ChunkPos.toLong(chunkX, chunkZ);
+		long chunkKey = ChunkPos.asLong(chunkX, chunkZ);
 		TileKey tileId = new TileKey(worldKey, chunkKey);
 		this.pendingGeneration.remove(tileId);
 		this.asyncResults.remove(tileId);
@@ -113,12 +113,12 @@ public final class ChunkTerrainCache {
 
 		TerrainTile removed = cache.remove(chunkKey);
 		if (removed != null) {
-			removed.close(MinecraftClient.getInstance().getTextureManager());
+			removed.close(Minecraft.getInstance().getTextureManager());
 		}
 	}
 
 	public void clearAll() {
-		TextureManager textureManager = MinecraftClient.getInstance().getTextureManager();
+		TextureManager textureManager = Minecraft.getInstance().getTextureManager();
 		for (LinkedHashMap<Long, TerrainTile> cache : this.tilesByWorldDimension.values()) {
 			for (TerrainTile tile : cache.values()) {
 				tile.close(textureManager);
@@ -130,7 +130,7 @@ public final class ChunkTerrainCache {
 		this.asyncResults.clear();
 	}
 
-	private void queueAsyncGeneration(TileKey tileKey, ClientWorld world, WorldChunk chunk) {
+	private void queueAsyncGeneration(TileKey tileKey, ClientLevel world, LevelChunk chunk) {
 		long generationId = this.nextGenerationId.incrementAndGet();
 		if (this.pendingGeneration.putIfAbsent(tileKey, generationId) != null) {
 			return;
@@ -167,10 +167,10 @@ public final class ChunkTerrainCache {
 		}
 	}
 
-	private TerrainTile generateTile(String worldKey, ClientWorld world, WorldChunk chunk) {
+	private TerrainTile generateTile(String worldKey, ClientLevel world, LevelChunk chunk) {
 		ChunkPos chunkPos = chunk.getPos();
 		int[] colors = snapshotBlockColors(world, chunk, chunkPos, snapshotHeightmap(chunk));
-		return this.createTerrainTile(worldKey, ChunkPos.toLong(chunkPos.x, chunkPos.z), computeTileSnapshot(colors));
+		return this.createTerrainTile(worldKey, ChunkPos.asLong(chunkPos.x, chunkPos.z), computeTileSnapshot(colors));
 	}
 
 	private TerrainTile createTerrainTile(String worldKey, long chunkKey, TerrainSnapshot snapshot) {
@@ -179,19 +179,19 @@ public final class ChunkTerrainCache {
 		for (int pixelZ = 0; pixelZ < TILE_RESOLUTION; pixelZ++) {
 			int rowOffset = pixelZ * TILE_RESOLUTION;
 			for (int pixelX = 0; pixelX < TILE_RESOLUTION; pixelX++) {
-				image.setColorArgb(pixelX, pixelZ, colors[rowOffset + pixelX]);
+				image.setPixel(pixelX, pixelZ, colors[rowOffset + pixelX]);
 			}
 		}
 
 		Identifier textureId = GuardVillagersMod.id("tactics/chunk/" + Integer.toUnsignedString(worldKey.hashCode())
 				+ "/" + Long.toUnsignedString(chunkKey));
-		NativeImageBackedTexture texture = new NativeImageBackedTexture(() -> "guardvillagers_chunk_terrain", image);
-		TextureManager textureManager = MinecraftClient.getInstance().getTextureManager();
-		textureManager.registerTexture(textureId, texture);
+		DynamicTexture texture = new DynamicTexture(() -> "guardvillagers_chunk_terrain", image);
+		TextureManager textureManager = Minecraft.getInstance().getTextureManager();
+		textureManager.register(textureId, texture);
 		texture.upload();
 		// Set nearest-neighbor filtering for crisp pixel-art rendering (1 block = 1 pixel).
-		if (texture.getGlTexture() instanceof net.minecraft.client.texture.GlTexture glTex) {
-			GlStateManager._bindTexture(glTex.getGlId());
+		if (texture.getTexture() instanceof com.mojang.blaze3d.opengl.GlTexture glTex) {
+			GlStateManager._bindTexture(glTex.glId());
 			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
 			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
 		}
@@ -207,7 +207,7 @@ public final class ChunkTerrainCache {
 	}
 
 	private void evictIfNeeded(LinkedHashMap<Long, TerrainTile> cache) {
-		TextureManager textureManager = MinecraftClient.getInstance().getTextureManager();
+		TextureManager textureManager = Minecraft.getInstance().getTextureManager();
 		while (cache.size() > MAX_TILES_PER_WORLD_DIMENSION) {
 			Iterator<Map.Entry<Long, TerrainTile>> iterator = cache.entrySet().iterator();
 			if (!iterator.hasNext()) {
@@ -219,23 +219,23 @@ public final class ChunkTerrainCache {
 		}
 	}
 
-	private static int[] snapshotHeightmap(WorldChunk chunk) {
+	private static int[] snapshotHeightmap(LevelChunk chunk) {
 		int[] heights = new int[TILE_PIXEL_COUNT];
 		for (int localZ = 0; localZ < TILE_RESOLUTION; localZ++) {
 			int rowOffset = localZ * TILE_RESOLUTION;
 			for (int localX = 0; localX < TILE_RESOLUTION; localX++) {
-				heights[rowOffset + localX] = chunk.sampleHeightmap(Heightmap.Type.WORLD_SURFACE, localX, localZ);
+				heights[rowOffset + localX] = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, localX, localZ);
 			}
 		}
 		return heights;
 	}
 
-	private static int[] snapshotBlockColors(ClientWorld world, WorldChunk chunk, ChunkPos chunkPos, int[] heightmap) {
+	private static int[] snapshotBlockColors(ClientLevel world, LevelChunk chunk, ChunkPos chunkPos, int[] heightmap) {
 		int[] colors = new int[TILE_PIXEL_COUNT];
-		int worldBottom = world.getBottomY();
-		int startX = chunkPos.getStartX();
-		int startZ = chunkPos.getStartZ();
-		BlockPos.Mutable pos = new BlockPos.Mutable();
+		int worldBottom = world.getMinY();
+		int startX = chunkPos.getMinBlockX();
+		int startZ = chunkPos.getMinBlockZ();
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 
 		for (int localZ = 0; localZ < TILE_RESOLUTION; localZ++) {
 			int worldZ = startZ + localZ;
@@ -254,7 +254,7 @@ public final class ChunkTerrainCache {
 				}
 
 				MapColor mapColor = state.getMapColor(world, pos);
-				colors[index] = mapColor == MapColor.CLEAR ? FALLBACK_COLOR : 0xFF000000 | mapColor.color;
+				colors[index] = mapColor == MapColor.NONE ? FALLBACK_COLOR : 0xFF000000 | mapColor.col;
 			}
 		}
 		return colors;
@@ -276,9 +276,9 @@ public final class ChunkTerrainCache {
 		return new TerrainSnapshot(colors, averageColor);
 	}
 
-	public record TerrainTile(int averageColor, Identifier textureId, NativeImageBackedTexture texture) {
+	public record TerrainTile(int averageColor, Identifier textureId, DynamicTexture texture) {
 		private void close(TextureManager textureManager) {
-			textureManager.destroyTexture(this.textureId);
+			textureManager.release(this.textureId);
 			this.texture.close();
 		}
 	}

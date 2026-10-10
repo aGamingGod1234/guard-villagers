@@ -1,19 +1,18 @@
 package com.guardvillagers.network;
 
 import com.guardvillagers.GuardVillagersMod;
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodec;
-import net.minecraft.network.packet.CustomPayload;
-import net.minecraft.util.math.BlockPos;
-
 import java.util.ArrayList;
 import java.util.List;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 
-public record GuardDebugDataPayload(List<GuardDebugEntry> entries) implements CustomPayload {
+public record GuardDebugDataPayload(List<GuardDebugEntry> entries) implements CustomPacketPayload {
 	private static final int MAX_GUARDS_PER_PACKET = 256;
 	private static final int MAX_PATH_NODES = 64;
-	public static final Id<GuardDebugDataPayload> ID = new Id<>(GuardVillagersMod.id("debug_data"));
-	public static final PacketCodec<RegistryByteBuf, GuardDebugDataPayload> CODEC = CustomPayload.codecOf(
+	public static final Type<GuardDebugDataPayload> ID = new Type<>(GuardVillagersMod.id("debug_data"));
+	public static final StreamCodec<RegistryFriendlyByteBuf, GuardDebugDataPayload> CODEC = CustomPacketPayload.codec(
 		GuardDebugDataPayload::write,
 		GuardDebugDataPayload::new
 	);
@@ -22,11 +21,11 @@ public record GuardDebugDataPayload(List<GuardDebugEntry> entries) implements Cu
 		entries = List.copyOf(entries);
 	}
 
-	private GuardDebugDataPayload(RegistryByteBuf buf) {
+	private GuardDebugDataPayload(RegistryFriendlyByteBuf buf) {
 		this(readEntries(buf));
 	}
 
-	private void write(RegistryByteBuf buf) {
+	private void write(RegistryFriendlyByteBuf buf) {
 		int guardCount = Math.min(MAX_GUARDS_PER_PACKET, this.entries.size());
 		buf.writeInt(guardCount);
 		for (int i = 0; i < guardCount; i++) {
@@ -34,7 +33,7 @@ public record GuardDebugDataPayload(List<GuardDebugEntry> entries) implements Cu
 		}
 	}
 
-	private static List<GuardDebugEntry> readEntries(RegistryByteBuf buf) {
+	private static List<GuardDebugEntry> readEntries(RegistryFriendlyByteBuf buf) {
 		int guardCount = Math.max(0, Math.min(MAX_GUARDS_PER_PACKET, buf.readInt()));
 		List<GuardDebugEntry> entries = new ArrayList<>(guardCount);
 		for (int i = 0; i < guardCount; i++) {
@@ -44,7 +43,7 @@ public record GuardDebugDataPayload(List<GuardDebugEntry> entries) implements Cu
 	}
 
 	@Override
-	public Id<? extends CustomPayload> getId() {
+	public Type<? extends CustomPacketPayload> type() {
 		return ID;
 	}
 
@@ -53,7 +52,7 @@ public record GuardDebugDataPayload(List<GuardDebugEntry> entries) implements Cu
 			pathNodes = List.copyOf(pathNodes);
 		}
 
-		private void write(RegistryByteBuf buf) {
+		private void write(RegistryFriendlyByteBuf buf) {
 			buf.writeInt(this.entityId);
 			int nodeCount = Math.min(MAX_PATH_NODES, this.pathNodes.size());
 			buf.writeInt(nodeCount);
@@ -64,7 +63,7 @@ public record GuardDebugDataPayload(List<GuardDebugEntry> entries) implements Cu
 			buf.writeInt(this.targetEntityId);
 		}
 
-		private static GuardDebugEntry read(RegistryByteBuf buf) {
+		private static GuardDebugEntry read(RegistryFriendlyByteBuf buf) {
 			int entityId = buf.readInt();
 			int nodeCount = Math.max(0, Math.min(MAX_PATH_NODES, buf.readInt()));
 			List<BlockPos> nodes = new ArrayList<>(nodeCount);

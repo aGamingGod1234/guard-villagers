@@ -14,11 +14,11 @@ import it.unimi.dsi.fastutil.longs.Long2IntMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ServerInfo;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.util.math.ChunkPos;
-import net.minecraft.util.math.MathHelper;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.util.Mth;
+import net.minecraft.world.level.ChunkPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -65,14 +65,14 @@ public final class ClientTacticsDataStore {
 	// Dev note: discovered chunks are tracked from client chunk-load events and persisted by world + dimension.
 	public void markDiscovered(WorldContext context, int chunkX, int chunkZ) {
 		DimensionData dimensionData = this.dimension(context);
-		long chunkKey = ChunkPos.toLong(chunkX, chunkZ);
+		long chunkKey = ChunkPos.asLong(chunkX, chunkZ);
 		if (this.addDiscoveredChunk(dimensionData, chunkKey)) {
 			this.markDirty();
 		}
 	}
 
 	public boolean isDiscovered(WorldContext context, int chunkX, int chunkZ) {
-		return this.dimension(context).discovered.contains(ChunkPos.toLong(chunkX, chunkZ));
+		return this.dimension(context).discovered.contains(ChunkPos.asLong(chunkX, chunkZ));
 	}
 
 	public long[] discoveredChunkKeys(WorldContext context) {
@@ -97,12 +97,12 @@ public final class ClientTacticsDataStore {
 	}
 
 	public RegionColor getRegionColor(WorldContext context, int chunkX, int chunkZ) {
-		int colorId = this.dimension(context).regionByChunk.get(ChunkPos.toLong(chunkX, chunkZ));
+		int colorId = this.dimension(context).regionByChunk.get(ChunkPos.asLong(chunkX, chunkZ));
 		return RegionColor.fromId(colorId);
 	}
 
 	public void setRegionColor(WorldContext context, int chunkX, int chunkZ, RegionColor color) {
-		this.setRegionColor(context, ChunkPos.toLong(chunkX, chunkZ), color);
+		this.setRegionColor(context, ChunkPos.asLong(chunkX, chunkZ), color);
 	}
 
 	public void setRegionColor(WorldContext context, long chunkKey, RegionColor color) {
@@ -127,7 +127,7 @@ public final class ClientTacticsDataStore {
 	}
 
 	public void ensureGroupCount(WorldContext context, int groupCount) {
-		int targetCount = MathHelper.clamp(groupCount, 0, MAX_GROUPS);
+		int targetCount = Mth.clamp(groupCount, 0, MAX_GROUPS);
 		WorldData worldData = this.world(context);
 		if (targetCount <= worldData.groupNames.size()) {
 			return;
@@ -139,13 +139,13 @@ public final class ClientTacticsDataStore {
 	}
 
 	public String getGroupName(WorldContext context, int row) {
-		int normalizedRow = MathHelper.clamp(row, 0, MAX_GROUPS - 1);
+		int normalizedRow = Mth.clamp(row, 0, MAX_GROUPS - 1);
 		this.ensureGroupCount(context, normalizedRow + 1);
 		return this.world(context).groupNames.get(normalizedRow);
 	}
 
 	public void setGroupName(WorldContext context, int row, String roleName) {
-		int normalizedRow = MathHelper.clamp(row, 0, MAX_GROUPS - 1);
+		int normalizedRow = Mth.clamp(row, 0, MAX_GROUPS - 1);
 		this.ensureGroupCount(context, normalizedRow + 1);
 		String sanitized = sanitizeGroupName(roleName);
 		WorldData worldData = this.world(context);
@@ -251,14 +251,14 @@ public final class ClientTacticsDataStore {
 	}
 
 	private void indexDiscoveredChunk(DimensionData dimensionData, long chunkKey) {
-		int chunkX = ChunkPos.getPackedX(chunkKey);
-		int chunkZ = ChunkPos.getPackedZ(chunkKey);
+		int chunkX = ChunkPos.getX(chunkKey);
+		int chunkZ = ChunkPos.getZ(chunkKey);
 		dimensionData.discoveredByChunkX.computeIfAbsent(chunkX, ignored -> new IntOpenHashSet()).add(chunkZ);
 	}
 
 	private void unindexDiscoveredChunk(DimensionData dimensionData, long chunkKey) {
-		int chunkX = ChunkPos.getPackedX(chunkKey);
-		int chunkZ = ChunkPos.getPackedZ(chunkKey);
+		int chunkX = ChunkPos.getX(chunkKey);
+		int chunkZ = ChunkPos.getZ(chunkKey);
 		IntOpenHashSet zValues = dimensionData.discoveredByChunkX.get(chunkX);
 		if (zValues == null) {
 			return;
@@ -491,19 +491,19 @@ public final class ClientTacticsDataStore {
 		}
 	}
 
-	public static WorldContext resolveContext(MinecraftClient client, ClientWorld world) {
-		String dimensionId = world.getRegistryKey().getValue().toString();
+	public static WorldContext resolveContext(Minecraft client, ClientLevel world) {
+		String dimensionId = world.dimension().identifier().toString();
 		return new WorldContext(resolveWorldId(client), dimensionId);
 	}
 
-	private static String resolveWorldId(MinecraftClient client) {
-		if (client.isInSingleplayer() && client.getServer() != null) {
-			String levelName = client.getServer().getSaveProperties().getLevelName();
+	private static String resolveWorldId(Minecraft client) {
+		if (client.isLocalServer() && client.getSingleplayerServer() != null) {
+			String levelName = client.getSingleplayerServer().getWorldData().getLevelName();
 			return "singleplayer:" + safeKey(levelName);
 		}
-		ServerInfo serverInfo = client.getCurrentServerEntry();
-		if (serverInfo != null && serverInfo.address != null && !serverInfo.address.isBlank()) {
-			return "multiplayer:" + safeKey(serverInfo.address.toLowerCase(Locale.ROOT));
+		ServerData serverInfo = client.getCurrentServer();
+		if (serverInfo != null && serverInfo.ip != null && !serverInfo.ip.isBlank()) {
+			return "multiplayer:" + safeKey(serverInfo.ip.toLowerCase(Locale.ROOT));
 		}
 		return "session:default";
 	}

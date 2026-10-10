@@ -3,17 +3,16 @@ package com.guardvillagers.data;
 import com.guardvillagers.GuardSecurityLimits;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import net.minecraft.datafixer.DataFixTypes;
-import net.minecraft.world.PersistentState;
-import net.minecraft.world.PersistentStateType;
-
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import net.minecraft.util.datafix.DataFixTypes;
+import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.saveddata.SavedDataType;
 
-public final class GuardVillageState extends PersistentState {
+public final class GuardVillageState extends SavedData {
 	private static final int MIN_GUARD_COUNT = 1;
 	private static final int MAX_GUARD_COUNT = 10_000;
 	private static final Codec<Map<String, VillageData>> VILLAGE_MAP_CODEC = Codec.unboundedMap(Codec.STRING, VillageData.CODEC);
@@ -21,7 +20,7 @@ public final class GuardVillageState extends PersistentState {
 		VILLAGE_MAP_CODEC.optionalFieldOf("villages", Map.of()).forGetter(GuardVillageState::villagesForCodec)
 	).apply(instance, GuardVillageState::new));
 
-	public static final PersistentStateType<GuardVillageState> TYPE = new PersistentStateType<>(
+	public static final SavedDataType<GuardVillageState> TYPE = new SavedDataType<>(
 		"guardvillagers_village_state",
 		GuardVillageState::new,
 		CODEC,
@@ -52,14 +51,14 @@ public final class GuardVillageState extends PersistentState {
 			VillageData touched = existing.withLastSeenTick(observedTick);
 			if (!touched.equals(existing)) {
 				this.villages.put(villageId, touched);
-				this.markDirty();
+				this.setDirty();
 			}
 			return touched;
 		}
 
 		VillageData created = new VillageData(clampedInitial, Long.MIN_VALUE, clampedInitial, observedTick);
 		this.putBounded(villageId, created);
-		this.markDirty();
+		this.setDirty();
 		return created;
 	}
 
@@ -74,7 +73,7 @@ public final class GuardVillageState extends PersistentState {
 			int maxGuards = current == null ? clampedInitial : Math.max(clampedInitial, current.maxGuardCount());
 			long lastSeenTick = current == null ? Long.MIN_VALUE : current.lastSeenTick();
 			this.putBounded(villageId, new VillageData(clampedInitial, lastSpawnTick, maxGuards, lastSeenTick));
-			this.markDirty();
+			this.setDirty();
 		}
 	}
 
@@ -89,7 +88,7 @@ public final class GuardVillageState extends PersistentState {
 		int clampedMax = clampGuardCount(newMax);
 		if (clampedMax > current.maxGuardCount()) {
 			this.villages.put(villageId, new VillageData(current.initialSpawnCount(), current.lastSpawnTick(), clampedMax, current.lastSeenTick()));
-			this.markDirty();
+			this.setDirty();
 		}
 	}
 
@@ -109,7 +108,7 @@ public final class GuardVillageState extends PersistentState {
 			return;
 		}
 		this.villages.put(villageId, new VillageData(data.initialSpawnCount(), tick, data.maxGuardCount(), data.lastSeenTick()));
-		this.markDirty();
+		this.setDirty();
 	}
 
 	public void retireStale(long currentTick, Set<String> observedVillageIds, long maxUnseenTicks) {
@@ -127,7 +126,7 @@ public final class GuardVillageState extends PersistentState {
 		});
 		this.evictOverflow(observedVillageIds);
 		if (this.villages.size() != before) {
-			this.markDirty();
+			this.setDirty();
 		}
 	}
 

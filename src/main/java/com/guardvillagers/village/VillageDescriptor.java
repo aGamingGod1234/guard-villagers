@@ -1,18 +1,18 @@
 package com.guardvillagers.village;
 
-import net.minecraft.util.math.BlockBox;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
+import net.minecraft.world.phys.AABB;
 
-public record VillageDescriptor(String id, BlockBox bounds, BlockPos center, int horizontalRadius) {
-	public Box toEntityBox(int expansion) {
-		return new Box(
-			this.bounds.getMinX() - expansion,
-			this.bounds.getMinY() - 4,
-			this.bounds.getMinZ() - expansion,
-			this.bounds.getMaxX() + expansion + 1,
-			this.bounds.getMaxY() + 8,
-			this.bounds.getMaxZ() + expansion + 1
+public record VillageDescriptor(String id, BoundingBox bounds, BlockPos center, int horizontalRadius) {
+	public AABB toEntityBox(int expansion) {
+		return new AABB(
+			this.bounds.minX() - expansion,
+			this.bounds.minY() - 4,
+			this.bounds.minZ() - expansion,
+			this.bounds.maxX() + expansion + 1,
+			this.bounds.maxY() + 8,
+			this.bounds.maxZ() + expansion + 1
 		);
 	}
 }

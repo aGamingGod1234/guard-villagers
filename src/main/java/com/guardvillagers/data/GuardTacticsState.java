@@ -4,11 +4,6 @@ import com.guardvillagers.GuardSecurityLimits;
 import com.guardvillagers.entity.FormationType;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import net.minecraft.datafixer.DataFixTypes;
-import net.minecraft.util.Uuids;
-import net.minecraft.world.PersistentState;
-import net.minecraft.world.PersistentStateType;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -20,20 +15,24 @@ import java.util.Map;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
+import net.minecraft.core.UUIDUtil;
+import net.minecraft.util.datafix.DataFixTypes;
+import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.saveddata.SavedDataType;
 
-public final class GuardTacticsState extends PersistentState {
+public final class GuardTacticsState extends SavedData {
 	// Codec's upper bound must match PlayerTactics.MAX_COLOR_ID (10); the earlier
 	// bound of 4 caused colour IDs 5-10 to fail decoder validation and drop
 	// persisted group colours silently on load.
 	private static final Codec<Map<String, Integer>> STRING_INT_MAP_CODEC = Codec.unboundedMap(Codec.STRING, Codec.intRange(0, 10));
 	private static final Codec<List<String>> GROUP_LIST_CODEC = Codec.STRING.listOf();
-	private static final Codec<Map<UUID, PlayerTactics>> TACTICS_MAP_CODEC = Codec.unboundedMap(Uuids.STRING_CODEC, PlayerTactics.CODEC);
+	private static final Codec<Map<UUID, PlayerTactics>> TACTICS_MAP_CODEC = Codec.unboundedMap(UUIDUtil.STRING_CODEC, PlayerTactics.CODEC);
 
 	public static final Codec<GuardTacticsState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
 		TACTICS_MAP_CODEC.optionalFieldOf("players", Map.of()).forGetter(GuardTacticsState::entriesForCodec)
 	).apply(instance, GuardTacticsState::new));
 
-	public static final PersistentStateType<GuardTacticsState> TYPE = new PersistentStateType<>(
+	public static final SavedDataType<GuardTacticsState> TYPE = new SavedDataType<>(
 		"guardvillagers_tactics",
 		GuardTacticsState::new,
 		CODEC,
@@ -60,7 +59,7 @@ public final class GuardTacticsState extends PersistentState {
 		}
 		PlayerTactics created = new PlayerTactics();
 		this.putBounded(ownerId, created);
-		this.markDirty();
+		this.setDirty();
 		return created;
 	}
 
@@ -146,8 +145,8 @@ public final class GuardTacticsState extends PersistentState {
 					continue;
 				}
 				long packed = parsedChunk.getAsLong();
-				int chunkX = net.minecraft.util.math.ChunkPos.getPackedX(packed);
-				int chunkZ = net.minecraft.util.math.ChunkPos.getPackedZ(packed);
+				int chunkX = net.minecraft.world.level.ChunkPos.getX(packed);
+				int chunkZ = net.minecraft.world.level.ChunkPos.getZ(packed);
 				this.zoneColors.put(toChunkKey(chunkX, chunkZ), colorId);
 			}
 			this.rowColumnZones = new HashMap<>();
@@ -347,7 +346,7 @@ public final class GuardTacticsState extends PersistentState {
 			try {
 				int x = Integer.parseInt(key.substring(0, comma).trim());
 				int z = Integer.parseInt(key.substring(comma + 1).trim());
-				return OptionalLong.of(net.minecraft.util.math.ChunkPos.toLong(x, z));
+				return OptionalLong.of(net.minecraft.world.level.ChunkPos.asLong(x, z));
 			} catch (NumberFormatException ignored) {
 				return OptionalLong.empty();
 			}

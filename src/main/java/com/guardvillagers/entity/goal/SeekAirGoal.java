@@ -2,13 +2,12 @@ package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.ai.GuardAiIntent;
-import net.minecraft.block.BlockState;
-import net.minecraft.entity.ai.goal.Goal;
-import net.minecraft.entity.ai.pathing.PathNodeType;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.World;
-
 import java.util.EnumSet;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.ai.goal.Goal;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.pathfinder.PathType;
 
 /**
  * When a guard is submerged and running low on air, navigate upward to breathe.
@@ -28,23 +27,23 @@ public final class SeekAirGoal extends Goal {
     public SeekAirGoal(GuardEntity guard, double speed) {
         this.guard = guard;
         this.speed = speed;
-        this.setControls(EnumSet.of(Control.MOVE, Control.JUMP));
+        this.setFlags(EnumSet.of(Flag.MOVE, Flag.JUMP));
     }
 
     @Override
-    public boolean canStart() {
+    public boolean canUse() {
         return this.guard.isAiIntent(GuardAiIntent.SEEK_AIR);
     }
 
     @Override
-    public boolean shouldContinue() {
+    public boolean canContinueToUse() {
         return this.guard.isAiIntent(GuardAiIntent.SEEK_AIR);
     }
 
     @Override
     public void start() {
-        this.oldWaterPenalty = this.guard.getPathfindingPenalty(PathNodeType.WATER);
-        this.guard.setPathfindingPenalty(PathNodeType.WATER, 0.0F);
+        this.oldWaterPenalty = this.guard.getPathfindingMalus(PathType.WATER);
+        this.guard.setPathfindingMalus(PathType.WATER, 0.0F);
         this.repathTicks = 0;
         this.targetAirPos = null;
     }
@@ -52,7 +51,7 @@ public final class SeekAirGoal extends Goal {
     @Override
     public void stop() {
         this.guard.getNavigation().stop();
-        this.guard.setPathfindingPenalty(PathNodeType.WATER, this.oldWaterPenalty);
+        this.guard.setPathfindingMalus(PathType.WATER, this.oldWaterPenalty);
         this.targetAirPos = null;
     }
 
@@ -63,40 +62,40 @@ public final class SeekAirGoal extends Goal {
         }
         this.repathTicks = 10;
 
-        if (this.targetAirPos == null || !isBreathable(this.guard.getEntityWorld(), this.targetAirPos)) {
+        if (this.targetAirPos == null || !isBreathable(this.guard.level(), this.targetAirPos)) {
             this.targetAirPos = findAirAbove();
         }
 
         if (this.targetAirPos != null) {
-            this.guard.getNavigation().startMovingTo(
+            this.guard.getNavigation().moveTo(
                     this.targetAirPos.getX() + 0.5D,
                     this.targetAirPos.getY(),
                     this.targetAirPos.getZ() + 0.5D,
                     this.speed);
         } else {
             // No air found above — swim upward as best we can
-            this.guard.setVelocity(
-                    this.guard.getVelocity().x,
-                    Math.max(this.guard.getVelocity().y, 0.04D),
-                    this.guard.getVelocity().z);
+            this.guard.setDeltaMovement(
+                    this.guard.getDeltaMovement().x,
+                    Math.max(this.guard.getDeltaMovement().y, 0.04D),
+                    this.guard.getDeltaMovement().z);
         }
     }
 
     private BlockPos findAirAbove() {
-        BlockPos guardPos = this.guard.getBlockPos();
-        World world = this.guard.getEntityWorld();
+        BlockPos guardPos = this.guard.blockPosition();
+        Level world = this.guard.level();
         for (int dy = 1; dy <= MAX_VERTICAL_SCAN; dy++) {
-            BlockPos checkPos = guardPos.up(dy);
+            BlockPos checkPos = guardPos.above(dy);
             if (isBreathable(world, checkPos)) {
                 // Return the block below the air so the guard stands there
-                return checkPos.down();
+                return checkPos.below();
             }
         }
         return null;
     }
 
-    private static boolean isBreathable(World world, BlockPos pos) {
+    private static boolean isBreathable(Level world, BlockPos pos) {
         BlockState state = world.getBlockState(pos);
-        return !state.isSolidBlock(world, pos) && !state.getFluidState().isStill();
+        return !state.isRedstoneConductor(world, pos) && !state.getFluidState().isSource();
     }
 }

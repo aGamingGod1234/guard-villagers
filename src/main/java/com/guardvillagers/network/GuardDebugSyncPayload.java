@@ -1,28 +1,28 @@
 package com.guardvillagers.network;
 
 import com.guardvillagers.GuardVillagersMod;
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodec;
-import net.minecraft.network.packet.CustomPayload;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 
-public record GuardDebugSyncPayload(boolean enabled, double range) implements CustomPayload {
-	public static final Id<GuardDebugSyncPayload> ID = new Id<>(GuardVillagersMod.id("debug_sync"));
-	public static final PacketCodec<RegistryByteBuf, GuardDebugSyncPayload> CODEC = CustomPayload.codecOf(
+public record GuardDebugSyncPayload(boolean enabled, double range) implements CustomPacketPayload {
+	public static final Type<GuardDebugSyncPayload> ID = new Type<>(GuardVillagersMod.id("debug_sync"));
+	public static final StreamCodec<RegistryFriendlyByteBuf, GuardDebugSyncPayload> CODEC = CustomPacketPayload.codec(
 		GuardDebugSyncPayload::write,
 		GuardDebugSyncPayload::new
 	);
 
-	private GuardDebugSyncPayload(RegistryByteBuf buf) {
+	private GuardDebugSyncPayload(RegistryFriendlyByteBuf buf) {
 		this(buf.readBoolean(), buf.readDouble());
 	}
 
-	private void write(RegistryByteBuf buf) {
+	private void write(RegistryFriendlyByteBuf buf) {
 		buf.writeBoolean(this.enabled);
 		buf.writeDouble(this.range);
 	}
 
 	@Override
-	public Id<? extends CustomPayload> getId() {
+	public Type<? extends CustomPacketPayload> type() {
 		return ID;
 	}
 }

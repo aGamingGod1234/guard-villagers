@@ -12,8 +12,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityModelLayerRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.ingame.HandledScreens;
+import net.minecraft.client.gui.screens.MenuScreens;
 
 public class GuardVillagersClient implements ClientModInitializer {
 	private static final ChunkTerrainCache TERRAIN_CACHE = new ChunkTerrainCache();
@@ -58,7 +57,7 @@ public class GuardVillagersClient implements ClientModInitializer {
 				GuardEntityModel.GUARD_CLOTHING_BABY_LAYER,
 				GuardEntityModel::getClothingTexturedModelData);
 		EntityRendererRegistry.register(GuardVillagersMod.GUARD_ENTITY_TYPE, GuardEntityRenderer::new);
-		HandledScreens.register(GuardVillagersMod.GUARD_TACTICS_SCREEN_HANDLER, GuardTacticsScreen::new);
+		MenuScreens.register(GuardVillagersMod.GUARD_TACTICS_SCREEN_HANDLER, GuardTacticsScreen::new);
 		GuardDebugRenderer.register();
 
 		ClientChunkEvents.CHUNK_LOAD.register((world, chunk) -> {

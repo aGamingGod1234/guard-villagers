@@ -2,22 +2,21 @@ package com.guardvillagers.client;
 
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.GuardRole;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.font.TextRenderer;
-import net.minecraft.client.network.PlayerListEntry;
-import net.minecraft.client.render.LightmapTextureManager;
-import net.minecraft.client.render.RenderLayers;
-import net.minecraft.client.render.VertexConsumer;
-import net.minecraft.client.render.VertexConsumerProvider;
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.text.Text;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.multiplayer.PlayerInfo;
+import net.minecraft.client.renderer.LightTexture;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.core.BlockPos;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 
 import java.util.ArrayList;
@@ -66,8 +65,8 @@ public final class GuardDebugRenderer {
 	}
 
 	private static void render(WorldRenderContext context) {
-		MinecraftClient client = MinecraftClient.getInstance();
-		if (client.world == null || client.player == null) {
+		Minecraft client = Minecraft.getInstance();
+		if (client.level == null || client.player == null) {
 			return;
 		}
 		if (!ClientDebugState.isEnabled()) {
@@ -82,13 +81,13 @@ public final class GuardDebugRenderer {
 			return;
 		}
 
-		MatrixStack matrices = context.matrices();
-		VertexConsumerProvider vertexConsumers = context.consumers();
-		Vec3d cameraPos = context.worldState().cameraRenderState.pos;
+		PoseStack matrices = context.matrices();
+		MultiBufferSource vertexConsumers = context.consumers();
+		Vec3 cameraPos = context.worldState().cameraRenderState.pos;
 		double maxDistanceSq = range * range;
-		ClientTacticsDataStore.WorldContext worldContext = ClientTacticsDataStore.resolveContext(client, client.world);
+		ClientTacticsDataStore.WorldContext worldContext = ClientTacticsDataStore.resolveContext(client, client.level);
 
-		matrices.push();
+		matrices.pushPose();
 		matrices.translate(-cameraPos.x, -cameraPos.y, -cameraPos.z);
 
 		for (GuardEntity guard : CACHED_GUARDS) {
@@ -102,17 +101,17 @@ public final class GuardDebugRenderer {
 			renderLabels(matrices, vertexConsumers, guard, client, worldContext);
 		}
 
-		matrices.pop();
-		ClientGuardDebugData.pruneMissing(client.world);
+		matrices.popPose();
+		ClientGuardDebugData.pruneMissing(client.level);
 	}
 
-	private static void updateGuardCache(MinecraftClient client, double range) {
-		if (client.world == null || client.player == null) {
+	private static void updateGuardCache(Minecraft client, double range) {
+		if (client.level == null || client.player == null) {
 			CACHED_GUARDS.clear();
 			lastCacheTick = Long.MIN_VALUE;
 			return;
 		}
-		long tick = client.world.getTime();
+		long tick = client.level.getGameTime();
 		if (lastCacheTick != Long.MIN_VALUE && tick - lastCacheTick < CACHE_REFRESH_TICKS && Math.abs(lastCacheRange - range) < 0.001D) {
 			return;
 		}
@@ -121,22 +120,22 @@ public final class GuardDebugRenderer {
 		lastCacheRange = range;
 		double rangeSq = range * range;
 		CACHED_GUARDS.clear();
-		CACHED_GUARDS.addAll(client.world.getEntitiesByClass(
+		CACHED_GUARDS.addAll(client.level.getEntitiesOfClass(
 			GuardEntity.class,
-			client.player.getBoundingBox().expand(range),
+			client.player.getBoundingBox().inflate(range),
 			guard -> guard.isAlive()
-				&& guard.squaredDistanceTo(client.player) <= rangeSq
+				&& guard.distanceToSqr(client.player) <= rangeSq
 		));
 	}
 
 	private static void renderDetectionCircle(
-		MatrixStack matrices,
-		VertexConsumerProvider vertexConsumers,
+		PoseStack matrices,
+		MultiBufferSource vertexConsumers,
 		GuardEntity guard,
-		Vec3d cameraPos
+		Vec3 cameraPos
 	) {
-		VertexConsumer consumer = vertexConsumers.getBuffer(RenderLayers.debugFilledBox());
-		Matrix4f matrix = matrices.peek().getPositionMatrix();
+		VertexConsumer consumer = vertexConsumers.getBuffer(RenderTypes.debugFilledBox());
+		Matrix4f matrix = matrices.last().pose();
 		double centerX = guard.getX();
 		double centerY = guard.getY() + CIRCLE_Y_OFFSET;
 		double centerZ = guard.getZ();
@@ -166,8 +165,8 @@ public final class GuardDebugRenderer {
 	}
 
 	private static void renderPathHighlights(
-		MatrixStack matrices,
-		VertexConsumerProvider vertexConsumers,
+		PoseStack matrices,
+		MultiBufferSource vertexConsumers,
 		GuardEntity guard,
 		ClientGuardDebugData.GuardDebugSnapshot snapshot
 	) {
@@ -181,7 +180,7 @@ public final class GuardDebugRenderer {
 		}
 
 		int firstVisibleIndex = Math.max(0, currentPathIndex - PATH_TRAIL_KEEP_BEHIND);
-		VertexConsumer filled = vertexConsumers.getBuffer(RenderLayers.debugFilledBox());
+		VertexConsumer filled = vertexConsumers.getBuffer(RenderTypes.debugFilledBox());
 		for (int i = 0; i < nodes.size(); i++) {
 			if (i < firstVisibleIndex) {
 				continue;
@@ -207,22 +206,22 @@ public final class GuardDebugRenderer {
 	}
 
 	private static void renderTargetLine(
-		MatrixStack matrices,
-		VertexConsumerProvider vertexConsumers,
+		PoseStack matrices,
+		MultiBufferSource vertexConsumers,
 		GuardEntity guard,
 		ClientGuardDebugData.GuardDebugSnapshot snapshot,
-		MinecraftClient client,
-		Vec3d cameraPos
+		Minecraft client,
+		Vec3 cameraPos
 	) {
 		LivingEntity target = resolveTarget(guard, snapshot, client);
 		if (target == null || !target.isAlive()) {
 			return;
 		}
 
-		Vec3d origin = guard.getEyePos();
-		Vec3d destination = target.getEyePos();
-		VertexConsumer consumer = vertexConsumers.getBuffer(RenderLayers.debugFilledBox());
-		Matrix4f matrix = matrices.peek().getPositionMatrix();
+		Vec3 origin = guard.getEyePos();
+		Vec3 destination = target.getEyePosition();
+		VertexConsumer consumer = vertexConsumers.getBuffer(RenderTypes.debugFilledBox());
+		Matrix4f matrix = matrices.last().pose();
 		renderLineSegment(
 			consumer,
 			matrix,
@@ -243,10 +242,10 @@ public final class GuardDebugRenderer {
 	private static LivingEntity resolveTarget(
 		GuardEntity guard,
 		ClientGuardDebugData.GuardDebugSnapshot snapshot,
-		MinecraftClient client
+		Minecraft client
 	) {
-		if (snapshot != null && snapshot.targetEntityId() >= 0 && client.world != null) {
-			Entity synced = client.world.getEntityById(snapshot.targetEntityId());
+		if (snapshot != null && snapshot.targetEntityId() >= 0 && client.level != null) {
+			Entity synced = client.level.getEntity(snapshot.targetEntityId());
 			if (synced instanceof LivingEntity living) {
 				return living;
 			}
@@ -255,28 +254,28 @@ public final class GuardDebugRenderer {
 	}
 
 	private static void renderLabels(
-		MatrixStack matrices,
-		VertexConsumerProvider vertexConsumers,
+		PoseStack matrices,
+		MultiBufferSource vertexConsumers,
 		GuardEntity guard,
-		MinecraftClient client,
+		Minecraft client,
 		ClientTacticsDataStore.WorldContext worldContext
 	) {
-		TextRenderer textRenderer = client.textRenderer;
+		Font textRenderer = client.font;
 		List<DebugLabelLine> lines = buildLabelLines(guard, client, worldContext);
 		if (lines.isEmpty()) {
 			return;
 		}
 
-		matrices.push();
+		matrices.pushPose();
 		matrices.translate(guard.getX(), guard.getY() + guard.getHeight() + 0.75D, guard.getZ());
-		matrices.multiply(client.gameRenderer.getCamera().getRotation());
+		matrices.mulPose(client.gameRenderer.getMainCamera().rotation());
 		matrices.scale(-LABEL_SCALE, -LABEL_SCALE, LABEL_SCALE);
-		Matrix4f matrix = matrices.peek().getPositionMatrix();
-		int background = (int) (client.options.getTextBackgroundOpacity(0.25F) * 255.0F) << 24;
-		float lineY = -(lines.size() - 1) * (textRenderer.fontHeight + 2);
+		Matrix4f matrix = matrices.last().pose();
+		int background = (int) (client.options.getBackgroundOpacity(0.25F) * 255.0F) << 24;
+		float lineY = -(lines.size() - 1) * (textRenderer.lineHeight + 2);
 		for (DebugLabelLine line : lines) {
-			float lineX = -textRenderer.getWidth(line.text()) / 2.0F;
-			textRenderer.draw(
+			float lineX = -textRenderer.width(line.text()) / 2.0F;
+			textRenderer.drawInBatch(
 				line.text(),
 				lineX,
 				lineY,
@@ -284,19 +283,19 @@ public final class GuardDebugRenderer {
 				false,
 				matrix,
 				vertexConsumers,
-				TextRenderer.TextLayerType.NORMAL,
+				Font.DisplayMode.NORMAL,
 				background,
-				LightmapTextureManager.MAX_LIGHT_COORDINATE
+				LightTexture.FULL_BRIGHT
 			);
-			lineY += textRenderer.fontHeight + 2;
+			lineY += textRenderer.lineHeight + 2;
 		}
-		matrices.pop();
+		matrices.popPose();
 	}
 
-	private static List<DebugLabelLine> buildLabelLines(GuardEntity guard, MinecraftClient client, ClientTacticsDataStore.WorldContext worldContext) {
+	private static List<DebugLabelLine> buildLabelLines(GuardEntity guard, Minecraft client, ClientTacticsDataStore.WorldContext worldContext) {
 		List<DebugLabelLine> lines = new ArrayList<>(9);
-		int hp = Math.max(0, MathHelper.floor(guard.getHealth()));
-		int maxHp = Math.max(1, MathHelper.floor(guard.getMaxHealth()));
+		int hp = Math.max(0, Mth.floor(guard.getHealth()));
+		int maxHp = Math.max(1, Mth.floor(guard.getMaxHealth()));
 		lines.add(line("HP: " + hp + "/" + maxHp, 0xFF5555));
 
 		int level = guard.getLevel();
@@ -332,11 +331,11 @@ public final class GuardDebugRenderer {
 		return new DebugLabelLine(text, color);
 	}
 
-	private static String resolveOwnerName(UUID ownerUuid, MinecraftClient client) {
-		if (client.getNetworkHandler() == null) {
+	private static String resolveOwnerName(UUID ownerUuid, Minecraft client) {
+		if (client.getConnection() == null) {
 			return shortUuid(ownerUuid);
 		}
-		PlayerListEntry entry = client.getNetworkHandler().getPlayerListEntry(ownerUuid);
+		PlayerInfo entry = client.getConnection().getPlayerInfo(ownerUuid);
 		if (entry != null && entry.getProfile() != null) {
 			return entry.getProfile().name();
 		}
@@ -370,7 +369,7 @@ public final class GuardDebugRenderer {
 		return builder.length() == 0 ? "Nil" : builder.toString();
 	}
 
-	private static void drawPathMarkerCarpet(MatrixStack matrices, VertexConsumer consumer, BlockPos pos, float r, float g, float b) {
+	private static void drawPathMarkerCarpet(PoseStack matrices, VertexConsumer consumer, BlockPos pos, float r, float g, float b) {
 		double minX = pos.getX();
 		double maxX = minX + 1.0D;
 		double minZ = pos.getZ();
@@ -410,7 +409,7 @@ public final class GuardDebugRenderer {
 	 * windings guarantees the marker renders regardless of cull state or view direction.
 	 */
 	private static void drawFilledSlab(
-		MatrixStack matrices,
+		PoseStack matrices,
 		VertexConsumer consumer,
 		double minX,
 		double minY,
@@ -423,7 +422,7 @@ public final class GuardDebugRenderer {
 		float b,
 		float a
 	) {
-		Matrix4f matrix = matrices.peek().getPositionMatrix();
+		Matrix4f matrix = matrices.last().pose();
 		// Top (normal +Y)
 		quad(consumer, matrix, minX, maxY, maxZ, maxX, maxY, maxZ, maxX, maxY, minZ, minX, maxY, minZ, r, g, b, a);
 		quad(consumer, matrix, minX, maxY, minZ, maxX, maxY, minZ, maxX, maxY, maxZ, minX, maxY, maxZ, r, g, b, a);
@@ -471,7 +470,7 @@ public final class GuardDebugRenderer {
 	}
 
 	private static void quadVertex(VertexConsumer consumer, Matrix4f matrix, double x, double y, double z, float r, float g, float b, float a) {
-		consumer.vertex(matrix, (float) x, (float) y, (float) z).color(r, g, b, a);
+		consumer.addVertex(matrix, (float) x, (float) y, (float) z).setColor(r, g, b, a);
 	}
 
 	/**
@@ -480,7 +479,7 @@ public final class GuardDebugRenderer {
 	private static void renderLineSegment(
 		VertexConsumer consumer,
 		Matrix4f matrix,
-		Vec3d cameraPos,
+		Vec3 cameraPos,
 		double x1,
 		double y1,
 		double z1,
@@ -542,10 +541,10 @@ public final class GuardDebugRenderer {
 		float ey = (float) (y2 + offY);
 		float ez = (float) (z2 + offZ);
 
-		consumer.vertex(matrix, ax, ay, az).color(r, g, b, a);
-		consumer.vertex(matrix, bx, by, bz).color(r, g, b, a);
-		consumer.vertex(matrix, cx, cy, cz).color(r, g, b, a);
-		consumer.vertex(matrix, ex, ey, ez).color(r, g, b, a);
+		consumer.addVertex(matrix, ax, ay, az).setColor(r, g, b, a);
+		consumer.addVertex(matrix, bx, by, bz).setColor(r, g, b, a);
+		consumer.addVertex(matrix, cx, cy, cz).setColor(r, g, b, a);
+		consumer.addVertex(matrix, ex, ey, ez).setColor(r, g, b, a);
 	}
 
 	private static float[][] buildCirclePoints() {

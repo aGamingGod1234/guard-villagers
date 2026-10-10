@@ -4,25 +4,24 @@ import com.guardvillagers.GuardPlayerUpgrades;
 import com.guardvillagers.GuardSecurityLimits;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import net.minecraft.datafixer.DataFixTypes;
-import net.minecraft.util.Uuids;
-import net.minecraft.world.PersistentState;
-import net.minecraft.world.PersistentStateType;
-
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import net.minecraft.core.UUIDUtil;
+import net.minecraft.util.datafix.DataFixTypes;
+import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.saveddata.SavedDataType;
 
-public final class GuardUpgradeState extends PersistentState {
-	private static final Codec<Map<UUID, GuardPlayerUpgrades>> UPGRADE_MAP_CODEC = Codec.unboundedMap(Uuids.STRING_CODEC, GuardPlayerUpgrades.CODEC);
+public final class GuardUpgradeState extends SavedData {
+	private static final Codec<Map<UUID, GuardPlayerUpgrades>> UPGRADE_MAP_CODEC = Codec.unboundedMap(UUIDUtil.STRING_CODEC, GuardPlayerUpgrades.CODEC);
 
 	public static final Codec<GuardUpgradeState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
 		UPGRADE_MAP_CODEC.optionalFieldOf("upgrades", Map.of()).forGetter(GuardUpgradeState::upgradesForCodec)
 	).apply(instance, GuardUpgradeState::new));
 
-	public static final PersistentStateType<GuardUpgradeState> TYPE = new PersistentStateType<>(
+	public static final SavedDataType<GuardUpgradeState> TYPE = new SavedDataType<>(
 		"guardvillagers_upgrades",
 		GuardUpgradeState::new,
 		CODEC,
@@ -49,7 +48,7 @@ public final class GuardUpgradeState extends PersistentState {
 		}
 		GuardPlayerUpgrades created = this.trackUpgrade(new GuardPlayerUpgrades());
 		this.putBounded(playerUuid, created);
-		this.markDirty();
+		this.setDirty();
 		return created;
 	}
 
@@ -66,7 +65,7 @@ public final class GuardUpgradeState extends PersistentState {
 	}
 
 	private GuardPlayerUpgrades trackUpgrade(GuardPlayerUpgrades upgrades) {
-		upgrades.setDirtyCallback(this::markDirty);
+		upgrades.setDirtyCallback(this::setDirty);
 		return upgrades;
 	}
 

@@ -11,9 +11,9 @@ public final class GuardTacticsManager {
 
 	public static GuardTacticsState getState(MinecraftServer server) {
 		MinecraftServer checkedServer = Objects.requireNonNull(server, "server");
-		if (checkedServer.getOverworld() == null) {
+		if (checkedServer.overworld() == null) {
 			throw new IllegalStateException("Cannot access guard tactics state before overworld is available");
 		}
-		return checkedServer.getOverworld().getPersistentStateManager().getOrCreate(GuardTacticsState.TYPE);
+		return checkedServer.overworld().getDataStorage().computeIfAbsent(GuardTacticsState.TYPE);
 	}
 }

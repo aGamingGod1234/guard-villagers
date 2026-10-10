@@ -2,86 +2,85 @@ package com.guardvillagers.item;
 
 import com.guardvillagers.GuardVillagersMod;
 import com.guardvillagers.entity.GuardEntity;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.text.Text;
-import net.minecraft.util.ActionResult;
-import net.minecraft.util.Hand;
-import net.minecraft.util.math.Box;
-
 import java.util.List;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.phys.AABB;
 
 public final class GuardWhistleItem extends Item {
-	public GuardWhistleItem(Settings settings) {
+	public GuardWhistleItem(Properties settings) {
 		super(settings);
 	}
 
 	@Override
-	public ActionResult use(net.minecraft.world.World world, PlayerEntity user, Hand hand) {
-		if (world.isClient() || !(user instanceof ServerPlayerEntity player)) {
-			return ActionResult.SUCCESS;
+	public InteractionResult use(net.minecraft.world.level.Level world, Player user, InteractionHand hand) {
+		if (world.isClientSide() || !(user instanceof ServerPlayer player)) {
+			return InteractionResult.SUCCESS;
 		}
 
-		if (player.isSneaking()) {
+		if (player.isShiftKeyDown()) {
 			this.rallyNearbyLeaders(player);
-			return ActionResult.SUCCESS;
+			return InteractionResult.SUCCESS;
 		}
 
 		GuardVillagersMod.openTacticsScreen(player);
-		return ActionResult.SUCCESS;
+		return InteractionResult.SUCCESS;
 	}
 
 	@Override
-	public ActionResult useOnEntity(ItemStack stack, PlayerEntity user, LivingEntity entity, Hand hand) {
-		if (!(entity instanceof GuardEntity guard) || !(user instanceof ServerPlayerEntity player)) {
-			return ActionResult.PASS;
+	public InteractionResult interactLivingEntity(ItemStack stack, Player user, LivingEntity entity, InteractionHand hand) {
+		if (!(entity instanceof GuardEntity guard) || !(user instanceof ServerPlayer player)) {
+			return InteractionResult.PASS;
 		}
-		if (!guard.isOwnedBy(player.getUuid())) {
-			player.sendMessage(Text.literal("This guard does not follow your commands."), true);
-			return ActionResult.SUCCESS;
+		if (!guard.isOwnedBy(player.getUUID())) {
+			player.displayClientMessage(Component.literal("This guard does not follow your commands."), true);
+			return InteractionResult.SUCCESS;
 		}
 
-		if (player.isSneaking()) {
+		if (player.isShiftKeyDown()) {
 			int nextRadius = Math.min(96, Math.max(16, guard.getPatrolRadius() + 8));
 			guard.setFollowOverride(false);
 			guard.clearCombatTarget();
 			if (guard.getHome().isEmpty()) {
-				guard.setHome(guard.getBlockPos(), nextRadius);
+				guard.setHome(guard.blockPosition(), nextRadius);
 			} else {
 				guard.setPatrolRadius(nextRadius);
 			}
-			player.sendMessage(Text.literal("Patrol radius set to " + nextRadius + " blocks."), true);
+			player.displayClientMessage(Component.literal("Patrol radius set to " + nextRadius + " blocks."), true);
 		} else {
 			int radius = Math.max(24, guard.getPatrolRadius());
 			guard.setFollowOverride(false);
 			guard.clearCombatTarget();
-			guard.setHome(guard.getBlockPos(), radius);
-			player.sendMessage(Text.literal("Guard home zone assigned at current location."), true);
+			guard.setHome(guard.blockPosition(), radius);
+			player.displayClientMessage(Component.literal("Guard home zone assigned at current location."), true);
 		}
-		return ActionResult.SUCCESS;
+		return InteractionResult.SUCCESS;
 	}
 
-	private void rallyNearbyLeaders(ServerPlayerEntity caller) {
-		ServerWorld world = caller.getEntityWorld();
-		Box rallyRange = caller.getBoundingBox().expand(64.0D);
-		List<GuardEntity> leaders = world.getEntitiesByClass(
+	private void rallyNearbyLeaders(ServerPlayer caller) {
+		ServerLevel world = caller.level();
+		AABB rallyRange = caller.getBoundingBox().inflate(64.0D);
+		List<GuardEntity> leaders = world.getEntitiesOfClass(
 			GuardEntity.class,
 			rallyRange,
-			guard -> guard.isSquadLeader() && guard.isOwnedBy(caller.getUuid())
+			guard -> guard.isSquadLeader() && guard.isOwnedBy(caller.getUUID())
 		);
 
-		LivingEntity threat = caller.getAttacker();
+		LivingEntity threat = caller.getLastHurtByMob();
 		for (GuardEntity leader : leaders) {
 			leader.setStaying(false);
-			leader.rallyTo(caller.getBlockPos(), 240);
+			leader.rallyTo(caller.blockPosition(), 240);
 			if (threat != null && threat.isAlive()) {
 				leader.setPriorityTarget(threat);
 			}
 		}
-		caller.sendMessage(Text.literal("Rally command sent to " + leaders.size() + " squad leaders."), true);
+		caller.displayClientMessage(Component.literal("Rally command sent to " + leaders.size() + " squad leaders."), true);
 	}
 }

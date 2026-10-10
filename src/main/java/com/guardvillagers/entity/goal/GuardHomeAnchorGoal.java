@@ -2,10 +2,9 @@ package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.ai.GuardBehaviorExecutor;
-import net.minecraft.entity.ai.goal.Goal;
-import net.minecraft.util.math.BlockPos;
-
 import java.util.EnumSet;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.ai.goal.Goal;
 
 public final class GuardHomeAnchorGoal extends Goal {
 	private final GuardEntity guard;
@@ -14,17 +13,17 @@ public final class GuardHomeAnchorGoal extends Goal {
 	public GuardHomeAnchorGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
 		this.speed = speed;
-		this.setControls(EnumSet.of(Control.MOVE));
+		this.setFlags(EnumSet.of(Flag.MOVE));
 	}
 
 	@Override
-	public boolean canStart() {
+	public boolean canUse() {
 		return this.guard.isBehaviorExecutor(GuardBehaviorExecutor.HOME_ANCHOR)
 				&& this.guard.getHome().isPresent();
 	}
 
 	@Override
-	public boolean shouldContinue() {
+	public boolean canContinueToUse() {
 		return this.guard.isBehaviorExecutor(GuardBehaviorExecutor.HOME_ANCHOR)
 				&& this.guard.getHome().isPresent();
 	}
@@ -37,11 +36,11 @@ public final class GuardHomeAnchorGoal extends Goal {
 	@Override
 	public void tick() {
 		BlockPos home = this.guard.getHome().orElse(null);
-		if (home == null || !(this.guard.getEntityWorld() instanceof net.minecraft.server.world.ServerWorld world)) {
+		if (home == null || !(this.guard.level() instanceof net.minecraft.server.level.ServerLevel world)) {
 			return;
 		}
 		BlockPos slot = this.guard.resolveGroundMovementSlot(world, home, 1.75D, false);
-		if (this.guard.squaredDistanceTo(slot.getX() + 0.5D, slot.getY(), slot.getZ() + 0.5D) <= 2.25D) {
+		if (this.guard.distanceToSqr(slot.getX() + 0.5D, slot.getY(), slot.getZ() + 0.5D) <= 2.25D) {
 			this.guard.getNavigation().stop();
 			return;
 		}

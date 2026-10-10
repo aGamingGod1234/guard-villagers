@@ -1,9 +1,9 @@
 package com.guardvillagers.client;
 
-import net.minecraft.util.Identifier;
+import net.minecraft.resources.Identifier;
 
 public final class GuardSkinResolver {
-	private static final Identifier GUARD_TEXTURE = Identifier.of("guardvillagers",
+	private static final Identifier GUARD_TEXTURE = Identifier.fromNamespaceAndPath("guardvillagers",
 			"textures/entity/guard_villager.png");
 
 	private GuardSkinResolver() {

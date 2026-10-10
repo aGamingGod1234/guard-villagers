@@ -1,14 +1,13 @@
 package com.guardvillagers;
 
 import com.guardvillagers.data.GuardReputationState;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.passive.VillagerEntity;
-import net.minecraft.entity.raid.RaiderEntity;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.BlockPos;
-
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.world.entity.raid.Raider;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -35,84 +34,84 @@ public final class GuardReputationManager {
 	}
 
 	public static GuardReputationState getState(MinecraftServer server) {
-		return server.getOverworld().getPersistentStateManager().getOrCreate(GuardReputationState.TYPE);
+		return server.overworld().getDataStorage().computeIfAbsent(GuardReputationState.TYPE);
 	}
 
-	public static double getEffectiveReputation(ServerWorld world, UUID playerUuid, BlockPos reference, int radius) {
+	public static double getEffectiveReputation(ServerLevel world, UUID playerUuid, BlockPos reference, int radius) {
 		return getState(world.getServer()).get(playerUuid);
 	}
 
-	public static double getEffectiveReputation(ServerPlayerEntity player) {
-		return getEffectiveReputation(player.getEntityWorld(), player.getUuid(), player.getBlockPos(), 64);
+	public static double getEffectiveReputation(ServerPlayer player) {
+		return getEffectiveReputation(player.level(), player.getUUID(), player.blockPosition(), 64);
 	}
 
-	public static boolean isTrustedByGuards(ServerWorld world, UUID playerUuid, BlockPos reference) {
+	public static boolean isTrustedByGuards(ServerLevel world, UUID playerUuid, BlockPos reference) {
 		return getEffectiveReputation(world, playerUuid, reference, 64) >= TRUST_THRESHOLD;
 	}
 
-	public static boolean shouldGuardsTurnHostile(ServerWorld world, UUID playerUuid, BlockPos reference) {
+	public static boolean shouldGuardsTurnHostile(ServerLevel world, UUID playerUuid, BlockPos reference) {
 		return getEffectiveReputation(world, playerUuid, reference, 64) < HOSTILE_THRESHOLD;
 	}
 
-	public static double getStoredReputation(ServerWorld world, UUID playerUuid) {
+	public static double getStoredReputation(ServerLevel world, UUID playerUuid) {
 		return getState(world.getServer()).get(playerUuid);
 	}
 
-	public static void setReputation(ServerWorld world, UUID playerUuid, double value) {
+	public static void setReputation(ServerLevel world, UUID playerUuid, double value) {
 		getState(world.getServer()).set(playerUuid, value);
 	}
 
-	public static void resetReputation(ServerWorld world, UUID playerUuid) {
+	public static void resetReputation(ServerLevel world, UUID playerUuid) {
 		setReputation(world, playerUuid, 0.0D);
 	}
 
-	public static double applyReputationDelta(ServerWorld world, UUID playerUuid, int legacyDelta) {
+	public static double applyReputationDelta(ServerLevel world, UUID playerUuid, int legacyDelta) {
 		return applyNormalizedReputationDelta(world, playerUuid, legacyDeltaToNormalized(legacyDelta));
 	}
 
-	public static double applyNormalizedReputationDelta(ServerWorld world, UUID playerUuid, double delta) {
+	public static double applyNormalizedReputationDelta(ServerLevel world, UUID playerUuid, double delta) {
 		return getState(world.getServer()).add(playerUuid, delta);
 	}
 
-	public static int getAdjustedGuardCost(ServerPlayerEntity player, int baseCost) {
+	public static int getAdjustedGuardCost(ServerPlayer player, int baseCost) {
 		return Math.max(1, baseCost);
 	}
 
-	public static void recordCompletedTrade(ServerPlayerEntity player, VillagerEntity villager) {
-		long now = player.getEntityWorld().getTime();
+	public static void recordCompletedTrade(ServerPlayer player, Villager villager) {
+		long now = player.level().getGameTime();
 		cleanupTradeCooldown(now);
-		UUID key = mix(player.getUuid(), villager.getUuid());
+		UUID key = mix(player.getUUID(), villager.getUUID());
 		long previous = TRADE_REPUTATION_COOLDOWN.getOrDefault(key, Long.MIN_VALUE);
 		if (now - previous < TRADE_COOLDOWN_TICKS) {
 			return;
 		}
 
 		TRADE_REPUTATION_COOLDOWN.put(key, now);
-		applyNormalizedReputationDelta(player.getEntityWorld(), player.getUuid(), TRADE_DELTA);
+		applyNormalizedReputationDelta(player.level(), player.getUUID(), TRADE_DELTA);
 	}
 
-	public static void recordVillagerHarm(ServerWorld world, UUID playerUuid) {
+	public static void recordVillagerHarm(ServerLevel world, UUID playerUuid) {
 		applyNormalizedReputationDelta(world, playerUuid, VILLAGER_HARM_DELTA);
 	}
 
-	public static void recordGuardHarm(ServerWorld world, UUID playerUuid) {
+	public static void recordGuardHarm(ServerLevel world, UUID playerUuid) {
 		applyNormalizedReputationDelta(world, playerUuid, GUARD_HARM_DELTA);
 	}
 
-	public static void recordRaidDefense(ServerWorld world, UUID playerUuid) {
+	public static void recordRaidDefense(ServerLevel world, UUID playerUuid) {
 		applyNormalizedReputationDelta(world, playerUuid, RAID_DEFENSE_DELTA);
 	}
 
-	public static void recordHostileKill(ServerWorld world, UUID playerUuid, LivingEntity target) {
+	public static void recordHostileKill(ServerLevel world, UUID playerUuid, LivingEntity target) {
 		if (target == null) {
 			return;
 		}
-		double delta = target instanceof RaiderEntity ? RAIDER_KILL_DELTA : HOSTILE_KILL_DELTA;
+		double delta = target instanceof Raider ? RAIDER_KILL_DELTA : HOSTILE_KILL_DELTA;
 		applyNormalizedReputationDelta(world, playerUuid, delta);
 	}
 
-	public static void tickDecay(ServerWorld world) {
-		if (world.getTime() % DECAY_INTERVAL_TICKS != 0) {
+	public static void tickDecay(ServerLevel world) {
+		if (world.getGameTime() % DECAY_INTERVAL_TICKS != 0) {
 			return;
 		}
 		getState(world.getServer()).decayAll(DECAY_STEP);

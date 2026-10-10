@@ -4,16 +4,15 @@ import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.ai.GuardBehaviorExecutor;
 import com.guardvillagers.village.VillageDescriptor;
 import com.guardvillagers.village.VillageManagerHandler;
-import net.minecraft.entity.ai.goal.Goal;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.BlockPos;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Random;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.ai.goal.Goal;
 
 public final class PerimeterPatrolGoal extends Goal {
 	private static final int EDGE_STEP = 6;
@@ -39,17 +38,17 @@ public final class PerimeterPatrolGoal extends Goal {
 	public PerimeterPatrolGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
 		this.speed = speed;
-		this.setControls(EnumSet.of(Control.MOVE));
+		this.setFlags(EnumSet.of(Flag.MOVE));
 	}
 
 	@Override
-	public boolean canStart() {
+	public boolean canUse() {
 		return this.guard.isBehaviorExecutor(GuardBehaviorExecutor.PERIMETER)
 			&& this.refreshVillageData();
 	}
 
 	@Override
-	public boolean shouldContinue() {
+	public boolean canContinueToUse() {
 		return this.guard.isBehaviorExecutor(GuardBehaviorExecutor.PERIMETER)
 			&& (!this.edgePoints.isEmpty() || !this.interiorPoints.isEmpty());
 	}
@@ -64,7 +63,7 @@ public final class PerimeterPatrolGoal extends Goal {
 
 	@Override
 	public void tick() {
-		if (!(this.guard.getEntityWorld() instanceof ServerWorld world)) {
+		if (!(this.guard.level() instanceof ServerLevel world)) {
 			return;
 		}
 
@@ -95,7 +94,7 @@ public final class PerimeterPatrolGoal extends Goal {
 
 		BlockPos target = points.get(this.pointIndex % points.size());
 		BlockPos groundedTarget = this.guard.resolveGroundMovementSlot(world, target, PATROL_SLOT_SPACING, true);
-		double distanceSq = this.guard.squaredDistanceTo(
+		double distanceSq = this.guard.distanceToSqr(
 				groundedTarget.getX() + 0.5D,
 				groundedTarget.getY(),
 				groundedTarget.getZ() + 0.5D);
@@ -112,13 +111,13 @@ public final class PerimeterPatrolGoal extends Goal {
 		if (points.size() <= 1) {
 			return;
 		}
-		BlockPos guardPos = this.guard.getBlockPos();
+		BlockPos guardPos = this.guard.blockPosition();
 		int attempts = 0;
 		do {
 			int advance = 1 + this.guard.getRandom().nextInt(Math.min(4, points.size()));
 			this.pointIndex = (this.pointIndex + advance) % points.size();
 			attempts++;
-		} while (attempts < 3 && guardPos.getSquaredDistance(points.get(this.pointIndex)) < MIN_NEXT_DISTANCE_SQ);
+		} while (attempts < 3 && guardPos.distSqr(points.get(this.pointIndex)) < MIN_NEXT_DISTANCE_SQ);
 	}
 
 	private List<BlockPos> activePoints() {
@@ -126,11 +125,11 @@ public final class PerimeterPatrolGoal extends Goal {
 	}
 
 	private boolean refreshVillageData() {
-		if (!(this.guard.getEntityWorld() instanceof ServerWorld world)) {
+		if (!(this.guard.level() instanceof ServerLevel world)) {
 			return false;
 		}
 
-		Optional<VillageDescriptor> descriptor = VillageManagerHandler.findVillageDescriptor(world, this.guard.getBlockPos());
+		Optional<VillageDescriptor> descriptor = VillageManagerHandler.findVillageDescriptor(world, this.guard.blockPosition());
 		if (descriptor.isEmpty()) {
 			return false;
 		}
@@ -146,10 +145,10 @@ public final class PerimeterPatrolGoal extends Goal {
 			return;
 		}
 
-		int minX = this.village.bounds().getMinX();
-		int maxX = this.village.bounds().getMaxX();
-		int minZ = this.village.bounds().getMinZ();
-		int maxZ = this.village.bounds().getMaxZ();
+		int minX = this.village.bounds().minX();
+		int maxX = this.village.bounds().maxX();
+		int minZ = this.village.bounds().minZ();
+		int maxZ = this.village.bounds().maxZ();
 		int y = this.village.center().getY();
 
 		// Edge patrol points (perimeter boundary)
@@ -179,8 +178,8 @@ public final class PerimeterPatrolGoal extends Goal {
 	}
 
 	private BlockPos jittered(int x, int y, int z, int jitter) {
-		int offsetX = this.guard.getRandom().nextBetween(-jitter, jitter);
-		int offsetZ = this.guard.getRandom().nextBetween(-jitter, jitter);
+		int offsetX = this.guard.getRandom().nextIntBetweenInclusive(-jitter, jitter);
+		int offsetZ = this.guard.getRandom().nextIntBetweenInclusive(-jitter, jitter);
 		return new BlockPos(x + offsetX, y, z + offsetZ);
 	}
 }

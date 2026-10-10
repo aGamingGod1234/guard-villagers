@@ -2,10 +2,9 @@ package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.ai.GuardAiIntent;
-import net.minecraft.entity.ai.goal.Goal;
-import net.minecraft.util.math.BlockPos;
-
 import java.util.EnumSet;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.ai.goal.Goal;
 
 public final class GuardRallyGoal extends Goal {
 	private static final int REPATH_INTERVAL_TICKS = 10;
@@ -17,17 +16,17 @@ public final class GuardRallyGoal extends Goal {
 	public GuardRallyGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
 		this.speed = speed;
-		this.setControls(EnumSet.of(Control.MOVE));
+		this.setFlags(EnumSet.of(Flag.MOVE));
 	}
 
 	@Override
-	public boolean canStart() {
+	public boolean canUse() {
 		return this.guard.isAiIntent(GuardAiIntent.RALLY)
 				&& this.guard.getRallyPoint().isPresent();
 	}
 
 	@Override
-	public boolean shouldContinue() {
+	public boolean canContinueToUse() {
 		return this.guard.isAiIntent(GuardAiIntent.RALLY)
 				&& this.guard.getRallyPoint().isPresent();
 	}
@@ -50,7 +49,7 @@ public final class GuardRallyGoal extends Goal {
 		}
 		this.repathTicks = REPATH_INTERVAL_TICKS;
 		BlockPos rallyPoint = this.guard.getRallyPoint().orElse(null);
-		if (rallyPoint == null || !(this.guard.getEntityWorld() instanceof net.minecraft.server.world.ServerWorld world)) {
+		if (rallyPoint == null || !(this.guard.level() instanceof net.minecraft.server.level.ServerLevel world)) {
 			return;
 		}
 		BlockPos slot = this.guard.resolveGroundMovementSlot(world, rallyPoint, 1.75D, false);

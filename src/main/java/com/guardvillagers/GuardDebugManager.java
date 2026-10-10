@@ -2,8 +2,7 @@ package com.guardvillagers;
 
 import com.guardvillagers.data.GuardDebugState;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-
+import net.minecraft.server.level.ServerPlayer;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -13,10 +12,10 @@ public final class GuardDebugManager {
 
 	public static GuardDebugState getState(MinecraftServer server) {
 		MinecraftServer checkedServer = Objects.requireNonNull(server, "server");
-		if (checkedServer.getOverworld() == null) {
+		if (checkedServer.overworld() == null) {
 			throw new IllegalStateException("Cannot access guard debug state before overworld is available");
 		}
-		return checkedServer.getOverworld().getPersistentStateManager().getOrCreate(GuardDebugState.TYPE);
+		return checkedServer.overworld().getDataStorage().computeIfAbsent(GuardDebugState.TYPE);
 	}
 
 	public static boolean isEnabled(MinecraftServer server, UUID playerId) {
@@ -39,17 +38,17 @@ public final class GuardDebugManager {
 		return getState(server).getRange(playerId);
 	}
 
-	public static int getRangeCapBlocks(ServerPlayerEntity player) {
-		int viewDistanceChunks = Math.max(2, player.getViewDistance());
+	public static int getRangeCapBlocks(ServerPlayer player) {
+		int viewDistanceChunks = Math.max(2, player.requestedViewDistance());
 		return Math.max(1, (viewDistanceChunks * 16) / 2);
 	}
 
-	public static double getEffectiveRange(ServerPlayerEntity player) {
-		MinecraftServer server = player.getCommandSource().getServer();
+	public static double getEffectiveRange(ServerPlayer player) {
+		MinecraftServer server = player.createCommandSourceStack().getServer();
 		if (server == null) {
 			return getRangeCapBlocks(player);
 		}
-		double configuredRange = getRange(server, player.getUuid());
+		double configuredRange = getRange(server, player.getUUID());
 		int cap = getRangeCapBlocks(player);
 		if (configuredRange < 0.0D) {
 			return cap;

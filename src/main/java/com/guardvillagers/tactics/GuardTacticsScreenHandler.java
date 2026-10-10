@@ -1,40 +1,40 @@
 package com.guardvillagers.tactics;
 
 import com.guardvillagers.GuardVillagersMod;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.inventory.Inventory;
-import net.minecraft.inventory.SimpleInventory;
-import net.minecraft.item.ItemStack;
-import net.minecraft.screen.GenericContainerScreenHandler;
-import net.minecraft.screen.slot.Slot;
-import net.minecraft.screen.slot.SlotActionType;
-import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.Container;
+import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.ChestMenu;
+import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.ItemStack;
 
-public final class GuardTacticsScreenHandler extends GenericContainerScreenHandler {
+public final class GuardTacticsScreenHandler extends ChestMenu {
 	private static final int TACTICS_SLOT_COUNT = 54;
 	private final GuardTacticsInventory tacticsInventory;
-	private final ServerPlayerEntity owner;
+	private final ServerPlayer owner;
 
-	public GuardTacticsScreenHandler(int syncId, PlayerInventory playerInventory) {
-		this(syncId, playerInventory, new SimpleInventory(54), null, null);
+	public GuardTacticsScreenHandler(int syncId, Inventory playerInventory) {
+		this(syncId, playerInventory, new SimpleContainer(54), null, null);
 	}
 
-	public GuardTacticsScreenHandler(int syncId, PlayerInventory playerInventory, ServerPlayerEntity owner) {
+	public GuardTacticsScreenHandler(int syncId, Inventory playerInventory, ServerPlayer owner) {
 		this(syncId, playerInventory, createServerInventory(owner), owner);
 	}
 
-	private GuardTacticsScreenHandler(int syncId, PlayerInventory playerInventory, GuardTacticsInventory tacticsInventory, ServerPlayerEntity owner) {
+	private GuardTacticsScreenHandler(int syncId, Inventory playerInventory, GuardTacticsInventory tacticsInventory, ServerPlayer owner) {
 		this(syncId, playerInventory, tacticsInventory, tacticsInventory, owner);
 	}
 
-	private GuardTacticsScreenHandler(int syncId, PlayerInventory playerInventory, Inventory inventory, GuardTacticsInventory tacticsInventory, ServerPlayerEntity owner) {
+	private GuardTacticsScreenHandler(int syncId, Inventory playerInventory, Container inventory, GuardTacticsInventory tacticsInventory, ServerPlayer owner) {
 		super(GuardVillagersMod.GUARD_TACTICS_SCREEN_HANDLER, syncId, playerInventory, inventory, 6);
 		this.tacticsInventory = tacticsInventory;
 		this.owner = owner;
 	}
 
-	private static GuardTacticsInventory createServerInventory(ServerPlayerEntity owner) {
+	private static GuardTacticsInventory createServerInventory(ServerPlayer owner) {
 		if (owner == null) {
 			throw new IllegalArgumentException("owner cannot be null for server GuardTacticsScreenHandler");
 		}
@@ -42,14 +42,14 @@ public final class GuardTacticsScreenHandler extends GenericContainerScreenHandl
 	}
 
 	@Override
-	public ItemStack quickMove(PlayerEntity player, int slot) {
+	public ItemStack quickMoveStack(Player player, int slot) {
 		return ItemStack.EMPTY;
 	}
 
 	@Override
-	public void onSlotClick(int slotIndex, int button, SlotActionType actionType, PlayerEntity player) {
+	public void clicked(int slotIndex, int button, ClickType actionType, Player player) {
 		if (this.owner == null || this.tacticsInventory == null) {
-			super.onSlotClick(slotIndex, button, actionType, player);
+			super.clicked(slotIndex, button, actionType, player);
 			return;
 		}
 
@@ -57,17 +57,17 @@ public final class GuardTacticsScreenHandler extends GenericContainerScreenHandl
 			return;
 		}
 
-		if (!this.getCursorStack().isEmpty()) {
+		if (!this.getCarried().isEmpty()) {
 			return;
 		}
 
 		if (slotIndex >= 0 && slotIndex < TACTICS_SLOT_COUNT) {
-			if (actionType != SlotActionType.PICKUP && actionType != SlotActionType.QUICK_MOVE) {
+			if (actionType != ClickType.PICKUP && actionType != ClickType.QUICK_MOVE) {
 				return;
 			}
 			if (this.tacticsInventory.handleClick(slotIndex, button)) {
 				this.tacticsInventory.refresh();
-				this.sendContentUpdates();
+				this.broadcastChanges();
 			}
 			return;
 		}
@@ -76,21 +76,21 @@ public final class GuardTacticsScreenHandler extends GenericContainerScreenHandl
 			return;
 		}
 
-		super.onSlotClick(slotIndex, button, actionType, player);
+		super.clicked(slotIndex, button, actionType, player);
 	}
 
 	@Override
-	public boolean canInsertIntoSlot(ItemStack stack, Slot slot) {
+	public boolean canTakeItemForPickAll(ItemStack stack, Slot slot) {
 		return false;
 	}
 
 	@Override
-	public boolean canInsertIntoSlot(Slot slot) {
+	public boolean canDragTo(Slot slot) {
 		return false;
 	}
 
 	@Override
-	public boolean canUse(PlayerEntity player) {
+	public boolean stillValid(Player player) {
 		if (this.owner == null) {
 			return true;
 		}
@@ -102,6 +102,6 @@ public final class GuardTacticsScreenHandler extends GenericContainerScreenHandl
 			return;
 		}
 		this.tacticsInventory.refresh();
-		this.sendContentUpdates();
+		this.broadcastChanges();
 	}
 }

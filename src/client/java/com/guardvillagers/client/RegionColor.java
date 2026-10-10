@@ -1,6 +1,6 @@
 package com.guardvillagers.client;
 
-import net.minecraft.text.Text;
+import net.minecraft.network.chat.Component;
 
 public enum RegionColor {
 	NONE(0, "None", 0x00000000, 0xFF2A2F36),
@@ -47,8 +47,8 @@ public enum RegionColor {
 		return this.label;
 	}
 
-	public Text labelText() {
-		return Text.literal(this.label);
+	public Component labelText() {
+		return Component.literal(this.label);
 	}
 
 	public static RegionColor[] paletteColors() {

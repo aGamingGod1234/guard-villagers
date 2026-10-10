@@ -1,30 +1,29 @@
 package com.guardvillagers.tactics;
 
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.inventory.SimpleInventory;
-import net.minecraft.item.ItemStack;
-import net.minecraft.server.network.ServerPlayerEntity;
-
 import java.util.Objects;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 
-public final class GuardTacticsInventory extends SimpleInventory {
+public final class GuardTacticsInventory extends SimpleContainer {
 	private static final int SIZE = 54;
 
-	private final ServerPlayerEntity owner;
+	private final ServerPlayer owner;
 
-	public GuardTacticsInventory(ServerPlayerEntity owner) {
+	public GuardTacticsInventory(ServerPlayer owner) {
 		super(SIZE);
 		this.owner = Objects.requireNonNull(owner, "owner");
 		this.refresh();
 	}
 
 	@Override
-	public boolean canPlayerUse(PlayerEntity player) {
+	public boolean stillValid(Player player) {
 		return player == this.owner;
 	}
 
 	@Override
-	public boolean isValid(int slot, ItemStack stack) {
+	public boolean canPlaceItem(int slot, ItemStack stack) {
 		return false;
 	}
 
@@ -33,8 +32,8 @@ public final class GuardTacticsInventory extends SimpleInventory {
 	}
 
 	public void refresh() {
-		for (int i = 0; i < this.size(); i++) {
-			this.setStack(i, ItemStack.EMPTY);
+		for (int i = 0; i < this.getContainerSize(); i++) {
+			this.setItem(i, ItemStack.EMPTY);
 		}
 	}
 }

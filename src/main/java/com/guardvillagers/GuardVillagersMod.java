@@ -29,47 +29,46 @@ import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.fabricmc.fabric.api.itemgroup.v1.FabricItemGroup;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
-import net.minecraft.block.DispenserBlock;
-import net.minecraft.block.dispenser.ItemDispenserBehavior;
-import net.minecraft.command.CommandRegistryAccess;
-import net.minecraft.command.argument.EntityArgumentType;
-import net.minecraft.command.permission.LeveledPermissionPredicate;
-import net.minecraft.command.permission.PermissionLevel;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.TypedEntityData;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.SpawnGroup;
-import net.minecraft.entity.SpawnReason;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.entity.passive.IronGolemEntity;
-import net.minecraft.entity.passive.VillagerEntity;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.registry.RegistryKey;
-import net.minecraft.registry.RegistryKeys;
-import net.minecraft.resource.featuretoggle.FeatureFlags;
-import net.minecraft.screen.ScreenHandlerType;
-import net.minecraft.screen.SimpleNamedScreenHandlerFactory;
+import net.minecraft.ChatFormatting;
+import net.minecraft.commands.CommandBuildContext;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.commands.arguments.EntityArgument;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.Registry;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.dispenser.DefaultDispenseItemBehavior;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.command.CommandManager;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.text.Text;
-import net.minecraft.util.ActionResult;
-import net.minecraft.util.Formatting;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.world.World;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.permissions.LevelBasedPermissionSet;
+import net.minecraft.server.permissions.PermissionLevel;
+import net.minecraft.util.Mth;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.SimpleMenuProvider;
+import net.minecraft.world.entity.EntitySpawnReason;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.MobCategory;
+import net.minecraft.world.entity.animal.golem.IronGolem;
+import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.flag.FeatureFlags;
+import net.minecraft.world.inventory.MenuType;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.component.TypedEntityData;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.DispenserBlock;
+import net.minecraft.world.phys.AABB;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -118,46 +117,46 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	public static final EntityType<GuardEntity> GUARD_ENTITY_TYPE = Registry.register(
-			Registries.ENTITY_TYPE,
+			BuiltInRegistries.ENTITY_TYPE,
 			id("guard"),
-			EntityType.Builder.create(GuardEntity::new, SpawnGroup.CREATURE)
-					.dimensions(0.6F, 1.95F)
-					.maxTrackingRange(10)
-					.build(RegistryKey.of(RegistryKeys.ENTITY_TYPE, id("guard"))));
+			EntityType.Builder.of(GuardEntity::new, MobCategory.CREATURE)
+					.sized(0.6F, 1.95F)
+					.clientTrackingRange(10)
+					.build(ResourceKey.create(Registries.ENTITY_TYPE, id("guard"))));
 
 	public static final Item GUARD_WHISTLE = Registry.register(
-			Registries.ITEM,
+			BuiltInRegistries.ITEM,
 			id("guard_whistle"),
-			new GuardWhistleItem(new Item.Settings()
-					.registryKey(RegistryKey.of(RegistryKeys.ITEM, id("guard_whistle")))
-					.maxCount(1)));
+			new GuardWhistleItem(new Item.Properties()
+					.setId(ResourceKey.create(Registries.ITEM, id("guard_whistle")))
+					.stacksTo(1)));
 
 	public static final Item GUARD_SPAWN_EGG = Registry.register(
-			Registries.ITEM,
+			BuiltInRegistries.ITEM,
 			id("guard_spawn_egg"),
-			new GuardSpawnEggItem(new Item.Settings()
-					.registryKey(RegistryKey.of(RegistryKeys.ITEM, id("guard_spawn_egg")))
-					.component(DataComponentTypes.ENTITY_DATA,
-							TypedEntityData.create(GUARD_ENTITY_TYPE, new NbtCompound()))));
+			new GuardSpawnEggItem(new Item.Properties()
+					.setId(ResourceKey.create(Registries.ITEM, id("guard_spawn_egg")))
+					.component(DataComponents.ENTITY_DATA,
+							TypedEntityData.of(GUARD_ENTITY_TYPE, new CompoundTag()))));
 
-	public static final net.minecraft.item.ItemGroup GUARD_KIT_GROUP = Registry.register(
-			Registries.ITEM_GROUP,
+	public static final net.minecraft.world.item.CreativeModeTab GUARD_KIT_GROUP = Registry.register(
+			BuiltInRegistries.CREATIVE_MODE_TAB,
 			id("guards"),
 			FabricItemGroup.builder()
-					.displayName(Text.translatable("itemGroup.guardvillagers.guards"))
+					.title(Component.translatable("itemGroup.guardvillagers.guards"))
 					.icon(() -> new ItemStack(GUARD_SPAWN_EGG))
-					.entries((context, entries) -> {
-						entries.add(GUARD_SPAWN_EGG);
-						entries.add(GUARD_WHISTLE);
-						entries.add(Items.EMERALD);
+					.displayItems((context, entries) -> {
+						entries.accept(GUARD_SPAWN_EGG);
+						entries.accept(GUARD_WHISTLE);
+						entries.accept(Items.EMERALD);
 					})
 					.build());
 
-	public static final ScreenHandlerType<GuardTacticsScreenHandler> GUARD_TACTICS_SCREEN_HANDLER = Registry.register(
-			Registries.SCREEN_HANDLER,
+	public static final MenuType<GuardTacticsScreenHandler> GUARD_TACTICS_SCREEN_HANDLER = Registry.register(
+			BuiltInRegistries.MENU,
 			id("guard_tactics"),
-			new ScreenHandlerType<>((syncId, playerInventory) -> new GuardTacticsScreenHandler(syncId, playerInventory),
-					FeatureFlags.VANILLA_FEATURES));
+			new MenuType<>((syncId, playerInventory) -> new GuardTacticsScreenHandler(syncId, playerInventory),
+					FeatureFlags.VANILLA_SET));
 
 	@Override
 	public void onInitialize() {
@@ -197,14 +196,14 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	private static void registerDispenserBehavior() {
-		DispenserBlock.registerBehavior(GUARD_SPAWN_EGG, new ItemDispenserBehavior() {
+		DispenserBlock.registerBehavior(GUARD_SPAWN_EGG, new DefaultDispenseItemBehavior() {
 			@Override
-			protected ItemStack dispenseSilently(net.minecraft.util.math.BlockPointer pointer, ItemStack stack) {
-				ServerWorld world = pointer.world();
-				Direction direction = pointer.state().get(DispenserBlock.FACING);
-				BlockPos spawnPos = pointer.pos().offset(direction);
+			protected ItemStack execute(net.minecraft.core.dispenser.BlockSource pointer, ItemStack stack) {
+				ServerLevel world = pointer.level();
+				Direction direction = pointer.state().getValue(DispenserBlock.FACING);
+				BlockPos spawnPos = pointer.pos().relative(direction);
 
-				GuardEntity guard = GUARD_ENTITY_TYPE.create(world, SpawnReason.DISPENSER);
+				GuardEntity guard = GUARD_ENTITY_TYPE.create(world, EntitySpawnReason.DISPENSER);
 				if (guard == null) {
 					return stack;
 				}
@@ -213,12 +212,12 @@ public class GuardVillagersMod implements ModInitializer {
 				if (spawn == null) {
 					return stack;
 				}
-				guard.refreshPositionAndAngles(spawn.getX() + 0.5D, spawn.getY(), spawn.getZ() + 0.5D,
-						direction.getPositiveHorizontalDegrees(), 0.0F);
+				guard.snapTo(spawn.getX() + 0.5D, spawn.getY(), spawn.getZ() + 0.5D,
+						direction.toYRot(), 0.0F);
 				guard.applyNaturalLoadout(world);
 				guard.setBehavior(GuardBehavior.random(world.getRandom()));
-				if (world.spawnEntity(guard)) {
-					stack.decrement(1);
+				if (world.addFreshEntity(guard)) {
+					stack.shrink(1);
 				}
 				return stack;
 			}
@@ -226,50 +225,50 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	public static Identifier id(String path) {
-		return Identifier.of(MOD_ID, path);
+		return Identifier.fromNamespaceAndPath(MOD_ID, path);
 	}
 
-	public static GuardPlayerUpgrades getUpgrades(ServerPlayerEntity player) {
-		return getUpgrades(player.getCommandSource().getServer(), player.getUuid());
+	public static GuardPlayerUpgrades getUpgrades(ServerPlayer player) {
+		return getUpgrades(player.createCommandSourceStack().getServer(), player.getUUID());
 	}
 
-	public static GuardPlayerUpgrades getUpgrades(ServerWorld world, UUID playerUuid) {
+	public static GuardPlayerUpgrades getUpgrades(ServerLevel world, UUID playerUuid) {
 		return getUpgrades(world.getServer(), playerUuid);
 	}
 
 	public static GuardPlayerUpgrades getUpgrades(MinecraftServer server, UUID playerUuid) {
-		GuardUpgradeState state = server.getOverworld().getPersistentStateManager().getOrCreate(GuardUpgradeState.TYPE);
+		GuardUpgradeState state = server.overworld().getDataStorage().computeIfAbsent(GuardUpgradeState.TYPE);
 		return state.getOrCreate(playerUuid);
 	}
 
-	public static GuardPlayerUpgrades getUpgradesView(ServerPlayerEntity player) {
-		return getUpgradesView(player.getCommandSource().getServer(), player.getUuid());
+	public static GuardPlayerUpgrades getUpgradesView(ServerPlayer player) {
+		return getUpgradesView(player.createCommandSourceStack().getServer(), player.getUUID());
 	}
 
-	public static GuardPlayerUpgrades getUpgradesView(ServerWorld world, UUID playerUuid) {
+	public static GuardPlayerUpgrades getUpgradesView(ServerLevel world, UUID playerUuid) {
 		return getUpgradesView(world.getServer(), playerUuid);
 	}
 
 	public static GuardPlayerUpgrades getUpgradesView(MinecraftServer server, UUID playerUuid) {
-		GuardUpgradeState state = server.getOverworld().getPersistentStateManager().getOrCreate(GuardUpgradeState.TYPE);
+		GuardUpgradeState state = server.overworld().getDataStorage().computeIfAbsent(GuardUpgradeState.TYPE);
 		return state.getOrDefault(playerUuid);
 	}
 
-	public static float getHealingAmount(ServerWorld world, UUID ownerUuid) {
+	public static float getHealingAmount(ServerLevel world, UUID ownerUuid) {
 		if (ownerUuid == null) {
 			return 1.0F;
 		}
 		return getUpgradesView(world, ownerUuid).getHealingPerCycle();
 	}
 
-	public static int getHealingIntervalTicks(ServerWorld world, UUID ownerUuid) {
+	public static int getHealingIntervalTicks(ServerLevel world, UUID ownerUuid) {
 		if (ownerUuid == null) {
 			return 100;
 		}
 		return getUpgradesView(world, ownerUuid).getHealingIntervalTicks();
 	}
 
-	public static boolean hasShieldUpgrade(ServerWorld world, UUID ownerUuid) {
+	public static boolean hasShieldUpgrade(ServerLevel world, UUID ownerUuid) {
 		return ownerUuid != null && getUpgradesView(world, ownerUuid).hasShieldUpgrade();
 	}
 
@@ -277,108 +276,108 @@ public class GuardVillagersMod implements ModInitializer {
 		CommandRegistrationCallback.EVENT.register(this::registerGuardCommands);
 	}
 
-	private void registerGuardCommands(com.mojang.brigadier.CommandDispatcher<ServerCommandSource> dispatcher,
-			CommandRegistryAccess registryAccess, CommandManager.RegistrationEnvironment environment) {
+	private void registerGuardCommands(com.mojang.brigadier.CommandDispatcher<CommandSourceStack> dispatcher,
+			CommandBuildContext registryAccess, Commands.CommandSelection environment) {
 		dispatcher.register(buildGuardsCommand("guards"));
 	}
 
-	private com.mojang.brigadier.builder.LiteralArgumentBuilder<ServerCommandSource> buildGuardsCommand(
+	private com.mojang.brigadier.builder.LiteralArgumentBuilder<CommandSourceStack> buildGuardsCommand(
 			String rootLiteral) {
-		return CommandManager.literal(rootLiteral)
-				.then(CommandManager.literal("shop")
+		return Commands.literal(rootLiteral)
+				.then(Commands.literal("shop")
 						.executes(context -> {
-							ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+							ServerPlayer player = context.getSource().getPlayerOrException();
 							openShop(player);
 							return Command.SINGLE_SUCCESS;
 						}))
-				.then(CommandManager.literal("tactics")
+				.then(Commands.literal("tactics")
 						.executes(context -> {
-							ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+							ServerPlayer player = context.getSource().getPlayerOrException();
 							openTacticsScreen(player);
 							return Command.SINGLE_SUCCESS;
 						}))
-				.then(CommandManager.literal("stay")
+				.then(Commands.literal("stay")
 						.executes(context -> {
-							ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+							ServerPlayer player = context.getSource().getPlayerOrException();
 							int updated = setStance(player, true);
 							context.getSource()
-									.sendFeedback(() -> Text.literal("Ordered " + updated + " guards to stay."), false);
+									.sendSuccess(() -> Component.literal("Ordered " + updated + " guards to stay."), false);
 							return updated;
 						}))
-				.then(CommandManager.literal("follow")
+				.then(Commands.literal("follow")
 						.executes(context -> {
-							ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+							ServerPlayer player = context.getSource().getPlayerOrException();
 							int updated = setFollowUnzoned(player);
-							context.getSource().sendFeedback(
-									() -> Text.literal("Ordered " + updated + " owned guards to follow."), false);
+							context.getSource().sendSuccess(
+									() -> Component.literal("Ordered " + updated + " owned guards to follow."), false);
 							return updated;
 						})
-						.then(CommandManager.argument("group", StringArgumentType.greedyString())
+						.then(Commands.argument("group", StringArgumentType.greedyString())
 								.executes(context -> {
-									ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+									ServerPlayer player = context.getSource().getPlayerOrException();
 									String groupName = StringArgumentType.getString(context, "group");
 									int updated = setFollowByGroup(player, groupName);
-									context.getSource().sendFeedback(() -> Text.literal("Ordered " + updated
+									context.getSource().sendSuccess(() -> Component.literal("Ordered " + updated
 											+ " guards from group \"" + groupName + "\" to follow."), false);
 									return updated;
 								})))
-				.then(CommandManager.literal("zone")
-						.then(CommandManager.argument("radius", IntegerArgumentType.integer(8, 128))
+				.then(Commands.literal("zone")
+						.then(Commands.argument("radius", IntegerArgumentType.integer(8, 128))
 								.executes(context -> {
-									ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+									ServerPlayer player = context.getSource().getPlayerOrException();
 									int radius = IntegerArgumentType.getInteger(context, "radius");
 									int updated = assignZone(player, radius);
-									context.getSource().sendFeedback(
-											() -> Text.literal("Assigned home zone to " + updated + " guards."), false);
+									context.getSource().sendSuccess(
+											() -> Component.literal("Assigned home zone to " + updated + " guards."), false);
 									return updated;
 								})))
-				.then(CommandManager.literal("groups")
+				.then(Commands.literal("groups")
 						.executes(context -> {
-							ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+							ServerPlayer player = context.getSource().getPlayerOrException();
 							openGroupsScreen(player);
 							return Command.SINGLE_SUCCESS;
 						})
-						.then(CommandManager.literal("add")
+						.then(Commands.literal("add")
 								.executes(context -> {
-									ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+									ServerPlayer player = context.getSource().getPlayerOrException();
 									int row = addGroup(player);
 									if (row < 0) {
-										context.getSource().sendError(Text.literal("Group limit reached."));
+										context.getSource().sendFailure(Component.literal("Group limit reached."));
 										return 0;
 									}
 									refreshOpenTacticsScreen(player);
 									context.getSource()
-											.sendFeedback(() -> Text.literal("Added group " + (row + 1) + "."), false);
+											.sendSuccess(() -> Component.literal("Added group " + (row + 1) + "."), false);
 									return row + 1;
 								}))
-						.then(CommandManager.literal("rename")
+						.then(Commands.literal("rename")
 								// Upper bound prevents an ensureGroupCount() balloon-allocation OOM if a
 								// non-operator player invokes this with Integer.MAX_VALUE.
-								.then(CommandManager.argument("row", IntegerArgumentType.integer(1, MAX_GROUP_ROW))
-										.then(CommandManager.argument("name", StringArgumentType.greedyString())
+								.then(Commands.argument("row", IntegerArgumentType.integer(1, MAX_GROUP_ROW))
+										.then(Commands.argument("name", StringArgumentType.greedyString())
 												.executes(context -> {
-													ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+													ServerPlayer player = context.getSource().getPlayerOrException();
 													int row = IntegerArgumentType.getInteger(context, "row") - 1;
 													String name = StringArgumentType.getString(context, "name");
 													boolean renamed = renameGroup(player, row, name);
 													if (renamed) {
 														refreshOpenTacticsScreen(player);
-														context.getSource().sendFeedback(() -> Text.literal(
+														context.getSource().sendSuccess(() -> Component.literal(
 																"Renamed group " + (row + 1) + " to \"" + name + "\"."),
 																false);
 														return Command.SINGLE_SUCCESS;
 													}
 													context.getSource()
-															.sendError(Text.literal("Could not rename that group."));
+															.sendFailure(Component.literal("Could not rename that group."));
 													return 0;
 												}))))
-						.then(CommandManager.literal("assign")
-								.then(CommandManager.argument("guardUuid", StringArgumentType.string())
+						.then(Commands.literal("assign")
+								.then(Commands.argument("guardUuid", StringArgumentType.string())
 										// 0 means "unassign"; positive values are a row index clamped to the same
 										// upper bound as rename to keep group-list allocation bounded.
-										.then(CommandManager.argument("groupRow", IntegerArgumentType.integer(0, MAX_GROUP_ROW))
+										.then(Commands.argument("groupRow", IntegerArgumentType.integer(0, MAX_GROUP_ROW))
 												.executes(context -> {
-													ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
+													ServerPlayer player = context.getSource().getPlayerOrException();
 													String uuidStr = StringArgumentType.getString(context, "guardUuid");
 													int groupRow = IntegerArgumentType.getInteger(context, "groupRow")
 															- 1;
@@ -386,92 +385,92 @@ public class GuardVillagersMod implements ModInitializer {
 													if (result > 0) {
 														if (groupRow < 0) {
 															context.getSource()
-																	.sendFeedback(() -> Text.literal(
+																	.sendSuccess(() -> Component.literal(
 																			"Unassigned guard from all groups."),
 																			false);
 														} else {
-															context.getSource().sendFeedback(() -> Text.literal(
+															context.getSource().sendSuccess(() -> Component.literal(
 																	"Assigned guard to group " + (groupRow + 1) + "."),
 																	false);
 														}
 													} else {
-														context.getSource().sendError(Text.literal(
+														context.getSource().sendFailure(Component.literal(
 																"Could not assign guard (not found or not owned)."));
 													}
 													return result;
 												})))))
-				.then(CommandManager.literal("count")
+				.then(Commands.literal("count")
 						.executes(context -> {
-							ServerPlayerEntity player = context.getSource().getPlayerOrThrow();
-							int count = countOwnedGuards(context.getSource().getServer(), player.getUuid());
-							context.getSource().sendFeedback(() -> Text.literal("You own " + count + " guards."),
+							ServerPlayer player = context.getSource().getPlayerOrException();
+							int count = countOwnedGuards(context.getSource().getServer(), player.getUUID());
+							context.getSource().sendSuccess(() -> Component.literal("You own " + count + " guards."),
 									false);
 							return count;
 						}))
-				.then(CommandManager.literal("reputation")
+				.then(Commands.literal("reputation")
 						.requires(GuardVillagersMod::hasOperatorPermission)
-						.then(CommandManager.argument("player", EntityArgumentType.player())
-								.then(CommandManager.argument("value", StringArgumentType.word())
+						.then(Commands.argument("player", EntityArgument.player())
+								.then(Commands.argument("value", StringArgumentType.word())
 										.executes(context -> {
-											ServerPlayerEntity admin = context.getSource().getPlayerOrThrow();
-											ServerPlayerEntity target = EntityArgumentType.getPlayer(context, "player");
+											ServerPlayer admin = context.getSource().getPlayerOrException();
+											ServerPlayer target = EntityArgument.getPlayer(context, "player");
 											String input = StringArgumentType.getString(context, "value");
 											return setReputationValue(admin, target, input);
 										})))
-						.then(CommandManager.argument("value", StringArgumentType.word())
+						.then(Commands.argument("value", StringArgumentType.word())
 								.executes(context -> {
-									ServerPlayerEntity admin = context.getSource().getPlayerOrThrow();
+									ServerPlayer admin = context.getSource().getPlayerOrException();
 									String input = StringArgumentType.getString(context, "value");
 									return setReputationValue(admin, admin, input);
 								})))
-				.then(CommandManager.literal("debug")
+				.then(Commands.literal("debug")
 						.requires(GuardVillagersMod::hasOperatorPermission)
-						.executes(context -> toggleDebug(context.getSource().getPlayerOrThrow(), -1))
-						.then(CommandManager.argument("range", IntegerArgumentType.integer(1))
+						.executes(context -> toggleDebug(context.getSource().getPlayerOrException(), -1))
+						.then(Commands.argument("range", IntegerArgumentType.integer(1))
 								.executes(context -> toggleDebug(
-										context.getSource().getPlayerOrThrow(),
+										context.getSource().getPlayerOrException(),
 										IntegerArgumentType.getInteger(context, "range")))));
 	}
 
-	private static void openShop(ServerPlayerEntity player) {
+	private static void openShop(ServerPlayer player) {
 		try {
-			player.openHandledScreen(new SimpleNamedScreenHandlerFactory(
+			player.openMenu(new SimpleMenuProvider(
 					(syncId, playerInventory, ignoredPlayer) -> new GuardShopScreenHandler(syncId, playerInventory,
 							player),
-					Text.translatable("screen.guardvillagers.shop")));
+					Component.translatable("screen.guardvillagers.shop")));
 		} catch (RuntimeException exception) {
 			LOGGER.error("Failed to open guard shop for {}", player.getName().getString(), exception);
-			player.sendMessage(Text.literal("Could not open the guard shop. Check server logs."), false);
+			player.displayClientMessage(Component.literal("Could not open the guard shop. Check server logs."), false);
 		}
 	}
 
-	public static void openTacticsScreen(ServerPlayerEntity player) {
+	public static void openTacticsScreen(ServerPlayer player) {
 		try {
 			syncOwnedGuardRoster(player);
-			player.openHandledScreen(new SimpleNamedScreenHandlerFactory(
+			player.openMenu(new SimpleMenuProvider(
 					(syncId, playerInventory, ignoredPlayer) -> new GuardTacticsScreenHandler(syncId, playerInventory,
 							player),
-					Text.translatable("screen.guardvillagers.tactics")));
+					Component.translatable("screen.guardvillagers.tactics")));
 		} catch (RuntimeException exception) {
 			LOGGER.error("Failed to open tactics screen for {}", player.getName().getString(), exception);
-			player.sendMessage(Text.literal("Could not open tactics screen. Check server logs."), false);
+			player.displayClientMessage(Component.literal("Could not open tactics screen. Check server logs."), false);
 		}
 	}
 
-	public static void openGroupsScreen(ServerPlayerEntity player) {
+	public static void openGroupsScreen(ServerPlayer player) {
 		try {
 			syncOwnedGuardRoster(player);
-			player.openHandledScreen(new SimpleNamedScreenHandlerFactory(
+			player.openMenu(new SimpleMenuProvider(
 					(syncId, playerInventory, ignoredPlayer) -> new GuardTacticsScreenHandler(syncId, playerInventory,
 							player),
-					Text.translatable("screen.guardvillagers.groups")));
+					Component.translatable("screen.guardvillagers.groups")));
 		} catch (RuntimeException exception) {
 			LOGGER.error("Failed to open groups screen for {}", player.getName().getString(), exception);
-			player.sendMessage(Text.literal("Could not open groups screen. Check server logs."), false);
+			player.displayClientMessage(Component.literal("Could not open groups screen. Check server logs."), false);
 		}
 	}
 
-	public static int getAdjustedGuardCost(ServerPlayerEntity player) {
+	public static int getAdjustedGuardCost(ServerPlayer player) {
 		GuardPlayerUpgrades upgrades = getUpgradesView(player);
 		int basePrice = upgrades.getGuardCost();
 		double reputation = getReputation(player);
@@ -480,24 +479,24 @@ public class GuardVillagersMod implements ModInitializer {
 		return Math.max(1, (int) Math.round(basePrice * modifier));
 	}
 
-	public static double getReputation(ServerPlayerEntity player) {
+	public static double getReputation(ServerPlayer player) {
 		return GuardReputationManager.getEffectiveReputation(player);
 	}
 
-	public static GuardPurchaseResult purchaseGuard(ServerPlayerEntity player) {
+	public static GuardPurchaseResult purchaseGuard(ServerPlayer player) {
 		return purchaseGuards(player, 1).result();
 	}
 
-	public static PurchaseBatchResult purchaseGuards(ServerPlayerEntity player, int requestedCount) {
-		if (!GuardReputationManager.isTrustedByGuards(player.getEntityWorld(), player.getUuid(),
-				player.getBlockPos())) {
+	public static PurchaseBatchResult purchaseGuards(ServerPlayer player, int requestedCount) {
+		if (!GuardReputationManager.isTrustedByGuards(player.level(), player.getUUID(),
+				player.blockPosition())) {
 			return new PurchaseBatchResult(GuardPurchaseResult.NOT_TRUSTED, 0, List.of());
 		}
 
 		int normalizedCount = Math.max(1, requestedCount);
 		GuardPlayerUpgrades upgrades = getUpgradesView(player);
 		int costPerGuard = getAdjustedGuardCost(player);
-		boolean creativeMode = player.getAbilities().creativeMode;
+		boolean creativeMode = player.getAbilities().instabuild;
 		int toSpawn = normalizedCount;
 		if (!creativeMode) {
 			int affordable = costPerGuard <= 0 ? 0
@@ -508,12 +507,12 @@ public class GuardVillagersMod implements ModInitializer {
 			return new PurchaseBatchResult(GuardPurchaseResult.INSUFFICIENT_FUNDS, 0, List.of());
 		}
 
-		ServerWorld world = player.getEntityWorld();
+		ServerLevel world = player.level();
 		int spawned = 0;
 		int refundableDebit = 0;
 		List<String> spawnedNames = new ArrayList<>();
 		try {
-			int ownedGuardCount = countOwnedGuards(player.getCommandSource().getServer(), player.getUuid());
+			int ownedGuardCount = countOwnedGuards(player.createCommandSourceStack().getServer(), player.getUUID());
 			int remainingSlots = GuardSecurityLimits.remainingPersonalGuardSlots(ownedGuardCount);
 			if (remainingSlots <= 0) {
 				return new PurchaseBatchResult(GuardPurchaseResult.LIMIT_REACHED, 0, List.of());
@@ -547,7 +546,7 @@ public class GuardVillagersMod implements ModInitializer {
 				return new PurchaseBatchResult(GuardPurchaseResult.SUCCESS, spawned, List.copyOf(spawnedNames));
 			}
 			LOGGER.warn("Guard purchase failed to spawn for {} in world {}", player.getName().getString(),
-					world.getRegistryKey().getValue());
+					world.dimension().identifier());
 			return new PurchaseBatchResult(GuardPurchaseResult.SPAWN_FAILED, 0, List.of());
 		} catch (RuntimeException exception) {
 			if (!creativeMode && refundableDebit > 0) {
@@ -558,42 +557,42 @@ public class GuardVillagersMod implements ModInitializer {
 		}
 	}
 
-	public static boolean spendEmeraldBlocks(ServerPlayerEntity player, int amount) {
+	public static boolean spendEmeraldBlocks(ServerPlayer player, int amount) {
 		return GuardEconomy.spendEmeraldBlocks(player, amount);
 	}
 
-	private static GuardEntity trySpawnPurchasedGuard(ServerWorld world, ServerPlayerEntity player,
+	private static GuardEntity trySpawnPurchasedGuard(ServerLevel world, ServerPlayer player,
 			GuardPlayerUpgrades upgrades, GuardRole assignedRole) {
-		GuardEntity guard = GUARD_ENTITY_TYPE.create(world, SpawnReason.EVENT);
+		GuardEntity guard = GUARD_ENTITY_TYPE.create(world, EntitySpawnReason.EVENT);
 		if (guard == null) {
 			return null;
 		}
 
-		BlockPos candidate = new BlockPos(MathHelper.floor(player.getX()), player.getBlockY(),
-				MathHelper.floor(player.getZ()));
+		BlockPos candidate = new BlockPos(Mth.floor(player.getX()), player.getBlockY(),
+				Mth.floor(player.getZ()));
 		BlockPos spawn = findNearbyGuardSpawnPos(world, candidate, 10);
 		if (spawn == null) {
 			return null;
 		}
 
-		guard.refreshPositionAndAngles(spawn.getX() + 0.5D, spawn.getY(), spawn.getZ() + 0.5D, player.getYaw(),
+		guard.snapTo(spawn.getX() + 0.5D, spawn.getY(), spawn.getZ() + 0.5D, player.getYRot(),
 				0.0F);
-		guard.setOwnerUuid(player.getUuid());
+		guard.setOwnerUuid(player.getUUID());
 		guard.setStaying(false);
 		guard.setFollowOverride(true);
 		guard.setRole(assignedRole);
 		guard.applyPurchasedLoadout(world, upgrades);
 		guard.setSquadLeader(false);
-		if (world.spawnEntity(guard)) {
+		if (world.addFreshEntity(guard)) {
 			return guard;
 		}
 		GuardOwnershipIndex.untrack(guard);
 		return null;
 	}
 
-	private static int setStance(ServerPlayerEntity player, boolean staying) {
+	private static int setStance(ServerPlayer player, boolean staying) {
 		int changed = 0;
-		for (GuardEntity guard : getOwnedGuards(player.getCommandSource().getServer(), player.getUuid())) {
+		for (GuardEntity guard : getOwnedGuards(player.createCommandSourceStack().getServer(), player.getUUID())) {
 			guard.setStaying(staying);
 			if (!staying) {
 				guard.clearHome();
@@ -604,9 +603,9 @@ public class GuardVillagersMod implements ModInitializer {
 		return changed;
 	}
 
-	private static int setFollowUnzoned(ServerPlayerEntity player) {
+	private static int setFollowUnzoned(ServerPlayer player) {
 		int changed = 0;
-		for (GuardEntity guard : getOwnedGuards(player.getCommandSource().getServer(), player.getUuid())) {
+		for (GuardEntity guard : getOwnedGuards(player.createCommandSourceStack().getServer(), player.getUUID())) {
 			guard.setStaying(false);
 			guard.setFollowOverride(true);
 			guard.clearCombatTarget();
@@ -615,9 +614,9 @@ public class GuardVillagersMod implements ModInitializer {
 		return changed;
 	}
 
-	private static int setFollowByGroup(ServerPlayerEntity player, String groupName) {
+	private static int setFollowByGroup(ServerPlayer player, String groupName) {
 		int changed = 0;
-		for (GuardEntity guard : getOwnedGuards(player.getCommandSource().getServer(), player.getUuid())) {
+		for (GuardEntity guard : getOwnedGuards(player.createCommandSourceStack().getServer(), player.getUUID())) {
 			if (guard.getGroupName().equalsIgnoreCase(groupName)) {
 				guard.setStaying(false);
 				guard.setFollowOverride(true);
@@ -628,24 +627,24 @@ public class GuardVillagersMod implements ModInitializer {
 		return changed;
 	}
 
-	private static int setBehavior(ServerPlayerEntity player, GuardBehavior behavior) {
+	private static int setBehavior(ServerPlayer player, GuardBehavior behavior) {
 		int changed = 0;
-		for (GuardEntity guard : getOwnedGuards(player.getCommandSource().getServer(), player.getUuid())) {
+		for (GuardEntity guard : getOwnedGuards(player.createCommandSourceStack().getServer(), player.getUUID())) {
 			guard.setBehavior(behavior);
 			guard.clearCombatTarget();
 			changed++;
 		}
-		player.sendMessage(Text.literal("Set " + changed + " guards to " + behavior.name().toLowerCase() + "."), true);
+		player.displayClientMessage(Component.literal("Set " + changed + " guards to " + behavior.name().toLowerCase() + "."), true);
 		return changed;
 	}
 
-	private static int setBehaviorRandom(ServerPlayerEntity player) {
-		List<GuardEntity> ownedGuards = getOwnedGuards(player.getCommandSource().getServer(), player.getUuid());
+	private static int setBehaviorRandom(ServerPlayer player) {
+		List<GuardEntity> ownedGuards = getOwnedGuards(player.createCommandSourceStack().getServer(), player.getUUID());
 		if (ownedGuards.isEmpty()) {
-			player.sendMessage(Text.literal("No owned guards found."), true);
+			player.displayClientMessage(Component.literal("No owned guards found."), true);
 			return 0;
 		}
-		Collections.shuffle(ownedGuards, new java.util.Random(player.getEntityWorld().getRandom().nextLong()));
+		Collections.shuffle(ownedGuards, new java.util.Random(player.level().getRandom().nextLong()));
 		GuardBehavior[] behaviors = GuardBehavior.values();
 		for (int i = 0; i < ownedGuards.size(); i++) {
 			GuardEntity guard = ownedGuards.get(i);
@@ -653,18 +652,18 @@ public class GuardVillagersMod implements ModInitializer {
 			guard.setBehavior(behavior);
 			guard.clearCombatTarget();
 		}
-		player.sendMessage(Text.literal("Distributed " + ownedGuards.size() + " guards evenly across behaviors."),
+		player.displayClientMessage(Component.literal("Distributed " + ownedGuards.size() + " guards evenly across behaviors."),
 				true);
 		return ownedGuards.size();
 	}
 
-	private static int assignZone(ServerPlayerEntity player, int radius) {
+	private static int assignZone(ServerPlayer player, int radius) {
 		int changed = 0;
-		BlockPos home = player.getBlockPos();
-		for (GuardEntity guard : player.getEntityWorld().getEntitiesByClass(
+		BlockPos home = player.blockPosition();
+		for (GuardEntity guard : player.level().getEntitiesOfClass(
 				GuardEntity.class,
-				player.getBoundingBox().expand(96.0D),
-				entity -> entity.isOwnedBy(player.getUuid()))) {
+				player.getBoundingBox().inflate(96.0D),
+				entity -> entity.isOwnedBy(player.getUUID()))) {
 			guard.setHome(home, radius);
 			guard.clearCombatTarget();
 			changed++;
@@ -672,63 +671,63 @@ public class GuardVillagersMod implements ModInitializer {
 		return changed;
 	}
 
-	private static int addGroup(ServerPlayerEntity player) {
-		MinecraftServer server = player.getCommandSource().getServer();
+	private static int addGroup(ServerPlayer player) {
+		MinecraftServer server = player.createCommandSourceStack().getServer();
 		if (server == null) {
 			return -1;
 		}
 		GuardTacticsState state = GuardTacticsManager.getState(server);
-		GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUuid());
+		GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUUID());
 		int row = tactics.addGroup();
 		if (row < 0) {
 			return -1;
 		}
-		state.markDirty();
+		state.setDirty();
 		syncOwnedGuardRoster(player);
 		return row;
 	}
 
-	private static boolean renameGroup(ServerPlayerEntity player, int row, String requestedName) {
+	private static boolean renameGroup(ServerPlayer player, int row, String requestedName) {
 		if (row < 0 || requestedName == null || requestedName.isBlank()) {
 			return false;
 		}
-		MinecraftServer server = player.getCommandSource().getServer();
+		MinecraftServer server = player.createCommandSourceStack().getServer();
 		if (server == null) {
 			return false;
 		}
 		GuardTacticsState state = GuardTacticsManager.getState(server);
-		GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUuid());
+		GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUUID());
 		tactics.setGroupName(row, requestedName);
 		String normalizedName = tactics.getGroupName(row);
-		for (GuardEntity guard : getOwnedGuards(server, player.getUuid())) {
+		for (GuardEntity guard : getOwnedGuards(server, player.getUUID())) {
 			if (guard.getGroupIndex() == row) {
 				guard.setGroupName(normalizedName);
 			}
 		}
-		state.markDirty();
+		state.setDirty();
 		syncOwnedGuardRoster(player);
 		return true;
 	}
 
-	private static int assignGuardToGroup(ServerPlayerEntity player, String uuidStr, int groupRow) {
+	private static int assignGuardToGroup(ServerPlayer player, String uuidStr, int groupRow) {
 		UUID guardUuid;
 		try {
 			guardUuid = UUID.fromString(uuidStr);
 		} catch (IllegalArgumentException e) {
 			return 0;
 		}
-		MinecraftServer server = player.getCommandSource().getServer();
+		MinecraftServer server = player.createCommandSourceStack().getServer();
 		if (server == null) {
 			return 0;
 		}
-		for (GuardEntity guard : getOwnedGuards(server, player.getUuid())) {
-			if (guard.getUuid().equals(guardUuid)) {
+		for (GuardEntity guard : getOwnedGuards(server, player.getUUID())) {
+			if (guard.getUUID().equals(guardUuid)) {
 				guard.setGroupIndex(groupRow);
 				if (groupRow < 0) {
 					guard.setGroupName("Unassigned");
 				} else {
 					GuardTacticsState state = GuardTacticsManager.getState(server);
-					GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUuid());
+					GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUUID());
 					String groupName = tactics.getGroupName(groupRow);
 					if (groupName != null && !groupName.isBlank()) {
 						guard.setGroupName(groupName);
@@ -742,24 +741,24 @@ public class GuardVillagersMod implements ModInitializer {
 		return 0;
 	}
 
-	private static int setReputationValue(ServerPlayerEntity admin, ServerPlayerEntity target, String input) {
+	private static int setReputationValue(ServerPlayer admin, ServerPlayer target, String input) {
 		Double parsedValue = parseReputationInput(input);
 		if (parsedValue == null) {
-			admin.sendMessage(Text.literal(
+			admin.displayClientMessage(Component.literal(
 					"Invalid reputation value \"" + input + "\". Use 0.00 to 1.00 with up to 2 decimal places.")
-					.formatted(Formatting.RED), false);
+					.withStyle(ChatFormatting.RED), false);
 			return 0;
 		}
 
-		GuardReputationManager.setReputation(admin.getEntityWorld(), target.getUuid(), parsedValue);
+		GuardReputationManager.setReputation(admin.level(), target.getUUID(), parsedValue);
 		String valueText = formatReputation(parsedValue);
-		if (admin.getUuid().equals(target.getUuid())) {
-			admin.sendMessage(Text.literal("Set your guard reputation to " + valueText + "."), false);
+		if (admin.getUUID().equals(target.getUUID())) {
+			admin.displayClientMessage(Component.literal("Set your guard reputation to " + valueText + "."), false);
 		} else {
-			admin.sendMessage(
-					Text.literal("Set " + target.getName().getString() + "'s guard reputation to " + valueText + "."),
+			admin.displayClientMessage(
+					Component.literal("Set " + target.getName().getString() + "'s guard reputation to " + valueText + "."),
 					false);
-			target.sendMessage(Text.literal("Your guard reputation was set to " + valueText + " by an operator."),
+			target.displayClientMessage(Component.literal("Your guard reputation was set to " + valueText + " by an operator."),
 					false);
 		}
 		return Command.SINGLE_SUCCESS;
@@ -789,24 +788,24 @@ public class GuardVillagersMod implements ModInitializer {
 		return normalized.toPlainString();
 	}
 
-	private static boolean hasOperatorPermission(ServerCommandSource source) {
+	private static boolean hasOperatorPermission(CommandSourceStack source) {
 		if (source == null) {
 			return false;
 		}
-		if (!(source.getPermissions() instanceof LeveledPermissionPredicate leveled)) {
+		if (!(source.permissions() instanceof LevelBasedPermissionSet leveled)) {
 			return false;
 		}
-		return leveled.getLevel().isAtLeast(PermissionLevel.GAMEMASTERS);
+		return leveled.level().isEqualOrHigherThan(PermissionLevel.GAMEMASTERS);
 	}
 
-	private static void refreshOpenTacticsScreen(ServerPlayerEntity player) {
-		if (player.currentScreenHandler instanceof GuardTacticsScreenHandler tacticsScreenHandler) {
+	private static void refreshOpenTacticsScreen(ServerPlayer player) {
+		if (player.containerMenu instanceof GuardTacticsScreenHandler tacticsScreenHandler) {
 			tacticsScreenHandler.refreshInventory();
 		}
 	}
 
-	public static void syncOwnedGuardRoster(ServerPlayerEntity player) {
-		MinecraftServer server = player.getCommandSource().getServer();
+	public static void syncOwnedGuardRoster(ServerPlayer player) {
+		MinecraftServer server = player.createCommandSourceStack().getServer();
 		if (server == null) {
 			return;
 		}
@@ -815,25 +814,25 @@ public class GuardVillagersMod implements ModInitializer {
 		}
 
 		GuardTacticsState state = GuardTacticsManager.getState(server);
-		GuardTacticsState.PlayerTactics tactics = state.getOrDefault(player.getUuid());
+		GuardTacticsState.PlayerTactics tactics = state.getOrDefault(player.getUUID());
 		int groupCount = Math.min(tactics.groupCount(), GuardRosterSyncPayload.MAX_GROUPS);
 		List<String> groupNames = new ArrayList<>(groupCount);
 		for (int row = 0; row < groupCount; row++) {
 			groupNames.add(tactics.getGroupName(row));
 		}
 
-		List<GuardEntity> ownedGuards = getOwnedGuards(server, player.getUuid());
+		List<GuardEntity> ownedGuards = getOwnedGuards(server, player.getUUID());
 		int guardCount = Math.min(ownedGuards.size(), GuardRosterSyncPayload.MAX_GUARDS);
 		List<GuardRosterSyncPayload.GuardSummary> guards = new ArrayList<>(guardCount);
 		for (int i = 0; i < guardCount; i++) {
 			GuardEntity guard = ownedGuards.get(i);
 			int groupIndex = guard.getGroupIndex();
 			String groupName = resolveRosterGroupName(groupNames, guard, groupIndex);
-			double distance = guard.getEntityWorld() == player.getEntityWorld()
-					? Math.sqrt(guard.squaredDistanceTo(player))
+			double distance = guard.level() == player.level()
+					? Math.sqrt(guard.distanceToSqr(player))
 					: -1.0D;
 			guards.add(new GuardRosterSyncPayload.GuardSummary(
-					guard.getUuid(),
+					guard.getUUID(),
 					guard.getName().getString(),
 					guard.getLevel(),
 					guard.getHealth(),
@@ -842,11 +841,11 @@ public class GuardVillagersMod implements ModInitializer {
 					distance,
 					groupIndex,
 					groupName,
-					guard.getMainHandStack(),
-					guard.getEquippedStack(net.minecraft.entity.EquipmentSlot.HEAD),
-					guard.getEquippedStack(net.minecraft.entity.EquipmentSlot.CHEST),
-					guard.getEquippedStack(net.minecraft.entity.EquipmentSlot.LEGS),
-					guard.getEquippedStack(net.minecraft.entity.EquipmentSlot.FEET)));
+					guard.getMainHandItem(),
+					guard.getItemBySlot(net.minecraft.world.entity.EquipmentSlot.HEAD),
+					guard.getItemBySlot(net.minecraft.world.entity.EquipmentSlot.CHEST),
+					guard.getItemBySlot(net.minecraft.world.entity.EquipmentSlot.LEGS),
+					guard.getItemBySlot(net.minecraft.world.entity.EquipmentSlot.FEET)));
 		}
 
 		ServerPlayNetworking.send(player, new GuardRosterSyncPayload(groupNames, guards));
@@ -873,9 +872,9 @@ public class GuardVillagersMod implements ModInitializer {
 		}
 	}
 
-	public static BlockPos findGuardSpawnPos(ServerWorld world, BlockPos origin, int verticalRange) {
-		int bottomY = world.getBottomY() + 1;
-		int topY = world.getTopYInclusive() - 1;
+	public static BlockPos findGuardSpawnPos(ServerLevel world, BlockPos origin, int verticalRange) {
+		int bottomY = world.getMinY() + 1;
+		int topY = world.getMaxY() - 1;
 		int clampedY = Math.max(bottomY, Math.min(topY, origin.getY()));
 		int range = Math.max(0, verticalRange);
 		int x = origin.getX();
@@ -905,7 +904,7 @@ public class GuardVillagersMod implements ModInitializer {
 		return null;
 	}
 
-	public static BlockPos findNearbyGuardSpawnPos(ServerWorld world, BlockPos origin, int verticalRange) {
+	public static BlockPos findNearbyGuardSpawnPos(ServerLevel world, BlockPos origin, int verticalRange) {
 		int range = Math.max(0, verticalRange);
 		BlockPos inPlace = findGuardSpawnPos(world, origin, range);
 		if (inPlace != null) {
@@ -920,7 +919,7 @@ public class GuardVillagersMod implements ModInitializer {
 						continue;
 					}
 
-					BlockPos candidate = findGuardSpawnPos(world, origin.add(dx, 0, dz), range);
+					BlockPos candidate = findGuardSpawnPos(world, origin.offset(dx, 0, dz), range);
 					if (candidate != null) {
 						return candidate;
 					}
@@ -930,15 +929,15 @@ public class GuardVillagersMod implements ModInitializer {
 		return null;
 	}
 
-	public static boolean canGuardSpawnAt(ServerWorld world, BlockPos feetPos) {
+	public static boolean canGuardSpawnAt(ServerLevel world, BlockPos feetPos) {
 		int y = feetPos.getY();
-		if (y <= world.getBottomY() || y >= world.getTopYInclusive()) {
+		if (y <= world.getMinY() || y >= world.getMaxY()) {
 			return false;
 		}
 
-		BlockPos below = feetPos.down();
-		BlockPos head = feetPos.up();
-		if (!world.getBlockState(below).isSideSolidFullSquare(world, below, Direction.UP)) {
+		BlockPos below = feetPos.below();
+		BlockPos head = feetPos.above();
+		if (!world.getBlockState(below).isFaceSturdy(world, below, Direction.UP)) {
 			return false;
 		}
 		if (!world.getBlockState(feetPos).getCollisionShape(world, feetPos).isEmpty()) {
@@ -951,27 +950,27 @@ public class GuardVillagersMod implements ModInitializer {
 			return false;
 		}
 
-		Box spawnBox = GUARD_ENTITY_TYPE.getDimensions().getBoxAt(
+		AABB spawnBox = GUARD_ENTITY_TYPE.getDimensions().makeBoundingBox(
 				feetPos.getX() + 0.5D,
 				feetPos.getY(),
 				feetPos.getZ() + 0.5D);
-		return world.isSpaceEmpty(null, spawnBox);
+		return world.noCollision(null, spawnBox);
 	}
 
-	private static int toggleDebug(ServerPlayerEntity player, int requestedRange) {
-		MinecraftServer server = player.getCommandSource().getServer();
+	private static int toggleDebug(ServerPlayer player, int requestedRange) {
+		MinecraftServer server = player.createCommandSourceStack().getServer();
 		if (server == null) {
 			return 0;
 		}
 
-		UUID playerId = player.getUuid();
+		UUID playerId = player.getUUID();
 		boolean currentlyEnabled = GuardDebugManager.isEnabled(server, playerId);
 		if (currentlyEnabled) {
 			GuardDebugManager.setEnabled(server, playerId, false);
 			DEBUG_PATH_HASH_CACHE.remove(playerId);
 			sendDebugSync(player, false, 0.0D);
 			clearDebugData(player);
-			player.sendMessage(Text.literal("Debug disabled."), false);
+			player.displayClientMessage(Component.literal("Debug disabled."), false);
 			return Command.SINGLE_SUCCESS;
 		}
 
@@ -980,12 +979,12 @@ public class GuardVillagersMod implements ModInitializer {
 		GuardDebugManager.setEnabled(server, playerId, true);
 		double effectiveRange = GuardDebugManager.getEffectiveRange(player);
 		sendDebugSync(player, true, effectiveRange);
-		player.sendMessage(Text.literal("Debug enabled. Range: " + formatDebugRange(effectiveRange) + " blocks."),
+		player.displayClientMessage(Component.literal("Debug enabled. Range: " + formatDebugRange(effectiveRange) + " blocks."),
 				false);
 		return Command.SINGLE_SUCCESS;
 	}
 
-	private static double clampRequestedDebugRange(ServerPlayerEntity player, int requestedRange) {
+	private static double clampRequestedDebugRange(ServerPlayer player, int requestedRange) {
 		int maxRange = GuardDebugManager.getRangeCapBlocks(player);
 		return Math.max(1.0D, Math.min(requestedRange, maxRange));
 	}
@@ -994,44 +993,44 @@ public class GuardVillagersMod implements ModInitializer {
 		return Integer.toString((int) Math.round(range));
 	}
 
-	private static void sendDebugSync(ServerPlayerEntity player, boolean enabled, double range) {
+	private static void sendDebugSync(ServerPlayer player, boolean enabled, double range) {
 		ServerPlayNetworking.send(player, new GuardDebugSyncPayload(enabled, range));
 	}
 
-	private static void clearDebugData(ServerPlayerEntity player) {
+	private static void clearDebugData(ServerPlayer player) {
 		ServerPlayNetworking.send(player, new GuardDebugDataPayload(List.of()));
 	}
 
 	private void registerEvents() {
 		AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
-			if (world.isClient() || !(player instanceof ServerPlayerEntity serverPlayer)
+			if (world.isClientSide() || !(player instanceof ServerPlayer serverPlayer)
 					|| !(entity instanceof LivingEntity livingTarget)) {
-				return ActionResult.PASS;
+				return InteractionResult.PASS;
 			}
 
-			ServerWorld serverWorld = serverPlayer.getEntityWorld();
-			if (livingTarget instanceof VillagerEntity || livingTarget instanceof IronGolemEntity) {
-				GuardReputationManager.recordVillagerHarm(serverWorld, serverPlayer.getUuid());
+			ServerLevel serverWorld = serverPlayer.level();
+			if (livingTarget instanceof Villager || livingTarget instanceof IronGolem) {
+				GuardReputationManager.recordVillagerHarm(serverWorld, serverPlayer.getUUID());
 			}
 
-			if (livingTarget instanceof GuardEntity targetGuard && targetGuard.isOwnedBy(serverPlayer.getUuid())) {
-				return ActionResult.PASS;
+			if (livingTarget instanceof GuardEntity targetGuard && targetGuard.isOwnedBy(serverPlayer.getUUID())) {
+				return InteractionResult.PASS;
 			}
 			if (!canOwnerDirectGuardAt(serverPlayer, livingTarget)) {
-				return ActionResult.PASS;
+				return InteractionResult.PASS;
 			}
 
 			try {
 				List<GuardEntity> ownedGuards = GuardOwnershipIndex
-						.getOwnedGuards(serverPlayer.getCommandSource().getServer(), serverPlayer.getUuid());
-				long alertTick = serverWorld.getTime();
+						.getOwnedGuards(serverPlayer.createCommandSourceStack().getServer(), serverPlayer.getUUID());
+				long alertTick = serverWorld.getGameTime();
 				for (GuardEntity guard : ownedGuards) {
 					if (!guard.isAlive()) {
 						continue;
 					}
 					double alertRange = Math.max(8.0D,
-							guard.getAttributeValue(net.minecraft.entity.attribute.EntityAttributes.FOLLOW_RANGE));
-					if (guard.squaredDistanceTo(livingTarget) > alertRange * alertRange) {
+							guard.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.FOLLOW_RANGE));
+					if (guard.distanceToSqr(livingTarget) > alertRange * alertRange) {
 						continue;
 					}
 					guard.receiveOwnerAttackAlert(livingTarget, alertTick);
@@ -1040,55 +1039,55 @@ public class GuardVillagersMod implements ModInitializer {
 				LOGGER.error("Failed to dispatch manual target from {}", serverPlayer.getName().getString(), exception);
 			}
 
-			return ActionResult.PASS;
+			return InteractionResult.PASS;
 		});
 
 		ServerTickEvents.END_WORLD_TICK.register(world -> {
 			try {
 				syncGuardDebug(world);
 				VillageManagerHandler.maintainVillageGuards(world);
-				if (world.getRegistryKey() == World.OVERWORLD) {
+				if (world.dimension() == Level.OVERWORLD) {
 					GuardReputationManager.tickDecay(world);
 				}
-				if (world.getTime() % 200 == 0) {
-					for (ServerPlayerEntity player : world.getPlayers()) {
-						boolean golemAggro = !world.getEntitiesByClass(
-								IronGolemEntity.class,
-								player.getBoundingBox().expand(24.0D),
+				if (world.getGameTime() % 200 == 0) {
+					for (ServerPlayer player : world.players()) {
+						boolean golemAggro = !world.getEntitiesOfClass(
+								IronGolem.class,
+								player.getBoundingBox().inflate(24.0D),
 								golem -> golem.getTarget() == player).isEmpty();
 						if (golemAggro) {
-							GuardReputationManager.applyReputationDelta(world, player.getUuid(), -2);
+							GuardReputationManager.applyReputationDelta(world, player.getUUID(), -2);
 						}
 					}
 				}
 			} catch (RuntimeException exception) {
-				LOGGER.error("Village manager tick failed in world {}", world.getRegistryKey().getValue(), exception);
+				LOGGER.error("Village manager tick failed in world {}", world.dimension().identifier(), exception);
 			}
 		});
 
 		// Owner defense: covers BOTH owner-as-victim and owner-as-attacker
 		ServerLivingEntityEvents.AFTER_DAMAGE.register((entity, source, baseDamage, damageTaken, blocked) -> {
-			if (!(entity.getEntityWorld() instanceof ServerWorld serverWorld)) {
+			if (!(entity.level() instanceof ServerLevel serverWorld)) {
 				return;
 			}
-			LivingEntity attacker = source.getAttacker() instanceof LivingEntity la ? la : null;
+			LivingEntity attacker = source.getEntity() instanceof LivingEntity la ? la : null;
 			if (attacker == null) {
 				return;
 			}
 
 			// Case A: owner is the victim — alert guards to target the attacker
-			if (entity instanceof ServerPlayerEntity ownerVictim) {
+			if (entity instanceof ServerPlayer ownerVictim) {
 				try {
 					List<GuardEntity> guards = GuardOwnershipIndex
-							.getOwnedGuards(ownerVictim.getCommandSource().getServer(), ownerVictim.getUuid());
-					long tick = serverWorld.getTime();
+							.getOwnedGuards(ownerVictim.createCommandSourceStack().getServer(), ownerVictim.getUUID());
+					long tick = serverWorld.getGameTime();
 					for (GuardEntity guard : guards) {
 						if (!guard.isAlive() || guard.isAlly(attacker)) {
 							continue;
 						}
 						double range = Math.max(8.0D,
-								guard.getAttributeValue(net.minecraft.entity.attribute.EntityAttributes.FOLLOW_RANGE));
-						if (guard.squaredDistanceTo(attacker) > range * range) {
+								guard.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.FOLLOW_RANGE));
+						if (guard.distanceToSqr(attacker) > range * range) {
 							continue;
 						}
 						guard.receiveOwnerDamagedAlert(attacker, tick);
@@ -1099,8 +1098,8 @@ public class GuardVillagersMod implements ModInitializer {
 			}
 
 			// Case B: owner is the attacker — alert guards to target the victim
-			if (attacker instanceof ServerPlayerEntity ownerAttacker && entity instanceof LivingEntity target) {
-				if (target instanceof GuardEntity guardTarget && guardTarget.isOwnedBy(ownerAttacker.getUuid())) {
+			if (attacker instanceof ServerPlayer ownerAttacker && entity instanceof LivingEntity target) {
+				if (target instanceof GuardEntity guardTarget && guardTarget.isOwnedBy(ownerAttacker.getUUID())) {
 					return; // Don't target own guards
 				}
 				if (!canOwnerDirectGuardAt(ownerAttacker, target)) {
@@ -1108,15 +1107,15 @@ public class GuardVillagersMod implements ModInitializer {
 				}
 				try {
 					List<GuardEntity> guards = GuardOwnershipIndex
-							.getOwnedGuards(ownerAttacker.getCommandSource().getServer(), ownerAttacker.getUuid());
-					long tick = serverWorld.getTime();
+							.getOwnedGuards(ownerAttacker.createCommandSourceStack().getServer(), ownerAttacker.getUUID());
+					long tick = serverWorld.getGameTime();
 					for (GuardEntity guard : guards) {
 						if (!guard.isAlive() || guard.isAlly(target)) {
 							continue;
 						}
 						double range = Math.max(8.0D,
-								guard.getAttributeValue(net.minecraft.entity.attribute.EntityAttributes.FOLLOW_RANGE));
-						if (guard.squaredDistanceTo(target) > range * range) {
+								guard.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.FOLLOW_RANGE));
+						if (guard.distanceToSqr(target) > range * range) {
 							continue;
 						}
 						guard.receiveOwnerAttackAlert(target, tick);
@@ -1129,33 +1128,33 @@ public class GuardVillagersMod implements ModInitializer {
 		});
 	}
 
-	private static boolean canOwnerDirectGuardAt(ServerPlayerEntity owner, LivingEntity target) {
+	private static boolean canOwnerDirectGuardAt(ServerPlayer owner, LivingEntity target) {
 		if (owner == null || target == null || target == owner) {
 			return false;
 		}
-		if (target instanceof PlayerEntity targetPlayer) {
-			if (!owner.getEntityWorld().isPvpEnabled()) {
+		if (target instanceof Player targetPlayer) {
+			if (!owner.level().isPvpAllowed()) {
 				return false;
 			}
-			if (!owner.shouldDamagePlayer(targetPlayer)) {
+			if (!owner.canHarmPlayer(targetPlayer)) {
 				return false;
 			}
 		}
 		return true;
 	}
 
-	private static void syncGuardDebug(ServerWorld world) {
-		if (world.getTime() % DEBUG_SYNC_INTERVAL_TICKS != 0) {
+	private static void syncGuardDebug(ServerLevel world) {
+		if (world.getGameTime() % DEBUG_SYNC_INTERVAL_TICKS != 0) {
 			return;
 		}
 
 		MinecraftServer server = world.getServer();
-		for (ServerPlayerEntity player : world.getPlayers()) {
-			UUID playerId = player.getUuid();
+		for (ServerPlayer player : world.players()) {
+			UUID playerId = player.getUUID();
 			if (!GuardDebugManager.isEnabled(server, playerId)) {
 				continue;
 			}
-			if (!hasOperatorPermission(player.getCommandSource())) {
+			if (!hasOperatorPermission(player.createCommandSourceStack())) {
 				GuardDebugManager.setEnabled(server, playerId, false);
 				DEBUG_PATH_HASH_CACHE.remove(playerId);
 				sendDebugSync(player, false, 0.0D);
@@ -1171,10 +1170,10 @@ public class GuardVillagersMod implements ModInitializer {
 			Map<Integer, GuardDebugDataPayload.GuardDebugEntry> updatedEntries = new HashMap<>();
 			List<GuardDebugDataPayload.GuardDebugEntry> removedEntries = new ArrayList<>();
 
-			for (GuardEntity guard : world.getEntitiesByClass(
+			for (GuardEntity guard : world.getEntitiesOfClass(
 					GuardEntity.class,
-					player.getBoundingBox().expand(effectiveRange),
-					entity -> entity.squaredDistanceTo(player) <= maxDistanceSq)) {
+					player.getBoundingBox().inflate(effectiveRange),
+					entity -> entity.distanceToSqr(player) <= maxDistanceSq)) {
 				int guardId = guard.getId();
 				GuardEntity.GuardDebugSnapshot snapshot = guard.getDebugSnapshot(DEBUG_MAX_PATH_NODES);
 				int hash = hashDebugSnapshot(snapshot);
@@ -1221,8 +1220,8 @@ public class GuardVillagersMod implements ModInitializer {
 			}
 		}
 
-		if (world.getRegistryKey() == World.OVERWORLD) {
-			DEBUG_PATH_HASH_CACHE.keySet().removeIf(playerId -> server.getPlayerManager().getPlayer(playerId) == null
+		if (world.dimension() == Level.OVERWORLD) {
+			DEBUG_PATH_HASH_CACHE.keySet().removeIf(playerId -> server.getPlayerList().getPlayer(playerId) == null
 					|| !GuardDebugManager.isEnabled(server, playerId));
 		}
 	}

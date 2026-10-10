@@ -3,22 +3,6 @@ package com.guardvillagers.entity.ai;
 import com.guardvillagers.GuardReputationManager;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.ai.RangedAttackMob;
-import net.minecraft.entity.attribute.EntityAttributes;
-import net.minecraft.entity.mob.HostileEntity;
-import net.minecraft.entity.passive.IronGolemEntity;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.entity.raid.RaiderEntity;
-import net.minecraft.item.Items;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.village.raid.Raid;
-
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -27,6 +11,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.animal.golem.IronGolem;
+import net.minecraft.world.entity.monster.Monster;
+import net.minecraft.world.entity.monster.RangedAttackMob;
+import net.minecraft.world.entity.raid.Raid;
+import net.minecraft.world.entity.raid.Raider;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 public final class GuardAiController {
 	private static final float RETREAT_ENTER_HEALTH_RATIO = 0.25F;
@@ -55,7 +53,7 @@ public final class GuardAiController {
 			.thenComparingLong(TargetCandidate::latestTick)
 			.reversed()
 			.thenComparingDouble(TargetCandidate::distanceSq)
-			.thenComparing(candidate -> candidate.entity().getUuid());
+			.thenComparing(candidate -> candidate.entity().getUUID());
 
 	private final GuardEntity guard;
 	private final List<GuardAlert> alerts = new ArrayList<>();
@@ -68,7 +66,7 @@ public final class GuardAiController {
 	private int combatCooldown;
 	private int noSightTicks;
 	private int stuckTargetTicks;
-	private Vec3d lastProgressPos = Vec3d.ZERO;
+	private Vec3 lastProgressPos = Vec3.ZERO;
 	private long lastAcceptedOwnerAlertTick = Long.MIN_VALUE;
 	private boolean combatSuspended;
 	private boolean retreating;
@@ -79,7 +77,7 @@ public final class GuardAiController {
 		this.guard = guard;
 	}
 
-	public void tick(ServerWorld world) {
+	public void tick(ServerLevel world) {
 		this.tickTimers(world);
 		this.tickCombatTracking(world);
 
@@ -93,8 +91,8 @@ public final class GuardAiController {
 
 		if (decision.intent() == GuardAiIntent.ENGAGE_TARGET && decision.combatTarget() != null) {
 			this.combatCooldown = Math.max(this.combatCooldown, 80);
-			if (this.guard.age % 20 == 0) {
-				this.broadcastToAlliedGuards(world, decision.combatTarget(), AlertReason.ALLY_BROADCAST, world.getTime());
+			if (this.guard.tickCount % 20 == 0) {
+				this.broadcastToAlliedGuards(world, decision.combatTarget(), AlertReason.ALLY_BROADCAST, world.getGameTime());
 			}
 		}
 	}
@@ -144,7 +142,7 @@ public final class GuardAiController {
 		return target != null && target.isAlive();
 	}
 
-	public LivingEntity getTrackedCombatTarget(ServerWorld world) {
+	public LivingEntity getTrackedCombatTarget(ServerLevel world) {
 		LivingEntity urgent = this.resolveEntity(world, this.urgentTargetUuid);
 		if (this.isTargetStillTrackable(urgent)) {
 			return urgent;
@@ -165,7 +163,7 @@ public final class GuardAiController {
 		if (rallyPoint == null) {
 			return;
 		}
-		this.rallyPoint = rallyPoint.toImmutable();
+		this.rallyPoint = rallyPoint.immutable();
 		this.rallyTicks = Math.max(0, ticks);
 	}
 
@@ -197,7 +195,7 @@ public final class GuardAiController {
 		this.combatCooldown = 0;
 		this.noSightTicks = 0;
 		this.stuckTargetTicks = 0;
-		this.lastProgressPos = this.guard.getEntityPos();
+		this.lastProgressPos = this.guard.position();
 		this.guard.setTarget(null);
 		this.guard.getNavigation().stop();
 	}
@@ -229,27 +227,27 @@ public final class GuardAiController {
 		this.ingestAlert(target, AlertReason.ALLY_BROADCAST, alertTick, false);
 	}
 
-	public void receiveUrgentPeel(LivingEntity urgentThreat, ServerWorld world) {
+	public void receiveUrgentPeel(LivingEntity urgentThreat, ServerLevel world) {
 		if (!this.isValidCombatTarget(urgentThreat, false) || this.hasReachedPeelCap(world)) {
 			return;
 		}
-		this.ingestAlert(urgentThreat, AlertReason.URGENT_PEEL, world.getTime(), false);
+		this.ingestAlert(urgentThreat, AlertReason.URGENT_PEEL, world.getGameTime(), false);
 	}
 
 	public void receiveDamageAlert(LivingEntity attacker, long alertTick) {
 		if (!this.isValidCombatTarget(attacker, false)) {
 			return;
 		}
-		AlertReason reason = this.mainTargetUuid != null && !attacker.getUuid().equals(this.mainTargetUuid)
+		AlertReason reason = this.mainTargetUuid != null && !attacker.getUUID().equals(this.mainTargetUuid)
 				? AlertReason.URGENT_PEEL
 				: AlertReason.DIRECT_DAMAGE;
 		this.ingestAlert(attacker, reason, alertTick, true);
 	}
 
-	private Decision computeDecision(ServerWorld world) {
+	private Decision computeDecision(ServerLevel world) {
 		Map<UUID, TargetAccumulator> candidates = new HashMap<>();
 		LivingEntity currentTarget = this.guard.getTarget();
-		this.addCandidate(candidates, currentTarget, AlertReason.CURRENT_TARGET, world.getTime(), true);
+		this.addCandidate(candidates, currentTarget, AlertReason.CURRENT_TARGET, world.getGameTime(), true);
 
 		for (GuardAlert alert : this.alerts) {
 			LivingEntity entity = this.resolveEntity(world, alert.targetUuid());
@@ -257,9 +255,9 @@ public final class GuardAiController {
 		}
 
 		Raid raid = this.getActiveRaid(world);
-		this.addCandidate(candidates, this.findNearestRaidTarget(world), AlertReason.RAID_TARGET, world.getTime(), false);
-		this.addCandidate(candidates, this.findNearbyHostile(world), AlertReason.HOSTILE_SCAN, world.getTime(), false);
-		this.addCandidate(candidates, this.resolveOwnerHostilityTarget(world), AlertReason.OWNER_HOSTILE, world.getTime(), false);
+		this.addCandidate(candidates, this.findNearestRaidTarget(world), AlertReason.RAID_TARGET, world.getGameTime(), false);
+		this.addCandidate(candidates, this.findNearbyHostile(world), AlertReason.HOSTILE_SCAN, world.getGameTime(), false);
+		this.addCandidate(candidates, this.resolveOwnerHostilityTarget(world), AlertReason.OWNER_HOSTILE, world.getGameTime(), false);
 
 		List<TargetCandidate> sorted = new ArrayList<>(candidates.size());
 		for (TargetAccumulator accumulator : candidates.values()) {
@@ -295,11 +293,11 @@ public final class GuardAiController {
 				intent,
 				executor,
 				combatTarget,
-				primary == null ? null : primary.entity().getUuid(),
-				urgent == null ? null : urgent.entity().getUuid());
+				primary == null ? null : primary.entity().getUUID(),
+				urgent == null ? null : urgent.entity().getUUID());
 	}
 
-	private GuardAiIntent selectIntent(ServerWorld world, LivingEntity combatTarget, Raid raid) {
+	private GuardAiIntent selectIntent(ServerLevel world, LivingEntity combatTarget, Raid raid) {
 		if (this.shouldSeekAir()) {
 			return GuardAiIntent.SEEK_AIR;
 		}
@@ -324,7 +322,7 @@ public final class GuardAiController {
 		return GuardAiIntent.IDLE;
 	}
 
-	private GuardBehaviorExecutor selectBehaviorExecutor(ServerWorld world, Raid raid) {
+	private GuardBehaviorExecutor selectBehaviorExecutor(ServerLevel world, Raid raid) {
 		if (this.guard.isStaying()) {
 			return GuardBehaviorExecutor.NONE;
 		}
@@ -332,7 +330,7 @@ public final class GuardAiController {
 		Optional<BlockPos> home = this.guard.getHome();
 		if (home.isPresent() && this.guard.getPatrolRadius() > 0 && !this.guard.hasFollowOverride()) {
 			int tetherRange = this.guard.getPatrolRadius() + FOLLOW_HOME_EXIT_BUFFER;
-			if (home.get().getSquaredDistance(this.guard.getBlockPos()) > (double) tetherRange * tetherRange) {
+			if (home.get().distSqr(this.guard.blockPosition()) > (double) tetherRange * tetherRange) {
 				return GuardBehaviorExecutor.HOME_ANCHOR;
 			}
 		}
@@ -357,13 +355,13 @@ public final class GuardAiController {
 	}
 
 	private boolean shouldSeekAir() {
-		return this.guard.isSubmergedInWater() && this.guard.getAir() < 60;
+		return this.guard.isUnderWater() && this.guard.getAirSupply() < 60;
 	}
 
 	private boolean shouldReturnToLand() {
 		return this.guard.getLastLandPos() != null
-				&& this.guard.isTouchingWater()
-				&& (this.guard.isSubmergedInWater() || !this.guard.isOnGround());
+				&& this.guard.isInWater()
+				&& (this.guard.isUnderWater() || !this.guard.onGround());
 	}
 
 	private boolean shouldRetreat(LivingEntity combatTarget) {
@@ -375,15 +373,15 @@ public final class GuardAiController {
 		return currentHealth <= maxHealth * RETREAT_ENTER_HEALTH_RATIO && (combatTarget != null || this.combatCooldown > 0);
 	}
 
-	private boolean shouldFollowOwner(ServerWorld world) {
+	private boolean shouldFollowOwner(ServerLevel world) {
 		if (!this.guard.hasOwner() || this.guard.isStaying()) {
 			return false;
 		}
-		ServerPlayerEntity owner = this.guard.resolveOnlineOwner(world);
+		ServerPlayer owner = this.guard.resolveOnlineOwner(world);
 		if (owner == null || owner.isSpectator()) {
 			return false;
 		}
-		if (!GuardReputationManager.isTrustedByGuards(world, this.guard.getOwnerUuid(), this.guard.getBlockPos())) {
+		if (!GuardReputationManager.isTrustedByGuards(world, this.guard.getOwnerUuid(), this.guard.blockPosition())) {
 			return false;
 		}
 		return this.guard.hasFollowOverride() || this.guard.getHome().isEmpty();
@@ -399,12 +397,12 @@ public final class GuardAiController {
 		} else {
 			this.guard.setTarget(target);
 		}
-		if (this.lastProgressPos == Vec3d.ZERO) {
-			this.lastProgressPos = this.guard.getEntityPos();
+		if (this.lastProgressPos == Vec3.ZERO) {
+			this.lastProgressPos = this.guard.position();
 		}
 	}
 
-	private void tickTimers(ServerWorld world) {
+	private void tickTimers(ServerLevel world) {
 		if (this.combatCooldown > 0) {
 			this.combatCooldown--;
 		}
@@ -416,7 +414,7 @@ public final class GuardAiController {
 			this.rallyPoint = null;
 		}
 
-		long now = world.getTime();
+		long now = world.getGameTime();
 		this.alerts.removeIf(alert -> alert.expiresAt() <= now || !this.isTargetStillTrackable(this.resolveEntity(world, alert.targetUuid())));
 
 		Iterator<Map.Entry<UUID, Long>> iterator = this.suppressedTargets.entrySet().iterator();
@@ -427,50 +425,50 @@ public final class GuardAiController {
 		}
 	}
 
-	private void tickCombatTracking(ServerWorld world) {
+	private void tickCombatTracking(ServerLevel world) {
 		LivingEntity target = this.guard.getTarget();
 		if (!this.isTargetStillTrackable(target)) {
 			this.noSightTicks = 0;
 			this.stuckTargetTicks = 0;
-			this.lastProgressPos = this.guard.getEntityPos();
+			this.lastProgressPos = this.guard.position();
 			return;
 		}
 
-		if (this.guard.canSee(target) || this.guard.getGuardNavigation().isCrowdBlocked()) {
+		if (this.guard.hasLineOfSight(target) || this.guard.getGuardNavigation().isCrowdBlocked()) {
 			this.noSightTicks = 0;
 		} else if (++this.noSightTicks > TARGET_LOS_GRACE_TICKS) {
-			this.suppressTarget(target.getUuid(), world.getTime());
+			this.suppressTarget(target.getUUID(), world.getGameTime());
 			this.guard.setTarget(null);
 			this.noSightTicks = 0;
 			this.stuckTargetTicks = 0;
-			this.lastProgressPos = this.guard.getEntityPos();
+			this.lastProgressPos = this.guard.position();
 			return;
 		}
 
-		if (this.guard.squaredDistanceTo(target) < TARGET_PROGRESS_RESET_DISTANCE_SQUARED) {
-			this.lastProgressPos = this.guard.getEntityPos();
+		if (this.guard.distanceToSqr(target) < TARGET_PROGRESS_RESET_DISTANCE_SQUARED) {
+			this.lastProgressPos = this.guard.position();
 			this.stuckTargetTicks = 0;
 			return;
 		}
 
 		if (this.guard.getGuardNavigation().isCrowdBlocked()) {
-			this.lastProgressPos = this.guard.getEntityPos();
+			this.lastProgressPos = this.guard.position();
 			this.stuckTargetTicks = 0;
 			return;
 		}
 
-		if (this.guard.squaredDistanceTo(this.lastProgressPos) < TARGET_PROGRESS_MIN_SQUARED) {
+		if (this.guard.distanceToSqr(this.lastProgressPos) < TARGET_PROGRESS_MIN_SQUARED) {
 			if (++this.stuckTargetTicks > TARGET_STUCK_GRACE_TICKS) {
-				this.suppressTarget(target.getUuid(), world.getTime());
+				this.suppressTarget(target.getUUID(), world.getGameTime());
 				this.guard.setTarget(null);
 				this.noSightTicks = 0;
 				this.stuckTargetTicks = 0;
-				this.lastProgressPos = this.guard.getEntityPos();
+				this.lastProgressPos = this.guard.position();
 			}
 			return;
 		}
 
-		this.lastProgressPos = this.guard.getEntityPos();
+		this.lastProgressPos = this.guard.position();
 		this.stuckTargetTicks = 0;
 	}
 
@@ -497,14 +495,14 @@ public final class GuardAiController {
 		}
 
 		if (clearSuppression) {
-			this.suppressedTargets.remove(target.getUuid());
+			this.suppressedTargets.remove(target.getUUID());
 		}
 
 		long expiresAt = alertTick + reason.ttlTicks();
 		for (int i = 0; i < this.alerts.size(); i++) {
 			GuardAlert existing = this.alerts.get(i);
-			if (existing.targetUuid().equals(target.getUuid()) && existing.reason() == reason) {
-				this.alerts.set(i, new GuardAlert(target.getUuid(), reason, alertTick, Math.max(existing.expiresAt(), expiresAt)));
+			if (existing.targetUuid().equals(target.getUUID()) && existing.reason() == reason) {
+				this.alerts.set(i, new GuardAlert(target.getUUID(), reason, alertTick, Math.max(existing.expiresAt(), expiresAt)));
 				this.combatCooldown = Math.max(this.combatCooldown, reason.cooldownTicks());
 				if (reason.ownerDirected()) {
 					this.lastAcceptedOwnerAlertTick = Math.max(this.lastAcceptedOwnerAlertTick, alertTick);
@@ -513,7 +511,7 @@ public final class GuardAiController {
 			}
 		}
 
-		this.alerts.add(new GuardAlert(target.getUuid(), reason, alertTick, expiresAt));
+		this.alerts.add(new GuardAlert(target.getUUID(), reason, alertTick, expiresAt));
 		this.combatCooldown = Math.max(this.combatCooldown, reason.cooldownTicks());
 		if (reason.ownerDirected()) {
 			this.lastAcceptedOwnerAlertTick = Math.max(this.lastAcceptedOwnerAlertTick, alertTick);
@@ -524,64 +522,64 @@ public final class GuardAiController {
 		if (!this.isValidCombatTarget(entity, reason)) {
 			return;
 		}
-		TargetAccumulator accumulator = candidates.computeIfAbsent(entity.getUuid(), uuid -> new TargetAccumulator(entity));
-		accumulator.include(reason, this.guard.squaredDistanceTo(entity), tick, sticky, this.scoreThreat(entity));
+		TargetAccumulator accumulator = candidates.computeIfAbsent(entity.getUUID(), uuid -> new TargetAccumulator(entity));
+		accumulator.include(reason, this.guard.distanceToSqr(entity), tick, sticky, this.scoreThreat(entity));
 	}
 
-	private LivingEntity findNearbyHostile(ServerWorld world) {
-		Box searchBox = this.guard.getBoundingBox().expand(HOSTILE_SCAN_RANGE);
-		List<HostileEntity> hostiles = world.getEntitiesByClass(
-				HostileEntity.class,
+	private LivingEntity findNearbyHostile(ServerLevel world) {
+		AABB searchBox = this.guard.getBoundingBox().inflate(HOSTILE_SCAN_RANGE);
+		List<Monster> hostiles = world.getEntitiesOfClass(
+				Monster.class,
 				searchBox,
 				entity -> this.isValidCombatTarget(entity, true));
 		if (hostiles.isEmpty()) {
 			return null;
 		}
 		hostiles.sort(Comparator
-				.comparingInt((HostileEntity entity) -> this.scoreThreat(entity))
+				.comparingInt((Monster entity) -> this.scoreThreat(entity))
 				.reversed()
-				.thenComparingDouble((HostileEntity entity) -> this.guard.squaredDistanceTo(entity))
-				.thenComparing(entity -> entity.getUuid()));
+				.thenComparingDouble((Monster entity) -> this.guard.distanceToSqr(entity))
+				.thenComparing(entity -> entity.getUUID()));
 		return hostiles.getFirst();
 	}
 
-	private LivingEntity findNearestRaidTarget(ServerWorld world) {
+	private LivingEntity findNearestRaidTarget(ServerLevel world) {
 		if (this.getActiveRaid(world) == null) {
 			return null;
 		}
-		List<RaiderEntity> raiders = world.getEntitiesByClass(
-				RaiderEntity.class,
-				this.guard.getBoundingBox().expand(RAID_SCAN_RANGE),
+		List<Raider> raiders = world.getEntitiesOfClass(
+				Raider.class,
+				this.guard.getBoundingBox().inflate(RAID_SCAN_RANGE),
 				entity -> this.isValidCombatTarget(entity, true));
 		if (raiders.isEmpty()) {
 			return null;
 		}
 		raiders.sort(Comparator
-				.comparingDouble((RaiderEntity entity) -> this.guard.squaredDistanceTo(entity))
-				.thenComparing(entity -> entity.getUuid()));
+				.comparingDouble((Raider entity) -> this.guard.distanceToSqr(entity))
+				.thenComparing(entity -> entity.getUUID()));
 		return raiders.getFirst();
 	}
 
-	private LivingEntity resolveOwnerHostilityTarget(ServerWorld world) {
+	private LivingEntity resolveOwnerHostilityTarget(ServerLevel world) {
 		UUID ownerUuid = this.guard.getOwnerUuid();
 		if (ownerUuid == null) {
 			return null;
 		}
-		if (!GuardReputationManager.shouldGuardsTurnHostile(world, ownerUuid, this.guard.getBlockPos())) {
+		if (!GuardReputationManager.shouldGuardsTurnHostile(world, ownerUuid, this.guard.blockPosition())) {
 			return null;
 		}
-		ServerPlayerEntity owner = this.guard.resolveOwner(world);
-		if (owner == null || owner.getAbilities().creativeMode) {
+		ServerPlayer owner = this.guard.resolveOwner(world);
+		if (owner == null || owner.getAbilities().instabuild) {
 			return null;
 		}
-		if (this.guard.squaredDistanceTo(owner) > OWNER_HOSTILITY_CHECK_RANGE_SQUARED) {
+		if (this.guard.distanceToSqr(owner) > OWNER_HOSTILITY_CHECK_RANGE_SQUARED) {
 			return null;
 		}
 		return owner;
 	}
 
-	private Raid getActiveRaid(ServerWorld world) {
-		Raid raid = world.getRaidAt(this.guard.getBlockPos());
+	private Raid getActiveRaid(ServerLevel world) {
+		Raid raid = world.getRaidAt(this.guard.blockPosition());
 		return raid != null && raid.isActive() ? raid : null;
 	}
 
@@ -589,20 +587,20 @@ public final class GuardAiController {
 		if (!this.isTargetStillTrackable(target)) {
 			return false;
 		}
-		if (requiresSight && !this.guard.canSee(target)) {
+		if (requiresSight && !this.guard.hasLineOfSight(target)) {
 			return false;
 		}
-		Long suppressedUntil = this.suppressedTargets.get(target.getUuid());
+		Long suppressedUntil = this.suppressedTargets.get(target.getUUID());
 		return suppressedUntil == null || suppressedUntil <= this.currentWorldTime();
 	}
 
 	private boolean isHostileOwnerTarget(LivingEntity target) {
-		return target instanceof ServerPlayerEntity player
+		return target instanceof ServerPlayer player
 				&& this.guard.getOwnerUuid() != null
-				&& this.guard.getOwnerUuid().equals(player.getUuid())
+				&& this.guard.getOwnerUuid().equals(player.getUUID())
 				&& target.isAlive()
 				&& !target.isRemoved()
-				&& this.guard.canTargetWithinZone(target.getBlockPos());
+				&& this.guard.canTargetWithinZone(target.blockPosition());
 	}
 
 	private boolean isTargetStillTrackable(LivingEntity target) {
@@ -610,7 +608,7 @@ public final class GuardAiController {
 				&& target.isAlive()
 				&& !target.isRemoved()
 				&& !this.guard.isAlly(target)
-				&& this.guard.canTargetWithinZone(target.getBlockPos());
+				&& this.guard.canTargetWithinZone(target.blockPosition());
 	}
 
 	private boolean isTargetStillTrackable(LivingEntity target, AlertReason reason) {
@@ -624,14 +622,14 @@ public final class GuardAiController {
 		if (!this.isTargetStillTrackable(target, reason)) {
 			return false;
 		}
-		if (reason.requiresSight() && !this.guard.canSee(target)) {
+		if (reason.requiresSight() && !this.guard.hasLineOfSight(target)) {
 			return false;
 		}
-		Long suppressedUntil = this.suppressedTargets.get(target.getUuid());
+		Long suppressedUntil = this.suppressedTargets.get(target.getUUID());
 		return suppressedUntil == null || suppressedUntil <= this.currentWorldTime();
 	}
 
-	private LivingEntity resolveEntity(ServerWorld world, UUID uuid) {
+	private LivingEntity resolveEntity(ServerLevel world, UUID uuid) {
 		if (uuid == null) {
 			return null;
 		}
@@ -648,25 +646,25 @@ public final class GuardAiController {
 
 	private int scoreThreat(LivingEntity target) {
 		int score = this.guard.scoreTarget(target);
-		if (target instanceof RaiderEntity) {
+		if (target instanceof Raider) {
 			score += 20;
 		}
 		if (target instanceof RangedAttackMob
-				|| target.getMainHandStack().isOf(Items.BOW)
-				|| target.getMainHandStack().isOf(Items.CROSSBOW)
-				|| target.getMainHandStack().isOf(Items.TRIDENT)) {
+				|| target.getMainHandItem().is(Items.BOW)
+				|| target.getMainHandItem().is(Items.CROSSBOW)
+				|| target.getMainHandItem().is(Items.TRIDENT)) {
 			score += 5;
 		}
 		return score;
 	}
 
-	private boolean hasReachedPeelCap(ServerWorld world) {
+	private boolean hasReachedPeelCap(ServerLevel world) {
 		int groupSize = 1;
 		int peeling = 0;
-		double range = Math.max(MIN_OWNER_ALERT_RANGE, this.guard.getAttributeValue(EntityAttributes.FOLLOW_RANGE));
-		for (GuardEntity other : world.getEntitiesByClass(
+		double range = Math.max(MIN_OWNER_ALERT_RANGE, this.guard.getAttributeValue(Attributes.FOLLOW_RANGE));
+		for (GuardEntity other : world.getEntitiesOfClass(
 				GuardEntity.class,
-				this.guard.getBoundingBox().expand(range),
+				this.guard.getBoundingBox().inflate(range),
 				entity -> entity != this.guard && entity.isAlive() && this.guard.isSameGroup(entity))) {
 			groupSize++;
 			if (other.getUrgentTargetUuid() != null) {
@@ -681,27 +679,27 @@ public final class GuardAiController {
 		return peeling >= peelCap;
 	}
 
-	private void broadcastToAlliedGuards(ServerWorld world, LivingEntity target, AlertReason reason, long alertTick) {
+	private void broadcastToAlliedGuards(ServerLevel world, LivingEntity target, AlertReason reason, long alertTick) {
 		if (!this.isTargetStillTrackable(target)) {
 			return;
 		}
 
-		double range = Math.max(MIN_OWNER_ALERT_RANGE, this.guard.getAttributeValue(EntityAttributes.FOLLOW_RANGE));
+		double range = Math.max(MIN_OWNER_ALERT_RANGE, this.guard.getAttributeValue(Attributes.FOLLOW_RANGE));
 		double rangeSq = range * range;
-		for (GuardEntity other : world.getEntitiesByClass(
+		for (GuardEntity other : world.getEntitiesOfClass(
 				GuardEntity.class,
-				this.guard.getBoundingBox().expand(range),
+				this.guard.getBoundingBox().inflate(range),
 				entity -> entity != this.guard
 						&& entity.isAlive()
-						&& entity.squaredDistanceTo(this.guard) <= rangeSq
+						&& entity.distanceToSqr(this.guard) <= rangeSq
 						&& this.guard.isSameGroup(entity))) {
 			other.receiveAlliedAlert(target, alertTick);
 		}
 
-		if (target instanceof HostileEntity || target instanceof RaiderEntity) {
-			for (IronGolemEntity golem : world.getEntitiesByClass(
-					IronGolemEntity.class,
-					this.guard.getBoundingBox().expand(24.0D),
+		if (target instanceof Monster || target instanceof Raider) {
+			for (IronGolem golem : world.getEntitiesOfClass(
+					IronGolem.class,
+					this.guard.getBoundingBox().inflate(24.0D),
 					LivingEntity::isAlive)) {
 				golem.setTarget(target);
 			}
@@ -709,7 +707,7 @@ public final class GuardAiController {
 	}
 
 	private long currentWorldTime() {
-		return this.guard.getEntityWorld() instanceof ServerWorld world ? world.getTime() : Long.MIN_VALUE;
+		return this.guard.level() instanceof ServerLevel world ? world.getGameTime() : Long.MIN_VALUE;
 	}
 
 	private record GuardAlert(UUID targetUuid, AlertReason reason, long alertTick, long expiresAt) {

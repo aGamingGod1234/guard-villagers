@@ -1,12 +1,11 @@
 package com.guardvillagers.client;
 
 import com.guardvillagers.network.GuardRosterSyncPayload;
-import net.minecraft.item.ItemStack;
-
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import net.minecraft.world.item.ItemStack;
 
 public final class ClientGuardRosterStore {
 	private static final ClientGuardRosterStore INSTANCE = new ClientGuardRosterStore();
