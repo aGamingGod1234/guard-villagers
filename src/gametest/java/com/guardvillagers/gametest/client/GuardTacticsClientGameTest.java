@@ -51,6 +51,9 @@ public class GuardTacticsClientGameTest implements FabricClientGameTest {
 			ClientTestSupport.playerCommand(context, "guards groups assign " + guards.get(1) + " 2");
 			ClientTestSupport.playerCommand(context, "guards groups assign " + guards.get(3) + " 2");
 			ClientTestSupport.playerCommand(context, "guards groups assign " + guards.get(4) + " 3");
+			// Ranks through the uuid form of /guards appoint, the same command the screen's rank menu sends.
+			ClientTestSupport.playerCommand(context, "guards appoint commander " + guards.get(0));
+			ClientTestSupport.playerCommand(context, "guards appoint captain " + guards.get(1));
 			context.waitTicks(10);
 
 			// Tactics map.
@@ -116,6 +119,17 @@ public class GuardTacticsClientGameTest implements FabricClientGameTest {
 
 			context.runOnClient(client -> client.setScreen(null));
 			context.waitTicks(3);
+
+			// Nameplates: the commander under the crosshair (star + stats label), then a captain (chevrons).
+			ClientTestSupport.clearOverlays(context);
+			ClientTestSupport.placeCamera(context, singleplayer, feet.getX() + offsets[0][0] + 0.5D, feet.getY(),
+					feet.getZ() + offsets[0][1] + 0.5D - 3.5D, 0.0F, -5.0F);
+			context.waitTicks(5);
+			context.takeScreenshot("nameplate_commander");
+			ClientTestSupport.placeCamera(context, singleplayer, feet.getX() + offsets[1][0] + 0.5D, feet.getY(),
+					feet.getZ() + offsets[1][1] + 0.5D - 3.5D, 0.0F, -5.0F);
+			context.waitTicks(5);
+			context.takeScreenshot("nameplate_captain");
 		}
 	}
 }
