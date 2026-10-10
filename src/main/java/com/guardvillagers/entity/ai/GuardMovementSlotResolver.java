@@ -6,6 +6,7 @@ import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Assigns each guard a distinct standing slot around a shared anchor.
@@ -60,13 +61,24 @@ public final class GuardMovementSlotResolver {
 		private BlockPos anchor;
 		private int index = -1;
 		private BlockPos result;
+		private Vec3 exact;
 		private long computedTick;
+
+		/**
+		 * Exact ring position of the last resolved slot when it landed in the requested column,
+		 * otherwise the centre of the grounded block. Lets guards stand on the ring rather than on
+		 * block centres (which put neighbours as close as one block apart).
+		 */
+		public Vec3 exactPosition() {
+			return this.exact;
+		}
 
 		public void clear() {
 			this.key = null;
 			this.anchor = null;
 			this.index = -1;
 			this.result = null;
+			this.exact = null;
 		}
 	}
 
@@ -104,6 +116,10 @@ public final class GuardMovementSlotResolver {
 		cache.anchor = anchor.immutable();
 		cache.index = index;
 		cache.result = grounded;
+		double exactX = anchor.getX() + 0.5D + offset[0];
+		double exactZ = anchor.getZ() + 0.5D + offset[1];
+		boolean sameColumn = (int) Math.floor(exactX) == grounded.getX() && (int) Math.floor(exactZ) == grounded.getZ();
+		cache.exact = sameColumn ? new Vec3(exactX, grounded.getY(), exactZ) : Vec3.atBottomCenterOf(grounded);
 		cache.computedTick = tick;
 		return grounded;
 	}

@@ -56,6 +56,6 @@ public final class TacticalRetreatGoal extends Goal {
 			this.safePoint = this.guard.findSafeRetreatPoint(world);
 			this.nextRefresh = now + SAFE_POINT_REFRESH_TICKS;
 		}
-		this.hold.tick(this.guard, this.safePoint, this.speed);
+		this.hold.tick(this.guard, this.safePoint, null, this.speed);
 	}
 }

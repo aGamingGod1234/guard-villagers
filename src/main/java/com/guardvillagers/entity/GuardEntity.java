@@ -833,6 +833,11 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		return GuardMovementSlotResolver.resolve(this, this.slotCache, key, anchor, allowCenter, this.level().getGameTime());
 	}
 
+	/** Exact standing position of the slot most recently returned by {@link #resolveAnchorSlot}. */
+	public Vec3 getResolvedSlotPosition() {
+		return this.slotCache.exactPosition();
+	}
+
 	/** Formation slot around the owner, grounded relative to {@code ownerGround}. */
 	public BlockPos resolveFollowSlot(ServerPlayer owner, BlockPos ownerGround) {
 		GuardMovementSlotResolver.AnchorKey key = GuardMovementSlotResolver.AnchorKey.follow(owner.getUUID());
@@ -1882,13 +1887,6 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		super.setTarget(target);
 	}
 
-	public void setHostileOwnerTarget(LivingEntity target) {
-		if (target instanceof ServerPlayer player
-				&& this.ownerUuid != null
-				&& this.ownerUuid.equals(player.getUUID())) {
-			super.setTarget(target);
-		}
-	}
 
 
 	@Override

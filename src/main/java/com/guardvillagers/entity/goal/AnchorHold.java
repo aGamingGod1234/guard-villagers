@@ -2,6 +2,7 @@ package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Shared "walk to my slot and stand there" logic with a dead zone: a guard starts walking only
@@ -13,6 +14,8 @@ final class AnchorHold {
 	// within ~0.45 blocks of the target block centre.
 	static final double DEPART_DISTANCE_SQUARED = 1.25D * 1.25D;
 	static final double ARRIVE_DISTANCE_SQUARED = 0.6D * 0.6D;
+	private static final double SETTLE_DISTANCE_SQUARED = 0.15D * 0.15D;
+	private static final double FINAL_STEP_DISTANCE_SQUARED = 1.5D * 1.5D;
 
 	private boolean moving;
 
@@ -20,11 +23,22 @@ final class AnchorHold {
 		this.moving = false;
 	}
 
-	void tick(GuardEntity guard, BlockPos slot, double speed) {
-		double distanceSq = guard.distanceToSqr(slot.getX() + 0.5D, slot.getY(), slot.getZ() + 0.5D);
-		if (distanceSq <= (this.moving ? ARRIVE_DISTANCE_SQUARED : DEPART_DISTANCE_SQUARED)) {
+	/** Walks to {@code slot} (pathfinding) and then steps onto {@code exact} (same block). */
+	void tick(GuardEntity guard, BlockPos slot, Vec3 exact, double speed) {
+		Vec3 standAt = exact != null ? exact : Vec3.atBottomCenterOf(slot);
+		double distanceSq = guard.distanceToSqr(standAt);
+		if (distanceSq <= (this.moving ? SETTLE_DISTANCE_SQUARED : DEPART_DISTANCE_SQUARED)) {
 			if (this.moving) {
 				guard.getNavigation().stop();
+				this.moving = false;
+			}
+			return;
+		}
+		if (this.moving && distanceSq <= FINAL_STEP_DISTANCE_SQUARED && guard.getNavigation().isDone()
+				&& guard.blockPosition().distManhattan(slot) <= 1 && Math.abs(guard.getY() - standAt.y) < 0.5D) {
+			// Last stretch inside or next to the slot block: no pathfinding needed.
+			guard.getMoveControl().setWantedPosition(standAt.x, standAt.y, standAt.z, speed);
+			if (distanceSq <= ARRIVE_DISTANCE_SQUARED && guard.getDeltaMovement().horizontalDistanceSqr() < 1.0E-4D) {
 				this.moving = false;
 			}
 			return;

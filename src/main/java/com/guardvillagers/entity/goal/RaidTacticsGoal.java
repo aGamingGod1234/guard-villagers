@@ -83,7 +83,7 @@ public final class RaidTacticsGoal extends Goal {
 		}
 
 		BlockPos slot = this.guard.resolveAnchorSlot(GuardMovementSlotResolver.AnchorKind.RAID, this.raid.getCenter(), false);
-		this.hold.tick(this.guard, slot, this.speed);
+		this.hold.tick(this.guard, slot, this.guard.getResolvedSlotPosition(), this.speed);
 	}
 
 	private boolean isRaidExecutor() {

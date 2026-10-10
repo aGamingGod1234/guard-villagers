@@ -132,7 +132,7 @@ public class GuardOwnershipGameTest {
 		GuardTestSupport.floor(helper);
 		ServerPlayer player = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
 		player.getInventory().add(new ItemStack(Items.EMERALD_BLOCK, 20));
-		int cost = GuardVillagersMod.getAdjustedGuardCost(player);
+		int cost = com.guardvillagers.GuardHiring.getAdjustedGuardCost(player);
 		GuardShopScreenHandler shop = openShop(helper, player);
 
 		shop.clicked(GuardShopInventory.SLOT_BUY_GUARD, 0, ContainerInput.PICKUP, player);
@@ -150,7 +150,7 @@ public class GuardOwnershipGameTest {
 	public void shopBulkHireChargesPerGuard(GameTestHelper helper) {
 		GuardTestSupport.floor(helper);
 		ServerPlayer player = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
-		int cost = GuardVillagersMod.getAdjustedGuardCost(player);
+		int cost = com.guardvillagers.GuardHiring.getAdjustedGuardCost(player);
 		player.getInventory().add(new ItemStack(Items.EMERALD_BLOCK, cost * 3 + 1));
 		GuardShopScreenHandler shop = openShop(helper, player);
 
@@ -166,7 +166,7 @@ public class GuardOwnershipGameTest {
 	public void shopHireWithoutFundsSpendsNothing(GameTestHelper helper) {
 		GuardTestSupport.floor(helper);
 		ServerPlayer player = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
-		int cost = GuardVillagersMod.getAdjustedGuardCost(player);
+		int cost = com.guardvillagers.GuardHiring.getAdjustedGuardCost(player);
 		player.getInventory().add(new ItemStack(Items.EMERALD_BLOCK, cost - 1));
 		GuardShopScreenHandler shop = openShop(helper, player);
 
@@ -193,7 +193,7 @@ public class GuardOwnershipGameTest {
 	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
 	public void shopHireRefundsWhenNoSpawnSpace(GameTestHelper helper) {
 		ServerPlayer player = entombedBuyer(helper);
-		int cost = GuardVillagersMod.getAdjustedGuardCost(player);
+		int cost = com.guardvillagers.GuardHiring.getAdjustedGuardCost(player);
 		player.getInventory().add(new ItemStack(Items.EMERALD_BLOCK, cost * 2));
 		GuardShopScreenHandler shop = openShop(helper, player);
 
@@ -215,7 +215,7 @@ public class GuardOwnershipGameTest {
 	public void shopHireDoesNotSpawnIntoSealedCavity(GameTestHelper helper) {
 		ServerPlayer player = entombedBuyer(helper);
 		GuardTestSupport.fill(helper, CENTER - 1, 4, CENTER - 1, CENTER + 1, 5, CENTER + 1, Blocks.AIR);
-		int cost = GuardVillagersMod.getAdjustedGuardCost(player);
+		int cost = com.guardvillagers.GuardHiring.getAdjustedGuardCost(player);
 		player.getInventory().add(new ItemStack(Items.EMERALD_BLOCK, cost));
 		GuardShopScreenHandler shop = openShop(helper, player);
 

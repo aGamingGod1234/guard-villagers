@@ -1,6 +1,5 @@
 package com.guardvillagers.entity.ai;
 
-import com.guardvillagers.GuardReputationManager;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
 import java.util.ArrayList;
@@ -56,7 +55,6 @@ public final class GuardAiController {
 	private static final double CLOSE_COMBAT_DISTANCE_SQUARED = 9.0D;
 	private static final double BOW_HOLD_DISTANCE_SQUARED = 18.0D * 18.0D;
 	private static final int TARGET_SUPPRESSION_TICKS = 40;
-	private static final int OWNER_HOSTILITY_CHECK_RANGE_SQUARED = 256;
 	private static final int FOLLOW_HOME_EXIT_BUFFER = 8;
 	private static final int HOME_ANCHOR_SETTLE_MIN = 4;
 	private static final double FOLLOW_COMBAT_LEASH = 24.0D;
@@ -102,8 +100,6 @@ public final class GuardAiController {
 	private Raid cachedRaid;
 	private boolean scanInitialized;
 	private boolean statusInitialized;
-	private boolean ownerTrusted;
-	private boolean ownerHostile;
 	private ServerPlayer followLeashOwner;
 
 	private UUID engagedTargetUuid;
@@ -321,9 +317,6 @@ public final class GuardAiController {
 		for (int i = 0; i < this.scannedHostiles.size(); i++) {
 			this.addCandidate(this.scannedHostiles.get(i), AlertReason.HOSTILE_SCAN, now, false);
 		}
-		if (this.ownerHostile) {
-			this.addCandidate(this.resolveOwnerHostilityTarget(world), AlertReason.OWNER_HOSTILE, now, false);
-		}
 
 		UUID self = this.guard.getUUID();
 		TargetAccumulator best = null;
@@ -332,7 +325,8 @@ public final class GuardAiController {
 		for (int i = 0; i < this.candidates.size(); i++) {
 			TargetAccumulator candidate = this.candidates.get(i);
 			int engaged = ENGAGEMENTS.count(candidate.entity.getUUID(), self, now);
-			candidate.score = TargetScoring.score(candidate.urgent, candidate.sourcePriority, candidate.threatPriority,
+			candidate.score = TargetScoring.score(candidate.urgent, candidate.ownerDirected, candidate.sourcePriority,
+					candidate.threatPriority,
 					candidate.sticky, candidate.distanceSq, engaged);
 			if (best == null || candidate.isBetterThan(best)) {
 				best = candidate;
@@ -467,7 +461,8 @@ public final class GuardAiController {
 	}
 
 	private boolean shouldFollowOwner(ServerLevel world) {
-		if (!this.guard.hasOwner() || this.guard.isStaying() || this.guard.isHoldingPosition() || !this.ownerTrusted) {
+		// Owned guards always follow their owner; reputation only gates hiring and village guards.
+		if (!this.guard.hasOwner() || this.guard.isStaying() || this.guard.isHoldingPosition()) {
 			return false;
 		}
 		ServerPlayer owner = this.guard.resolveOnlineOwner(world);
@@ -484,11 +479,7 @@ public final class GuardAiController {
 			}
 			return;
 		}
-		if (this.isHostileOwnerTarget(target)) {
-			this.guard.setHostileOwnerTarget(target);
-		} else {
-			this.guard.setTarget(target);
-		}
+		this.guard.setTarget(target);
 	}
 
 	private void updateEngagement(LivingEntity target, long now) {
@@ -555,16 +546,11 @@ public final class GuardAiController {
 		this.statusInitialized = true;
 		UUID ownerUuid = this.guard.getOwnerUuid();
 		if (ownerUuid == null) {
-			this.ownerTrusted = false;
-			this.ownerHostile = false;
 			this.followLeashOwner = null;
 			return;
 		}
-		BlockPos pos = this.guard.blockPosition();
-		this.ownerTrusted = GuardReputationManager.isTrustedByGuards(world, ownerUuid, pos);
-		this.ownerHostile = GuardReputationManager.shouldGuardsTurnHostile(world, ownerUuid, pos);
 		boolean followMode = !this.guard.isStaying() && !this.guard.isHoldingPosition() && (this.guard.hasFollowOverride() || this.guard.getHome().isEmpty());
-		this.followLeashOwner = followMode && this.ownerTrusted ? this.guard.resolveOwner(world) : null;
+		this.followLeashOwner = followMode ? this.guard.resolveOwner(world) : null;
 	}
 
 	/**
@@ -625,7 +611,7 @@ public final class GuardAiController {
 	 */
 	private void tickCombatTracking(ServerLevel world, long now) {
 		LivingEntity target = this.guard.getTarget();
-		if (!this.isTargetStillTrackable(target, true) && !this.isHostileOwnerTarget(target)) {
+		if (!this.isTargetStillTrackable(target, true)) {
 			this.resetCombatTracking();
 			return;
 		}
@@ -737,10 +723,7 @@ public final class GuardAiController {
 		if (entity == null) {
 			return;
 		}
-		boolean valid = reason == AlertReason.OWNER_HOSTILE
-				? this.isHostileOwnerTarget(entity)
-				: this.isTargetStillTrackable(entity, reason.ownerDirected());
-		if (!valid || this.isSuppressed(entity.getUUID(), tick)) {
+		if (!this.isTargetStillTrackable(entity, reason.ownerDirected()) || this.isSuppressed(entity.getUUID(), tick)) {
 			return;
 		}
 		TargetAccumulator accumulator = null;
@@ -773,30 +756,12 @@ public final class GuardAiController {
 		this.candidates.clear();
 	}
 
-	private LivingEntity resolveOwnerHostilityTarget(ServerLevel world) {
-		ServerPlayer owner = this.guard.resolveOwner(world);
-		if (owner == null || owner.getAbilities().instabuild) {
-			return null;
-		}
-		if (this.guard.distanceToSqr(owner) > OWNER_HOSTILITY_CHECK_RANGE_SQUARED) {
-			return null;
-		}
-		return owner;
-	}
 
 	private boolean isSuppressed(UUID uuid, long now) {
 		Long suppressedUntil = this.suppressedTargets.get(uuid);
 		return suppressedUntil != null && suppressedUntil > now;
 	}
 
-	private boolean isHostileOwnerTarget(LivingEntity target) {
-		return target instanceof ServerPlayer player
-				&& this.guard.getOwnerUuid() != null
-				&& this.guard.getOwnerUuid().equals(player.getUUID())
-				&& target.isAlive()
-				&& !target.isRemoved()
-				&& this.guard.canTargetWithinZone(target.blockPosition());
-	}
 
 	/**
 	 * Alive, not an ally, inside the home zone, and inside the guard's leash: within
@@ -897,7 +862,6 @@ public final class GuardAiController {
 		DIRECT_DAMAGE(95, 160, false, false, 160),
 		URGENT_PEEL(100, 120, true, false, 120),
 		ALLY_BROADCAST(80, 100, false, false, 100),
-		OWNER_HOSTILE(82, 100, false, false, 100),
 		RAID_TARGET(76, 40, false, false, 80),
 		HOSTILE_SCAN(70, 20, false, false, 80),
 		// Stickiness comes from TargetScoring.STICKY_BONUS; the source itself ranks below allied
@@ -942,6 +906,7 @@ public final class GuardAiController {
 	private static final class TargetAccumulator {
 		private LivingEntity entity;
 		private boolean urgent;
+		private boolean ownerDirected;
 		private boolean sticky;
 		private int sourcePriority;
 		private int threatPriority;
@@ -952,6 +917,7 @@ public final class GuardAiController {
 		private void reset(LivingEntity entity, double distanceSq, int threatPriority) {
 			this.entity = entity;
 			this.urgent = false;
+			this.ownerDirected = false;
 			this.sticky = false;
 			this.sourcePriority = 0;
 			this.threatPriority = threatPriority;
@@ -962,6 +928,7 @@ public final class GuardAiController {
 
 		private void include(AlertReason reason, long tick, boolean sticky) {
 			this.urgent |= reason.urgent();
+			this.ownerDirected |= reason.ownerDirected();
 			this.sticky |= sticky;
 			this.sourcePriority = Math.max(this.sourcePriority, reason.priority());
 			this.latestTick = Math.max(this.latestTick, tick);

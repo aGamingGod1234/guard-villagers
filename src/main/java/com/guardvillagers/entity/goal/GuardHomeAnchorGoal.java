@@ -46,6 +46,6 @@ public final class GuardHomeAnchorGoal extends Goal {
 			return;
 		}
 		BlockPos slot = this.guard.resolveAnchorSlot(GuardMovementSlotResolver.AnchorKind.HOME, home, false);
-		this.hold.tick(this.guard, slot, this.speed);
+		this.hold.tick(this.guard, slot, this.guard.getResolvedSlotPosition(), this.speed);
 	}
 }

@@ -53,7 +53,7 @@ public final class CrowdControlGoal extends Goal {
 			return;
 		}
 		BlockPos slot = this.guard.resolveAnchorSlot(GuardMovementSlotResolver.AnchorKind.CROWD, this.anchor, false);
-		this.hold.tick(this.guard, slot, this.speed);
+		this.hold.tick(this.guard, slot, this.guard.getResolvedSlotPosition(), this.speed);
 	}
 
 	/** POI lookups are throttled (they used to run on every canUse check, i.e. every 2 ticks). */

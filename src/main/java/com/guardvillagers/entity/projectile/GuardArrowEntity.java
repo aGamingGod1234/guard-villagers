@@ -26,8 +26,7 @@ public class GuardArrowEntity extends Arrow {
 		Entity hitEntity = entityHitResult.getEntity();
 		Entity owner = this.getOwner();
 		if (owner instanceof GuardEntity shooterGuard
-				&& (shooterGuard.isAlly(hitEntity) || this.isBystanderPlayer(shooterGuard, hitEntity))
-				&& !this.isActiveHostileOwnerTarget(shooterGuard, hitEntity)) {
+				&& (shooterGuard.isAlly(hitEntity) || this.isBystanderPlayer(shooterGuard, hitEntity))) {
 			if (this.level() instanceof ServerLevel) {
 				this.discard();
 			}
@@ -45,12 +44,6 @@ public class GuardArrowEntity extends Arrow {
 		return hitEntity instanceof Player && shooterGuard.getTarget() != hitEntity;
 	}
 
-	private boolean isActiveHostileOwnerTarget(GuardEntity shooterGuard, Entity hitEntity) {
-		return hitEntity instanceof ServerPlayer player
-				&& shooterGuard.getOwnerUuid() != null
-				&& shooterGuard.getOwnerUuid().equals(player.getUUID())
-				&& shooterGuard.getTarget() == hitEntity;
-	}
 
 	@Override
 	protected void doPostHurtEffects(LivingEntity target) {
