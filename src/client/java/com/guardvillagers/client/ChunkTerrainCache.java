@@ -1,24 +1,17 @@
 package com.guardvillagers.client;
 
-import com.guardvillagers.GuardVillagersMod;
-import com.mojang.blaze3d.opengl.GlStateManager;
 import com.mojang.blaze3d.platform.NativeImage;
-import org.lwjgl.opengl.GL11;
+import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
+import it.unimi.dsi.fastutil.objects.ReferenceLinkedOpenHashSet;
 
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
-import net.minecraft.client.Minecraft;
+import java.util.function.Supplier;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.texture.DynamicTexture;
-import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.core.BlockPos;
-import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
@@ -26,224 +19,207 @@ import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.material.MapColor;
 
+/**
+ * Caches top-down terrain colors per chunk. CPU-side colors are kept per world/dimension (LRU, bounded);
+ * GPU textures are created lazily only for chunks drawn at full detail and are bounded separately.
+ * Must only be used from the render thread.
+ */
 public final class ChunkTerrainCache {
 	private static final int MAX_TILES_PER_WORLD_DIMENSION = 4_096;
+	private static final int MAX_WORLD_DIMENSIONS = 4;
+	private static final int MAX_TEXTURES = 2_048;
+	private static final int MAX_TILE_GENERATIONS_PER_FRAME = 24;
+	private static final int MAX_TEXTURE_UPLOADS_PER_FRAME = 64;
 	private static final int FALLBACK_COLOR = 0xFF161C25;
 	private static final int TILE_RESOLUTION = 16;
 	private static final int TILE_PIXEL_COUNT = TILE_RESOLUTION * TILE_RESOLUTION;
-	private static final int MAX_SYNC_VISIBLE_GENERATIONS_PER_FRAME = 8;
-	private static final int MAX_ASYNC_VISIBLE_QUEUES_PER_FRAME = 16;
+	private static final Supplier<String> TEXTURE_LABEL = () -> "guardvillagers_chunk_terrain";
 
-	private final Map<String, LinkedHashMap<Long, TerrainTile>> tilesByWorldDimension = new HashMap<>();
-	private final ConcurrentHashMap<TileKey, Long> pendingGeneration = new ConcurrentHashMap<>();
-	private final ConcurrentHashMap<TileKey, AsyncTileResult> asyncResults = new ConcurrentHashMap<>();
-	private final AtomicLong nextGenerationId = new AtomicLong();
-
-	public static int tileResolution() {
-		return TILE_RESOLUTION;
-	}
+	private final LinkedHashMap<ClientTacticsDataStore.WorldContext, Long2ObjectLinkedOpenHashMap<TerrainTile>> tilesByWorld =
+			new LinkedHashMap<>(8, 0.75F, true);
+	private final ReferenceLinkedOpenHashSet<TerrainTile> textureLru = new ReferenceLinkedOpenHashSet<>();
+	private final BlockPos.MutableBlockPos samplePos = new BlockPos.MutableBlockPos();
+	private ClientTacticsDataStore.WorldContext currentContext;
+	private Long2ObjectLinkedOpenHashMap<TerrainTile> currentTiles;
+	private long frame;
+	private int uploadsThisFrame;
 
 	public void prepareVisibleTiles(ClientTacticsDataStore.WorldContext context, ClientLevel world, List<ChunkPos> visibleChunks) {
+		this.frame++;
+		this.uploadsThisFrame = 0;
 		if (context == null || world == null || visibleChunks == null || visibleChunks.isEmpty()) {
 			return;
 		}
 
-		this.drainAsyncResults();
-
-		String worldKey = this.worldKey(context);
-		LinkedHashMap<Long, TerrainTile> cache = this.cache(worldKey);
-		int syncGenerated = 0;
-		int asyncQueued = 0;
-
+		Long2ObjectLinkedOpenHashMap<TerrainTile> tiles = this.tilesFor(context, true);
+		int generated = 0;
 		for (ChunkPos chunkPos : visibleChunks) {
-			long chunkKey = ChunkPos.pack(chunkPos.x, chunkPos.z);
-			TileKey tileKey = new TileKey(worldKey, chunkKey);
-			if (cache.containsKey(chunkKey) || this.pendingGeneration.containsKey(tileKey)) {
+			if (generated >= MAX_TILE_GENERATIONS_PER_FRAME) {
+				break;
+			}
+			long chunkKey = ChunkPos.pack(chunkPos.x(), chunkPos.z());
+			if (tiles.containsKey(chunkKey)) {
 				continue;
 			}
-
-			LevelChunk chunk = world.getChunkSource().getChunk(chunkPos.x, chunkPos.z, ChunkStatus.FULL, false);
-			if (chunk == null) {
-				continue;
-			}
-
-			if (syncGenerated < MAX_SYNC_VISIBLE_GENERATIONS_PER_FRAME) {
-				cache.put(chunkKey, this.generateTile(worldKey, world, chunk));
-				syncGenerated++;
-				continue;
-			}
-
-			if (asyncQueued >= MAX_ASYNC_VISIBLE_QUEUES_PER_FRAME) {
+			// Cache full of tiles that were on screen last frame: generating more would only evict visible tiles.
+			if (tiles.size() >= MAX_TILES_PER_WORLD_DIMENSION && tiles.get(tiles.firstLongKey()).lastSeenFrame >= this.frame - 1) {
 				break;
 			}
 
-			this.queueAsyncGeneration(tileKey, world, chunk);
-			asyncQueued++;
+			LevelChunk chunk = world.getChunkSource().getChunk(chunkPos.x(), chunkPos.z(), ChunkStatus.FULL, false);
+			if (chunk == null) {
+				continue;
+			}
+			tiles.putAndMoveToLast(chunkKey, this.generateTile(world, chunk));
+			generated++;
+			this.evictIfNeeded(tiles);
 		}
-
-		this.evictIfNeeded(cache);
 	}
 
 	public TerrainTile getCachedTile(ClientTacticsDataStore.WorldContext context, int chunkX, int chunkZ) {
 		if (context == null) {
 			return null;
 		}
-		LinkedHashMap<Long, TerrainTile> cache = this.tilesByWorldDimension.get(this.worldKey(context));
-		if (cache == null) {
+		Long2ObjectLinkedOpenHashMap<TerrainTile> tiles = this.tilesFor(context, false);
+		if (tiles == null) {
 			return null;
 		}
-		return cache.get(ChunkPos.pack(chunkX, chunkZ));
+		TerrainTile tile = tiles.getAndMoveToLast(ChunkPos.pack(chunkX, chunkZ));
+		if (tile != null) {
+			tile.lastSeenFrame = this.frame;
+		}
+		return tile;
+	}
+
+	/**
+	 * Returns an uploaded texture for the tile, or null if this frame's upload or texture budget is used up
+	 * (callers fall back to the tile's average color).
+	 */
+	public DynamicTexture acquireTexture(TerrainTile tile) {
+		if (tile.texture != null) {
+			tile.lastTextureFrame = this.frame;
+			this.textureLru.addAndMoveToLast(tile);
+			return tile.texture;
+		}
+		if (this.uploadsThisFrame >= MAX_TEXTURE_UPLOADS_PER_FRAME) {
+			return null;
+		}
+		if (this.textureLru.size() >= MAX_TEXTURES) {
+			TerrainTile oldest = this.textureLru.first();
+			if (oldest.lastTextureFrame >= this.frame) {
+				return null;
+			}
+			this.textureLru.removeFirst();
+			oldest.releaseTexture();
+		}
+
+		NativeImage image = new NativeImage(TILE_RESOLUTION, TILE_RESOLUTION, false);
+		for (int pixelZ = 0; pixelZ < TILE_RESOLUTION; pixelZ++) {
+			int rowOffset = pixelZ * TILE_RESOLUTION;
+			for (int pixelX = 0; pixelX < TILE_RESOLUTION; pixelX++) {
+				image.setPixel(pixelX, pixelZ, tile.colors[rowOffset + pixelX]);
+			}
+		}
+		// The constructor uploads the image; DynamicTexture already samples with NEAREST filtering.
+		tile.texture = new DynamicTexture(TEXTURE_LABEL, image);
+		tile.lastTextureFrame = this.frame;
+		this.textureLru.addAndMoveToLast(tile);
+		this.uploadsThisFrame++;
+		return tile.texture;
 	}
 
 	public void invalidate(ClientTacticsDataStore.WorldContext context, int chunkX, int chunkZ) {
 		if (context == null) {
 			return;
 		}
-
-		String worldKey = this.worldKey(context);
-		long chunkKey = ChunkPos.pack(chunkX, chunkZ);
-		TileKey tileId = new TileKey(worldKey, chunkKey);
-		this.pendingGeneration.remove(tileId);
-		this.asyncResults.remove(tileId);
-
-		LinkedHashMap<Long, TerrainTile> cache = this.tilesByWorldDimension.get(worldKey);
-		if (cache == null) {
+		Long2ObjectLinkedOpenHashMap<TerrainTile> tiles = this.tilesFor(context, false);
+		if (tiles == null) {
 			return;
 		}
-
-		TerrainTile removed = cache.remove(chunkKey);
+		TerrainTile removed = tiles.remove(ChunkPos.pack(chunkX, chunkZ));
 		if (removed != null) {
-			removed.close(Minecraft.getInstance().getTextureManager());
+			this.dropTexture(removed);
 		}
+	}
+
+	/** Frees all GPU textures but keeps the CPU-side colors so the map reopens without re-sampling chunks. */
+	public void releaseTextures() {
+		for (TerrainTile tile : this.textureLru) {
+			tile.releaseTexture();
+		}
+		this.textureLru.clear();
 	}
 
 	public void clearAll() {
-		TextureManager textureManager = Minecraft.getInstance().getTextureManager();
-		for (LinkedHashMap<Long, TerrainTile> cache : this.tilesByWorldDimension.values()) {
-			for (TerrainTile tile : cache.values()) {
-				tile.close(textureManager);
+		this.releaseTextures();
+		this.tilesByWorld.clear();
+		this.currentContext = null;
+		this.currentTiles = null;
+	}
+
+	private Long2ObjectLinkedOpenHashMap<TerrainTile> tilesFor(ClientTacticsDataStore.WorldContext context, boolean create) {
+		if (context == this.currentContext || context.equals(this.currentContext)) {
+			return this.currentTiles;
+		}
+		Long2ObjectLinkedOpenHashMap<TerrainTile> tiles = this.tilesByWorld.get(context);
+		if (tiles == null) {
+			if (!create) {
+				return null;
 			}
-			cache.clear();
+			tiles = new Long2ObjectLinkedOpenHashMap<>(256);
+			this.tilesByWorld.put(context, tiles);
+			this.evictWorldsIfNeeded();
 		}
-		this.tilesByWorldDimension.clear();
-		this.pendingGeneration.clear();
-		this.asyncResults.clear();
+		this.currentContext = context;
+		this.currentTiles = tiles;
+		return tiles;
 	}
 
-	private void queueAsyncGeneration(TileKey tileKey, ClientLevel world, LevelChunk chunk) {
-		long generationId = this.nextGenerationId.incrementAndGet();
-		if (this.pendingGeneration.putIfAbsent(tileKey, generationId) != null) {
-			return;
-		}
-
-		ChunkPos chunkPos = chunk.getPos();
-		int[] heightmap = snapshotHeightmap(chunk);
-		int[] blockColors = snapshotBlockColors(world, chunk, chunkPos, heightmap);
-		CompletableFuture
-				.supplyAsync(() -> computeTileSnapshot(blockColors))
-				.thenAccept(snapshot -> this.asyncResults.put(tileKey, new AsyncTileResult(generationId, snapshot)));
-	}
-
-	private void drainAsyncResults() {
-		if (this.asyncResults.isEmpty()) {
-			return;
-		}
-
-		for (Iterator<Map.Entry<TileKey, AsyncTileResult>> iterator = this.asyncResults.entrySet().iterator(); iterator.hasNext();) {
-			Map.Entry<TileKey, AsyncTileResult> entry = iterator.next();
-			TileKey tileKey = entry.getKey();
-			AsyncTileResult result = entry.getValue();
-			Long pendingId = this.pendingGeneration.get(tileKey);
-			if (pendingId == null || pendingId.longValue() != result.generationId()) {
-				iterator.remove();
-				continue;
+	private void evictWorldsIfNeeded() {
+		Iterator<Map.Entry<ClientTacticsDataStore.WorldContext, Long2ObjectLinkedOpenHashMap<TerrainTile>>> iterator = this.tilesByWorld.entrySet().iterator();
+		while (this.tilesByWorld.size() > MAX_WORLD_DIMENSIONS && iterator.hasNext()) {
+			Map.Entry<ClientTacticsDataStore.WorldContext, Long2ObjectLinkedOpenHashMap<TerrainTile>> eldest = iterator.next();
+			for (TerrainTile tile : eldest.getValue().values()) {
+				this.dropTexture(tile);
 			}
-
-			LinkedHashMap<Long, TerrainTile> cache = this.cache(tileKey.worldKey());
-			cache.put(tileKey.chunkKey(), this.createTerrainTile(tileKey.worldKey(), tileKey.chunkKey(), result.snapshot()));
-			this.pendingGeneration.remove(tileKey, pendingId);
-			iterator.remove();
-			this.evictIfNeeded(cache);
-		}
-	}
-
-	private TerrainTile generateTile(String worldKey, ClientLevel world, LevelChunk chunk) {
-		ChunkPos chunkPos = chunk.getPos();
-		int[] colors = snapshotBlockColors(world, chunk, chunkPos, snapshotHeightmap(chunk));
-		return this.createTerrainTile(worldKey, ChunkPos.pack(chunkPos.x, chunkPos.z), computeTileSnapshot(colors));
-	}
-
-	private TerrainTile createTerrainTile(String worldKey, long chunkKey, TerrainSnapshot snapshot) {
-		NativeImage image = new NativeImage(TILE_RESOLUTION, TILE_RESOLUTION, false);
-		int[] colors = snapshot.colors();
-		for (int pixelZ = 0; pixelZ < TILE_RESOLUTION; pixelZ++) {
-			int rowOffset = pixelZ * TILE_RESOLUTION;
-			for (int pixelX = 0; pixelX < TILE_RESOLUTION; pixelX++) {
-				image.setPixel(pixelX, pixelZ, colors[rowOffset + pixelX]);
+			if (eldest.getValue() == this.currentTiles) {
+				this.currentContext = null;
+				this.currentTiles = null;
 			}
-		}
-
-		Identifier textureId = GuardVillagersMod.id("tactics/chunk/" + Integer.toUnsignedString(worldKey.hashCode())
-				+ "/" + Long.toUnsignedString(chunkKey));
-		DynamicTexture texture = new DynamicTexture(() -> "guardvillagers_chunk_terrain", image);
-		TextureManager textureManager = Minecraft.getInstance().getTextureManager();
-		textureManager.register(textureId, texture);
-		texture.upload();
-		// Set nearest-neighbor filtering for crisp pixel-art rendering (1 block = 1 pixel).
-		if (texture.getTexture() instanceof com.mojang.blaze3d.opengl.GlTexture glTex) {
-			GlStateManager._bindTexture(glTex.glId());
-			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
-			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
-		}
-		return new TerrainTile(snapshot.averageColor(), textureId, texture);
-	}
-
-	private LinkedHashMap<Long, TerrainTile> cache(String worldKey) {
-		return this.tilesByWorldDimension.computeIfAbsent(worldKey, ignored -> new LinkedHashMap<>(256, 0.75F, true));
-	}
-
-	private String worldKey(ClientTacticsDataStore.WorldContext context) {
-		return context.worldId() + "|" + context.dimensionId();
-	}
-
-	private void evictIfNeeded(LinkedHashMap<Long, TerrainTile> cache) {
-		TextureManager textureManager = Minecraft.getInstance().getTextureManager();
-		while (cache.size() > MAX_TILES_PER_WORLD_DIMENSION) {
-			Iterator<Map.Entry<Long, TerrainTile>> iterator = cache.entrySet().iterator();
-			if (!iterator.hasNext()) {
-				return;
-			}
-			Map.Entry<Long, TerrainTile> entry = iterator.next();
-			entry.getValue().close(textureManager);
 			iterator.remove();
 		}
 	}
 
-	private static int[] snapshotHeightmap(LevelChunk chunk) {
-		int[] heights = new int[TILE_PIXEL_COUNT];
-		for (int localZ = 0; localZ < TILE_RESOLUTION; localZ++) {
-			int rowOffset = localZ * TILE_RESOLUTION;
-			for (int localX = 0; localX < TILE_RESOLUTION; localX++) {
-				heights[rowOffset + localX] = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, localX, localZ);
-			}
+	private void evictIfNeeded(Long2ObjectLinkedOpenHashMap<TerrainTile> tiles) {
+		while (tiles.size() > MAX_TILES_PER_WORLD_DIMENSION) {
+			this.dropTexture(tiles.removeFirst());
 		}
-		return heights;
 	}
 
-	private static int[] snapshotBlockColors(ClientLevel world, LevelChunk chunk, ChunkPos chunkPos, int[] heightmap) {
+	private void dropTexture(TerrainTile tile) {
+		if (tile.texture != null) {
+			this.textureLru.remove(tile);
+			tile.releaseTexture();
+		}
+	}
+
+	private TerrainTile generateTile(ClientLevel world, LevelChunk chunk) {
 		int[] colors = new int[TILE_PIXEL_COUNT];
 		int worldBottom = world.getMinY();
+		ChunkPos chunkPos = chunk.getPos();
 		int startX = chunkPos.getMinBlockX();
 		int startZ = chunkPos.getMinBlockZ();
-		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		BlockPos.MutableBlockPos pos = this.samplePos;
+		long sumRed = 0L;
+		long sumGreen = 0L;
+		long sumBlue = 0L;
 
 		for (int localZ = 0; localZ < TILE_RESOLUTION; localZ++) {
 			int worldZ = startZ + localZ;
 			int rowOffset = localZ * TILE_RESOLUTION;
 			for (int localX = 0; localX < TILE_RESOLUTION; localX++) {
 				int worldX = startX + localX;
-				int index = rowOffset + localX;
-				int sampleY = Math.max(worldBottom, heightmap[index] - 1);
+				int sampleY = Math.max(worldBottom, chunk.getHeight(Heightmap.Types.WORLD_SURFACE, localX, localZ) - 1);
 
 				pos.set(worldX, sampleY, worldZ);
 				BlockState state = chunk.getBlockState(pos);
@@ -254,41 +230,42 @@ public final class ChunkTerrainCache {
 				}
 
 				MapColor mapColor = state.getMapColor(world, pos);
-				colors[index] = mapColor == MapColor.NONE ? FALLBACK_COLOR : 0xFF000000 | mapColor.col;
+				int color = mapColor == MapColor.NONE ? FALLBACK_COLOR : 0xFF000000 | mapColor.col;
+				colors[rowOffset + localX] = color;
+				sumRed += (color >> 16) & 0xFF;
+				sumGreen += (color >> 8) & 0xFF;
+				sumBlue += color & 0xFF;
 			}
 		}
-		return colors;
-	}
 
-	private static TerrainSnapshot computeTileSnapshot(int[] colors) {
-		long sumRed = 0L;
-		long sumGreen = 0L;
-		long sumBlue = 0L;
-		for (int color : colors) {
-			sumRed += (color >> 16) & 0xFF;
-			sumGreen += (color >> 8) & 0xFF;
-			sumBlue += color & 0xFF;
-		}
 		int averageColor = 0xFF000000
 				| ((int) (sumRed / TILE_PIXEL_COUNT) << 16)
 				| ((int) (sumGreen / TILE_PIXEL_COUNT) << 8)
 				| (int) (sumBlue / TILE_PIXEL_COUNT);
-		return new TerrainSnapshot(colors, averageColor);
+		return new TerrainTile(colors, averageColor);
 	}
 
-	public record TerrainTile(int averageColor, Identifier textureId, DynamicTexture texture) {
-		private void close(TextureManager textureManager) {
-			textureManager.release(this.textureId);
-			this.texture.close();
+	public static final class TerrainTile {
+		private final int[] colors;
+		private final int averageColor;
+		private DynamicTexture texture;
+		private long lastSeenFrame;
+		private long lastTextureFrame;
+
+		private TerrainTile(int[] colors, int averageColor) {
+			this.colors = colors;
+			this.averageColor = averageColor;
 		}
-	}
 
-	private record TileKey(String worldKey, long chunkKey) {
-	}
+		public int averageColor() {
+			return this.averageColor;
+		}
 
-	private record TerrainSnapshot(int[] colors, int averageColor) {
-	}
-
-	private record AsyncTileResult(long generationId, TerrainSnapshot snapshot) {
+		private void releaseTexture() {
+			if (this.texture != null) {
+				this.texture.close();
+				this.texture = null;
+			}
+		}
 	}
 }
