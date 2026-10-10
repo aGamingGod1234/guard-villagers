@@ -25,6 +25,8 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
+import org.joml.Vector3f;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -42,8 +44,9 @@ import java.util.UUID;
  *   <li>HP line: green above 60%, yellow above 30%, red below</li>
  * </ul>
  *
- * <p>Everything fades with camera distance. Only the guard under the crosshair gets the ring and the full label;
- * other guards show a two-line summary (plus target) to keep crowds readable. Label text is rebuilt once per game
+ * <p>Everything fades with camera distance. Only the guard under the crosshair (own ray pick, 48 blocks) gets the
+ * ring and the full label; other guards show a two-line summary (plus target), and labels that would overlap a
+ * nearer or focused label are skipped so crowds stay readable. Label text is rebuilt once per game
  * tick into pooled buffers; per frame this class only does arithmetic. The gizmo API itself still allocates one small
  * record per primitive, as it does for vanilla debug renderers.
  */
@@ -87,6 +90,13 @@ public final class GuardDebugRenderer {
 	private static final GizmoStyle[] PATH_NODE_STYLES = pathStyles(PATH_NODE_RGB);
 	private static final GizmoStyle[] PATH_DESTINATION_STYLES = pathStyles(PATH_DESTINATION_RGB);
 	private static final float[][] CIRCLE_POINTS = buildCirclePoints();
+	private static final double FOCUS_PICK_RANGE = 48.0D;
+	private static final double FOCUS_PICK_PADDING = 0.2D;
+	private static final double[] SLAB_RANGE = new double[2];
+	private static final Vector3f CAMERA_RIGHT = new Vector3f();
+	private static final Vector3f CAMERA_UP = new Vector3f();
+	private static final Vector3f CAMERA_FORWARD = new Vector3f();
+	private static int[] drawOrder = new int[16];
 
 	private static final List<GuardEntity> CACHED_GUARDS = new ArrayList<>();
 	private static final List<GuardLabel> LABEL_POOL = new ArrayList<>();
@@ -143,8 +153,29 @@ public final class GuardDebugRenderer {
 		boolean newTick = tick != lastLabelTick;
 		lastLabelTick = tick;
 		float partialTick = context.deltaTracker().getGameTimeDeltaPartialTick(false);
+		GuardEntity focused = pickFocusedGuard(player, partialTick);
+		// Vanilla only opens the per-frame gizmo collector inside Minecraft.runTick. Frames rendered from elsewhere
+		// (Fabric client gametest screenshots call GameRenderer.extract/render directly while the per-tick collector
+		// is active) would otherwise drop these gizmos for that frame. Scoping to the level renderer's per-frame
+		// collector is a harmless nest during normal frames.
+		Gizmos.TemporaryCollection gizmoScope = context.levelRenderer().collectPerFrameGizmos();
+		try {
+			emitGuards(client, level, player, range, focused, newTick, partialTick);
+		} finally {
+			gizmoScope.close();
+		}
+	}
+
+	private static void emitGuards(
+			Minecraft client,
+			ClientLevel level,
+			LocalPlayer player,
+			double range,
+			GuardEntity focused,
+			boolean newTick,
+			float partialTick
+	) {
 		double maxDistanceSq = range * range;
-		Entity focused = client.crosshairPickEntity;
 		ClientTacticsDataStore.WorldContext worldContext = null;
 
 		for (GuardEntity guard : CACHED_GUARDS) {
@@ -182,6 +213,57 @@ public final class GuardDebugRenderer {
 				buildLabelLines(label, guard, hasTarget ? target : null, isFocused, client, worldContext);
 			}
 		}
+	}
+
+	/**
+	 * Picks the guard under the crosshair up to {@link #FOCUS_PICK_RANGE} blocks (vanilla's crosshair pick stops at
+	 * interaction reach). Plain ray/AABB slab test over the cached guard list; blocks do not occlude, which suits an
+	 * operator tool.
+	 */
+	private static GuardEntity pickFocusedGuard(LocalPlayer player, float partialTick) {
+		Vec3 eye = player.getEyePosition(partialTick);
+		Vec3 look = player.getViewVector(partialTick);
+		GuardEntity best = null;
+		double bestT = FOCUS_PICK_RANGE;
+		for (GuardEntity guard : CACHED_GUARDS) {
+			if (guard.isRemoved() || !guard.isAlive()) {
+				continue;
+			}
+			AABB box = guard.getBoundingBox();
+			double t = rayBoxEntry(eye, look,
+					box.minX - FOCUS_PICK_PADDING, box.minY, box.minZ - FOCUS_PICK_PADDING,
+					box.maxX + FOCUS_PICK_PADDING, box.maxY, box.maxZ + FOCUS_PICK_PADDING);
+			if (t >= 0.0D && t < bestT) {
+				bestT = t;
+				best = guard;
+			}
+		}
+		return best;
+	}
+
+	/** Distance along the ray to the box entry (0 if the origin is inside), or -1 when the ray misses. */
+	private static double rayBoxEntry(
+			Vec3 origin, Vec3 dir, double minX, double minY, double minZ, double maxX, double maxY, double maxZ) {
+		double[] t = SLAB_RANGE;
+		t[0] = 0.0D;
+		t[1] = Double.MAX_VALUE;
+		if (!clipSlab(origin.x, dir.x, minX, maxX, t)
+				|| !clipSlab(origin.y, dir.y, minY, maxY, t)
+				|| !clipSlab(origin.z, dir.z, minZ, maxZ, t)) {
+			return -1.0D;
+		}
+		return t[0];
+	}
+
+	private static boolean clipSlab(double origin, double dir, double lo, double hi, double[] t) {
+		if (Math.abs(dir) < 1.0E-9D) {
+			return origin >= lo && origin <= hi;
+		}
+		double t1 = (lo - origin) / dir;
+		double t2 = (hi - origin) / dir;
+		t[0] = Math.max(t[0], Math.min(t1, t2));
+		t[1] = Math.min(t[1], Math.max(t1, t2));
+		return t[0] <= t[1];
 	}
 
 	private static boolean isRenderable(GuardEntity guard, ClientLevel level, double distanceSq, double maxDistanceSq) {
@@ -286,9 +368,10 @@ public final class GuardDebugRenderer {
 		double range = Math.max(1.0D, ClientDebugState.getRange());
 		int baseBackgroundAlpha = ARGB.alpha(client.options.getBackgroundColor(0.25F));
 		int lineStep = font.lineHeight + 1;
+		int visible = layoutLabels(camera, lineStep);
 
-		for (int i = 0; i < activeLabelCount; i++) {
-			GuardLabel label = LABEL_POOL.get(i);
+		for (int order = 0; order < visible; order++) {
+			GuardLabel label = LABEL_POOL.get(drawOrder[order]);
 			double dx = label.x - camera.pos.x;
 			double dy = label.y - camera.pos.y;
 			double dz = label.z - camera.pos.z;
@@ -316,6 +399,71 @@ public final class GuardDebugRenderer {
 			}
 			poseStack.popPose();
 		}
+	}
+
+	/**
+	 * Projects every label to a rectangle in camera tangent space and keeps only labels that do not overlap one
+	 * already kept. The focused label wins, then nearer labels. Fills {@link #drawOrder}; returns how many to draw.
+	 */
+	private static int layoutLabels(CameraRenderState camera, int lineStep) {
+		camera.orientation.transform(CAMERA_RIGHT.set(1.0F, 0.0F, 0.0F));
+		camera.orientation.transform(CAMERA_UP.set(0.0F, 1.0F, 0.0F));
+		camera.orientation.transform(CAMERA_FORWARD.set(0.0F, 0.0F, -1.0F));
+		if (drawOrder.length < activeLabelCount) {
+			drawOrder = new int[Math.max(activeLabelCount, drawOrder.length * 2)];
+		}
+		int candidates = 0;
+		for (int i = 0; i < activeLabelCount; i++) {
+			GuardLabel label = LABEL_POOL.get(i);
+			double dx = label.x - camera.pos.x;
+			double dy = label.y - camera.pos.y;
+			double dz = label.z - camera.pos.z;
+			double depth = dx * CAMERA_FORWARD.x + dy * CAMERA_FORWARD.y + dz * CAMERA_FORWARD.z;
+			if (depth < 0.1D) {
+				continue;
+			}
+			// The text block is drawn upward from the anchor: its last line sits on the anchor.
+			double lineHeightWorld = lineStep * LABEL_SCALE;
+			double heightWorld = label.lineCount * lineHeightWorld;
+			double up = dx * CAMERA_UP.x + dy * CAMERA_UP.y + dz * CAMERA_UP.z;
+			label.depth = depth;
+			label.screenX = (dx * CAMERA_RIGHT.x + dy * CAMERA_RIGHT.y + dz * CAMERA_RIGHT.z) / depth;
+			label.screenY = (up + heightWorld / 2.0D - lineHeightWorld) / depth;
+			label.halfW = label.maxWidth() * LABEL_SCALE / 2.0D / depth;
+			label.halfH = heightWorld / 2.0D / depth;
+			drawOrder[candidates++] = i;
+		}
+		// Insertion sort: focused first, then nearest. Label counts are small.
+		for (int i = 1; i < candidates; i++) {
+			int current = drawOrder[i];
+			int j = i - 1;
+			while (j >= 0 && drawsBefore(LABEL_POOL.get(current), LABEL_POOL.get(drawOrder[j]))) {
+				drawOrder[j + 1] = drawOrder[j];
+				j--;
+			}
+			drawOrder[j + 1] = current;
+		}
+		int kept = 0;
+		for (int i = 0; i < candidates; i++) {
+			GuardLabel label = LABEL_POOL.get(drawOrder[i]);
+			boolean overlaps = false;
+			for (int k = 0; k < kept && !overlaps; k++) {
+				GuardLabel other = LABEL_POOL.get(drawOrder[k]);
+				overlaps = Math.abs(label.screenX - other.screenX) < label.halfW + other.halfW
+						&& Math.abs(label.screenY - other.screenY) < label.halfH + other.halfH;
+			}
+			if (!overlaps) {
+				drawOrder[kept++] = drawOrder[i];
+			}
+		}
+		return kept;
+	}
+
+	private static boolean drawsBefore(GuardLabel a, GuardLabel b) {
+		if (a.focused != b.focused) {
+			return a.focused;
+		}
+		return a.depth < b.depth;
 	}
 
 	private static GuardLabel obtainLabel(int index) {
@@ -432,6 +580,19 @@ public final class GuardDebugRenderer {
 		private double x;
 		private double y;
 		private double z;
+		private double depth;
+		private double screenX;
+		private double screenY;
+		private double halfW;
+		private double halfH;
+
+		private int maxWidth() {
+			int max = 0;
+			for (int i = 0; i < this.lineCount; i++) {
+				max = Math.max(max, this.widths[i]);
+			}
+			return max + 2;
+		}
 
 		private void add(Font font, String text, int rgb) {
 			if (this.lineCount >= LABEL_LINE_COUNT) {
