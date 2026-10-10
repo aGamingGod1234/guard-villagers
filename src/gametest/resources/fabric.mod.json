@@ -1,0 +1,15 @@
+{
+	"schemaVersion": 1,
+	"id": "guardvillagers-gametest",
+	"version": "1.0.0",
+	"name": "Guard Villagers Game Tests",
+	"environment": "*",
+	"entrypoints": {
+		"fabric-gametest": [
+			"com.guardvillagers.gametest.GuardCombatGameTest"
+		]
+	},
+	"depends": {
+		"guardvillagers": "*"
+	}
+}
