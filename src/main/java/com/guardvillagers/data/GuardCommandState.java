@@ -33,10 +33,13 @@ import net.minecraft.world.level.saveddata.SavedDataType;
  * Per-owner chain of command ({@code guardvillagers:command}): current and pinned commander, captain per tactics group,
  * pinned captains, the commander's auto-command switch and the active player orders. This is the source of truth
  * while guards are unloaded; loaded guards whose NBT rank disagrees are corrected by the next election.
- * Bounded and LRU-evicted like {@link GuardTacticsState}.
+ * Bounded at {@link #MAX_OWNERS}; when full, the least recently written row that holds no player choice is dropped
+ * first. Reads ({@link #peek}, {@link #getOrDefault}) never reorder or create rows. Server thread only.
  */
 public final class GuardCommandState extends SavedData {
 	public static final int MAX_CAPTAINS = GuardTacticsState.PlayerTactics.MAX_GROUPS;
+	/** Rows are small, so this is well above the tactics cap; eviction prefers rows without player choices. */
+	public static final int MAX_OWNERS = GuardSecurityLimits.MAX_TACTICS_PLAYERS * 4;
 
 	public static final Codec<GuardCommandState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
 			Codec.unboundedMap(UUIDUtil.STRING_CODEC, OwnerCommand.CODEC).optionalFieldOf("owners", Map.of())
@@ -56,15 +59,17 @@ public final class GuardCommandState extends SavedData {
 	}
 
 	private GuardCommandState(Map<UUID, OwnerCommand> entries) {
-		this.entries = new LinkedHashMap<>(Math.max(16, entries.size()), 0.75F, true);
+		// Insertion order, refreshed by getOrCreate: a plain get() must not restructure the map.
+		this.entries = new LinkedHashMap<>(Math.max(16, entries.size()));
 		for (Map.Entry<UUID, OwnerCommand> entry : entries.entrySet()) {
 			this.putBounded(entry.getKey(), entry.getValue().copy());
 		}
 	}
 
 	public OwnerCommand getOrCreate(UUID ownerId) {
-		OwnerCommand existing = this.entries.get(ownerId);
+		OwnerCommand existing = this.entries.remove(ownerId);
 		if (existing != null) {
+			this.entries.put(ownerId, existing);
 			return existing;
 		}
 		OwnerCommand created = new OwnerCommand();
@@ -93,11 +98,20 @@ public final class GuardCommandState extends SavedData {
 	}
 
 	private void putBounded(UUID ownerId, OwnerCommand command) {
-		if (!this.entries.containsKey(ownerId) && this.entries.size() >= GuardSecurityLimits.MAX_TACTICS_PLAYERS) {
-			Iterator<UUID> iterator = this.entries.keySet().iterator();
-			if (iterator.hasNext()) {
-				iterator.next();
-				iterator.remove();
+		if (!this.entries.containsKey(ownerId) && this.entries.size() >= MAX_OWNERS) {
+			UUID victim = null;
+			for (Map.Entry<UUID, OwnerCommand> entry : this.entries.entrySet()) {
+				if (!entry.getValue().holdsPlayerChoices()) {
+					victim = entry.getKey();
+					break;
+				}
+			}
+			if (victim == null) {
+				Iterator<UUID> oldest = this.entries.keySet().iterator();
+				victim = oldest.hasNext() ? oldest.next() : null;
+			}
+			if (victim != null) {
+				this.entries.remove(victim);
 			}
 		}
 		this.entries.put(ownerId, command);
@@ -156,6 +170,12 @@ public final class GuardCommandState extends SavedData {
 			copy.orders = this.orders;
 			copy.voiceConsent = this.voiceConsent;
 			return copy;
+		}
+
+		/** True when the row carries something only the player can set (rank fields are recomputed by elections). */
+		boolean holdsPlayerChoices() {
+			return this.voiceConsent != null || !this.autoCommand || this.pinnedCommander != null
+					|| !this.pinnedCaptains.isEmpty() || !this.orders.isEmpty();
 		}
 
 		public UUID commander() {

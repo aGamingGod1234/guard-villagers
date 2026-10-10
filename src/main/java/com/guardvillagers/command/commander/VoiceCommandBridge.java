@@ -38,6 +38,11 @@ import net.minecraft.server.level.ServerPlayer;
  */
 public final class VoiceCommandBridge {
 	private static final Map<UUID, String> PROMPT_HINTS = new ConcurrentHashMap<>();
+	/**
+	 * Saved consent per player, copied from {@link GuardCommandState} on the server thread. The voice pipeline asks
+	 * from STT, HTTP and voice-chat threads, which must never touch saved data (plain maps the autosave walks).
+	 */
+	private static final Map<UUID, Optional<Boolean>> CONSENT = new ConcurrentHashMap<>();
 	private static final int MAX_HINT_LENGTH = 400;
 
 	private VoiceCommandBridge() {
@@ -70,18 +75,23 @@ public final class VoiceCommandBridge {
 		VoiceRuntime.setConsentStore(new VoiceConsentStore() {
 			@Override
 			public Optional<Boolean> get(UUID player) {
-				return VoiceRuntime.server().flatMap(server -> {
-					GuardCommandState.OwnerCommand command = GuardHierarchy.state(server).peek(player);
-					return command == null ? Optional.empty() : command.voiceConsent();
-				});
+				return consent(player);
 			}
 
 			@Override
 			public void set(UUID player, boolean granted) {
+				CONSENT.put(player, Optional.of(granted));
 				VoiceRuntime.server().ifPresent(server -> {
-					GuardCommandState state = GuardHierarchy.state(server);
-					state.getOrCreate(player).setVoiceConsent(granted);
-					state.setDirty();
+					Runnable save = () -> {
+						GuardCommandState state = GuardHierarchy.state(server);
+						state.getOrCreate(player).setVoiceConsent(granted);
+						state.setDirty();
+					};
+					if (server.isSameThread()) {
+						save.run();
+					} else {
+						server.execute(save);
+					}
 				});
 			}
 		});
@@ -90,8 +100,14 @@ public final class VoiceCommandBridge {
 
 		// After VoiceRuntime has loaded the config on SERVER_STARTING.
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> rebuildInterpreter());
-		ServerLifecycleEvents.SERVER_STOPPED.register(server -> PROMPT_HINTS.clear());
-		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> offerConsent(server, handler.getPlayer()));
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+			PROMPT_HINTS.clear();
+			CONSENT.clear();
+		});
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+			CONSENT.put(handler.getPlayer().getUUID(), storedConsent(server, handler.getPlayer().getUUID()));
+			offerConsent(server, handler.getPlayer());
+		});
 		ServerMessageEvents.ALLOW_CHAT_MESSAGE.register((message, sender, params) -> !interceptChat(sender, message.signedContent()));
 	}
 
@@ -130,6 +146,31 @@ public final class VoiceCommandBridge {
 
 	static void forget(UUID player) {
 		PROMPT_HINTS.remove(player);
+		CONSENT.remove(player);
+	}
+
+	/**
+	 * The player's saved choice, from any thread. A miss on the server thread reads saved data and caches it; a miss
+	 * on any other thread answers "declined" rather than touching saved data, so an unknown player is never captured
+	 * on the strength of {@code consentDefault} alone. The server thread re-checks before a transcript is used.
+	 */
+	static Optional<Boolean> consent(UUID player) {
+		Optional<Boolean> cached = CONSENT.get(player);
+		if (cached != null) {
+			return cached;
+		}
+		MinecraftServer server = VoiceRuntime.server().orElse(null);
+		if (server == null || !server.isSameThread()) {
+			return Optional.of(false);
+		}
+		Optional<Boolean> stored = storedConsent(server, player);
+		CONSENT.put(player, stored);
+		return stored;
+	}
+
+	private static Optional<Boolean> storedConsent(MinecraftServer server, UUID player) {
+		GuardCommandState.OwnerCommand command = GuardHierarchy.state(server).peek(player);
+		return command == null ? Optional.empty() : command.voiceConsent();
 	}
 
 	private static void speak(ServerPlayer owner, com.guardvillagers.entity.GuardEntity commander, String line,
