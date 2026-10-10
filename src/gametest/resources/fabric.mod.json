@@ -12,7 +12,8 @@
 			"com.guardvillagers.gametest.GuardMovementGameTest",
 			"com.guardvillagers.gametest.GuardPersistenceGameTest",
 			"com.guardvillagers.gametest.GuardReputationGameTest",
-			"com.guardvillagers.gametest.GuardVillageGameTest"
+			"com.guardvillagers.gametest.GuardVillageGameTest",
+			"com.guardvillagers.gametest.perf.GuardPerfBenchmark"
 		],
 		"fabric-client-gametest": [
 			"com.guardvillagers.gametest.client.GuardRenderClientGameTest",
