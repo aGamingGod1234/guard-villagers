@@ -1,0 +1,179 @@
+package com.guardvillagers.command.commander;
+
+import com.guardvillagers.GuardOwnershipIndex;
+import com.guardvillagers.GuardVillagersMod;
+import com.guardvillagers.command.hierarchy.GuardHierarchy;
+import com.guardvillagers.command.language.GrammarInterpreter;
+import com.guardvillagers.command.language.OrderInterpreter;
+import com.guardvillagers.command.language.llm.LlmConfig;
+import com.guardvillagers.command.language.llm.LlmInterpreter;
+import com.guardvillagers.command.order.OrderValidator;
+import com.guardvillagers.command.order.OwnerRoster;
+import com.guardvillagers.data.GuardCommandState;
+import com.guardvillagers.voice.VoiceBridge;
+import com.guardvillagers.voice.VoiceConfig;
+import com.guardvillagers.voice.VoiceConsentStore;
+import com.guardvillagers.voice.VoicePipeline;
+import com.guardvillagers.voice.VoiceRuntime;
+import com.guardvillagers.voice.VoiceTranscriptListener;
+import java.time.Duration;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
+
+/**
+ * Connects the speech package to the commander: transcripts go through the same interpreter as {@code /guards say},
+ * callouts are spoken by the commander, consent is saved with the chain of command, and the LLM interpreter is built
+ * from the voice config. Also handles the chat prefix ({@code !g follow me}). Everything degrades to text when Simple
+ * Voice Chat or the API key is missing.
+ */
+public final class VoiceCommandBridge {
+	private static final Map<UUID, String> PROMPT_HINTS = new ConcurrentHashMap<>();
+	private static final int MAX_HINT_LENGTH = 400;
+
+	private VoiceCommandBridge() {
+	}
+
+	public static void init() {
+		VoiceRuntime.init();
+		VoiceRuntime.setTranscriptListener(new VoiceTranscriptListener() {
+			@Override
+			public void onTranscript(VoiceTranscript transcript) {
+				VoiceRuntime.server().ifPresent(server -> {
+					ServerPlayer player = server.getPlayerList().getPlayer(transcript.player());
+					if (player != null) {
+						VoicePipeline pipeline = VoiceRuntime.pipeline().orElse(null);
+						if (pipeline != null && pipeline.config().chat().showTranscripts()) {
+							player.sendSystemMessage(Component.literal("Heard: " + transcript.text()).withStyle(ChatFormatting.GRAY));
+						}
+						CommanderService.hear(player, transcript.text(), false);
+					}
+				});
+			}
+
+			@Override
+			public void onRecognitionFailed(UUID player) {
+				VoiceRuntime.server().ifPresent(server -> CommanderCallouts.say(server, player,
+						CommanderCallouts.text("guardvillagers.order.llm_unavailable", "Commander couldn't hear you, try again."),
+						CommanderCallouts.Kind.ACK));
+			}
+		});
+		VoiceRuntime.setConsentStore(new VoiceConsentStore() {
+			@Override
+			public Optional<Boolean> get(UUID player) {
+				return VoiceRuntime.server().flatMap(server -> {
+					GuardCommandState.OwnerCommand command = GuardHierarchy.state(server).peek(player);
+					return command == null ? Optional.empty() : command.voiceConsent();
+				});
+			}
+
+			@Override
+			public void set(UUID player, boolean granted) {
+				VoiceRuntime.server().ifPresent(server -> {
+					GuardCommandState state = GuardHierarchy.state(server);
+					state.getOrCreate(player).setVoiceConsent(granted);
+					state.setDirty();
+				});
+			}
+		});
+		VoiceRuntime.setPromptHints(player -> PROMPT_HINTS.get(player));
+		CommanderCallouts.setSpeaker(VoiceCommandBridge::speak);
+
+		// After VoiceRuntime has loaded the config on SERVER_STARTING.
+		ServerLifecycleEvents.SERVER_STARTED.register(server -> rebuildInterpreter());
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> PROMPT_HINTS.clear());
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> offerConsent(server, handler.getPlayer()));
+		ServerMessageEvents.ALLOW_CHAT_MESSAGE.register((message, sender, params) -> !interceptChat(sender, message.signedContent()));
+	}
+
+	/** Re-reads the voice config into the order interpreter (LLM on when enabled and keyed, grammar only otherwise). */
+	public static void rebuildInterpreter() {
+		Optional<VoiceConfig> config = VoiceRuntime.pipeline().map(VoicePipeline::config);
+		OrderInterpreter previous = CommanderService.interpreter();
+		if (config.isEmpty()) {
+			CommanderService.setInterpreter(OrderInterpreter.grammarOnly());
+		} else {
+			VoiceConfig voice = config.get();
+			LlmConfig llm = new LlmConfig(voice.llm().enabled(), voice.llm().model(), voice.openai().apiKeyEnv(),
+					voice.openai().baseUrl(), Duration.ofMillis(voice.openai().llmTimeoutMs()), voice.llm().maxPerPlayerPerMinute(),
+					LlmConfig.DEFAULT_REASONING_EFFORT, LlmConfig.DEFAULT_MAX_OUTPUT_TOKENS);
+			Optional<LlmInterpreter> interpreter = LlmInterpreter.create(llm, System::getenv);
+			CommanderService.setInterpreter(new OrderInterpreter(new GrammarInterpreter(), new OrderValidator(), interpreter));
+		}
+		if (previous != CommanderService.interpreter()) {
+			previous.close();
+		}
+	}
+
+	/** The voice pipeline's per-player LLM budget; with no pipeline the interpreter's own limit applies. */
+	static boolean llmAllowed(UUID player) {
+		return VoiceRuntime.pipeline().map(pipeline -> pipeline.rateLimiter().tryLlm(player).allowed()).orElse(true);
+	}
+
+	/** Keeps the STT spelling hint (group and guard names) fresh; called from the commander tick, server thread. */
+	static void refreshPromptHint(ServerPlayer player) {
+		OwnerRoster roster = CommanderService.roster(player);
+		StringBuilder hint = new StringBuilder("Guard orders. Groups: ");
+		hint.append(String.join(", ", roster.groupNames())).append(". Guards: ").append(String.join(", ", roster.guardNames()));
+		String text = hint.length() > MAX_HINT_LENGTH ? hint.substring(0, MAX_HINT_LENGTH) : hint.toString();
+		PROMPT_HINTS.put(player.getUUID(), text);
+	}
+
+	static void forget(UUID player) {
+		PROMPT_HINTS.remove(player);
+	}
+
+	private static void speak(ServerPlayer owner, com.guardvillagers.entity.GuardEntity commander, String line,
+			CommanderCallouts.Kind kind) {
+		if (commander == null || VoiceRuntime.pipeline().isEmpty()) {
+			return;
+		}
+		VoicePipeline pipeline = VoiceRuntime.pipeline().get();
+		if (!pipeline.outputAvailable() || !pipeline.rateLimiter().tryCallout(owner.getUUID()).allowed()) {
+			return;
+		}
+		VoiceRuntime.speak(commander, line).exceptionally(error -> {
+			GuardVillagersMod.LOGGER.debug("Commander speech failed: {}", error.toString());
+			return VoicePipeline.SpeakResult.FAILED;
+		});
+	}
+
+	private static boolean interceptChat(ServerPlayer sender, String text) {
+		VoicePipeline pipeline = VoiceRuntime.pipeline().orElse(null);
+		String prefix = pipeline == null ? "!g " : pipeline.config().chat().prefix();
+		boolean enabled = pipeline == null || pipeline.config().chat().prefixEnabled();
+		if (!enabled || text == null || !text.startsWith(prefix)) {
+			return false;
+		}
+		String order = text.substring(prefix.length()).strip();
+		if (!order.isEmpty()) {
+			MinecraftServer server = sender.level().getServer();
+			server.execute(() -> CommanderService.hear(sender, order, true));
+		}
+		return true;
+	}
+
+	private static void offerConsent(MinecraftServer server, ServerPlayer player) {
+		if (VoiceBridge.current().isEmpty() || GuardOwnershipIndex.countOwnedGuards(server, player.getUUID()) == 0) {
+			return;
+		}
+		GuardCommandState.OwnerCommand command = GuardHierarchy.state(server).peek(player.getUUID());
+		if (command != null && command.voiceConsent().isPresent()) {
+			return;
+		}
+		player.sendSystemMessage(Component.translatable("commands.guardvillagers.voice.prompt")
+				.append(" ")
+				.append(Component.translatable("commands.guardvillagers.voice.prompt.enable")
+						.withStyle(style -> style.withColor(ChatFormatting.GREEN).withUnderlined(true)
+								.withClickEvent(new ClickEvent.RunCommand("/guards voice on")))));
+	}
+}

@@ -335,6 +335,20 @@ public class GuardCommanderGameTest {
 		});
 	}
 
+	/** No Simple Voice Chat in the test server: voice status says so and text orders still work. */
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 60)
+	public void noSvcStillWorks(GameTestHelper helper) {
+		Squad squad = squad(helper);
+		helper.runAfterDelay(5, () -> {
+			helper.assertTrue(com.guardvillagers.voice.VoiceRuntime.status(squad.owner().getUUID())
+					== com.guardvillagers.voice.VoicePipeline.Status.SVC_NOT_INSTALLED, "voice status should report SVC missing");
+			helper.assertTrue(GuardTestSupport.runCommand(squad.owner(), "guards voice status") == 0, "status command failed");
+			GuardTestSupport.runCommand(squad.owner(), "guards say hold");
+			squad.guards().forEach(guard -> helper.assertTrue(guard.isHoldingPosition(), "text order ignored without SVC"));
+			helper.succeed();
+		});
+	}
+
 	// ---- commander intuition ----
 
 	@GameTest(structure = ARENA, environment = ENV, maxTicks = 200)

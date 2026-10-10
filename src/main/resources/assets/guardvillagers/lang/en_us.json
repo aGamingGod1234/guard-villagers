@@ -376,5 +376,17 @@
 	"guardvillagers.commander.target_down": "Target down.",
 	"guardvillagers.commander.clear": "Area clear.",
 	"guardvillagers.commander.status_quiet": "All quiet.",
-	"guardvillagers.commander.status_threats": "%s hostiles, closest to the %s."
+	"guardvillagers.commander.status_threats": "%s hostiles, closest to the %s.",
+	"commands.guardvillagers.voice.on": "Voice orders on. Hold your voice chat key and talk to your guards. Your speech near your guards is sent to OpenAI for transcription.",
+	"commands.guardvillagers.voice.off": "Voice orders off. Nothing you say is sent anywhere.",
+	"commands.guardvillagers.voice.status.svc_not_installed": "Voice: Simple Voice Chat is not installed. /guards say and the !g chat prefix still work.",
+	"commands.guardvillagers.voice.status.key_missing": "Voice: the server has no OpenAI key set. Text orders still work.",
+	"commands.guardvillagers.voice.status.disabled": "Voice: turned off in the server config.",
+	"commands.guardvillagers.voice.status.key_rejected": "Voice: OpenAI rejected the server key. An operator must fix it and run /guards voice reload.",
+	"commands.guardvillagers.voice.status.consent_off": "Voice: off for you. Run /guards voice on to talk to your guards.",
+	"commands.guardvillagers.voice.status.ready": "Voice: ready. Hold your voice chat key and give an order.",
+	"commands.guardvillagers.voice.reloaded": "Guard voice config reloaded.",
+	"commands.guardvillagers.voice.reload_failed": "Guard voice config could not be reloaded (server not running).",
+	"commands.guardvillagers.voice.prompt": "Talk to your guards with voice chat? Your speech near your guards is sent to OpenAI for transcription.",
+	"commands.guardvillagers.voice.prompt.enable": "[Enable]"
 }

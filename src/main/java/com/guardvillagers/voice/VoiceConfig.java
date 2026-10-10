@@ -168,7 +168,7 @@ public record VoiceConfig(
 		);
 		Llm llm = new Llm(
 				r.bool("llm", "enabled", true),
-				r.pattern("llm", "model", "gpt-5.4-mini", MODEL_ID),
+				r.pattern("llm", "model", com.guardvillagers.command.language.llm.LlmConfig.DEFAULT_MODEL, MODEL_ID),
 				r.integer("llm", "maxPerPlayerPerMinute", 6, 0, 60)
 		);
 		RateLimits rateLimits = new RateLimits(

@@ -21,6 +21,7 @@ public final class CommandModule {
 		}
 		initialized = true;
 		GuardHierarchy.setListener(CommanderService::onCommandChange);
+		com.guardvillagers.command.commander.VoiceCommandBridge.init();
 		// One pass per server tick for all owners (elections, then each owner's brain on its staggered cadence).
 		ServerTickEvents.END_SERVER_TICK.register(CommanderService::tick);
 		ServerPlayerEvents.LEAVE.register(player -> CommanderService.forget(player.getUUID()));

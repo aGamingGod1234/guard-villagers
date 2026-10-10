@@ -117,7 +117,8 @@ public final class GuardCommandState extends SavedData {
 				UUIDUtil.STRING_CODEC.listOf(0, MAX_CAPTAINS).optionalFieldOf("pinnedCaptains", List.of())
 						.forGetter(command -> List.copyOf(command.pinnedCaptains)),
 				Codec.BOOL.optionalFieldOf("autoCommand", true).forGetter(OwnerCommand::autoCommand),
-				SavedOrder.CODEC.listOf(0, OrderBook.MAX_ACTIVE).optionalFieldOf("orders", List.of()).forGetter(command -> command.orders)
+				SavedOrder.CODEC.listOf(0, OrderBook.MAX_ACTIVE).optionalFieldOf("orders", List.of()).forGetter(command -> command.orders),
+				Codec.BOOL.optionalFieldOf("voiceConsent").forGetter(command -> Optional.ofNullable(command.voiceConsent))
 		).apply(instance, OwnerCommand::new));
 
 		private UUID commander;
@@ -126,12 +127,14 @@ public final class GuardCommandState extends SavedData {
 		private final Set<UUID> pinnedCaptains = new HashSet<>();
 		private boolean autoCommand = true;
 		private List<SavedOrder> orders = List.of();
+		/** Null until the player chooses; then the config default no longer applies. */
+		private Boolean voiceConsent;
 
 		public OwnerCommand() {
 		}
 
 		private OwnerCommand(Optional<UUID> commander, Optional<UUID> pinnedCommander, List<CaptainEntry> captains,
-				List<UUID> pinnedCaptains, boolean autoCommand, List<SavedOrder> orders) {
+				List<UUID> pinnedCaptains, boolean autoCommand, List<SavedOrder> orders, Optional<Boolean> voiceConsent) {
 			this.commander = commander.orElse(null);
 			this.pinnedCommander = pinnedCommander.orElse(null);
 			for (CaptainEntry entry : captains) {
@@ -140,6 +143,7 @@ public final class GuardCommandState extends SavedData {
 			this.pinnedCaptains.addAll(pinnedCaptains);
 			this.autoCommand = autoCommand;
 			this.orders = List.copyOf(orders);
+			this.voiceConsent = voiceConsent.orElse(null);
 		}
 
 		public OwnerCommand copy() {
@@ -150,6 +154,7 @@ public final class GuardCommandState extends SavedData {
 			copy.pinnedCaptains.addAll(this.pinnedCaptains);
 			copy.autoCommand = this.autoCommand;
 			copy.orders = this.orders;
+			copy.voiceConsent = this.voiceConsent;
 			return copy;
 		}
 
@@ -202,6 +207,14 @@ public final class GuardCommandState extends SavedData {
 		public void clearPins() {
 			this.pinnedCaptains.clear();
 			this.pinnedCommander = null;
+		}
+
+		public Optional<Boolean> voiceConsent() {
+			return Optional.ofNullable(this.voiceConsent);
+		}
+
+		public void setVoiceConsent(boolean granted) {
+			this.voiceConsent = granted;
 		}
 
 		public boolean autoCommand() {

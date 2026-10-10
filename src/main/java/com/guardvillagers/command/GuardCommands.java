@@ -8,6 +8,9 @@ import com.guardvillagers.GuardSecurityLimits;
 import com.guardvillagers.GuardTacticsManager;
 import com.guardvillagers.GuardVillagersMod;
 import com.guardvillagers.command.commander.CommanderService;
+import com.guardvillagers.command.commander.VoiceCommandBridge;
+import com.guardvillagers.voice.VoicePipeline;
+import com.guardvillagers.voice.VoiceRuntime;
 import com.guardvillagers.command.hierarchy.GuardHierarchy;
 import com.guardvillagers.command.order.Scope;
 import com.guardvillagers.data.GuardDiplomacyState;
@@ -118,6 +121,13 @@ public final class GuardCommands {
 								.then(Commands.literal("on").executes(context -> commanderAuto(context.getSource(), true)))
 								.then(Commands.literal("off").executes(context -> commanderAuto(context.getSource(), false)))))
 				.then(Commands.literal("status").executes(context -> status(context.getSource())))
+				.then(Commands.literal("voice")
+						.then(Commands.literal("on").executes(context -> voiceConsent(context.getSource(), true)))
+						.then(Commands.literal("off").executes(context -> voiceConsent(context.getSource(), false)))
+						.then(Commands.literal("status").executes(context -> voiceStatus(context.getSource())))
+						.then(Commands.literal("reload")
+								.requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
+								.executes(context -> voiceReload(context.getSource()))))
 				// Players your guards treat as friends: they will not be targeted, and they can ring your guards to a bell.
 				.then(Commands.literal("trust")
 						.then(Commands.literal("list").executes(context -> listTrusted(context.getSource())))
@@ -543,6 +553,30 @@ public final class GuardCommands {
 		String line = CommanderService.statusLine(player);
 		source.sendSuccess(() -> Component.literal(line), false);
 		return Command.SINGLE_SUCCESS;
+	}
+
+	private static int voiceConsent(CommandSourceStack source, boolean granted) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		VoiceRuntime.setConsent(player.getUUID(), granted);
+		source.sendSuccess(() -> Component.translatable(granted
+				? "commands.guardvillagers.voice.on" : "commands.guardvillagers.voice.off"), false);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private static int voiceStatus(CommandSourceStack source) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		VoicePipeline.Status status = VoiceRuntime.status(player.getUUID());
+		source.sendSuccess(() -> Component.translatable("commands.guardvillagers.voice.status."
+				+ status.name().toLowerCase(java.util.Locale.ROOT)), false);
+		return status == VoicePipeline.Status.READY ? 1 : 0;
+	}
+
+	private static int voiceReload(CommandSourceStack source) {
+		boolean reloaded = VoiceRuntime.reload().isPresent();
+		VoiceCommandBridge.rebuildInterpreter();
+		source.sendSuccess(() -> Component.translatable(reloaded
+				? "commands.guardvillagers.voice.reloaded" : "commands.guardvillagers.voice.reload_failed"), true);
+		return reloaded ? 1 : 0;
 	}
 
 	private static GuardEntity lookedAtOwnedGuard(ServerPlayer player) {

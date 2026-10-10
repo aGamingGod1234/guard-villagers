@@ -95,7 +95,18 @@ public final class CommanderService {
 	public static void hear(ServerPlayer speaker, String text, boolean explicitlyAddressed) {
 		MinecraftServer server = speaker.level().getServer();
 		OwnerRoster roster = roster(speaker);
-		CompletableFuture<Interpretation> future = interpreter.interpret(speaker.getUUID(), text, roster, explicitlyAddressed);
+		OrderInterpreter current = interpreter;
+		// Grammar first, offline. The LLM is only asked when the grammar found nothing in words addressed to the
+		// guards, and only within the speaker's LLM budget.
+		Interpretation local = current.interpretLocally(text, roster);
+		boolean addressed = local.addressed() || explicitlyAddressed;
+		if (local.understood() || !local.rejected().isEmpty() || !current.llmAvailable() || !addressed
+				|| !VoiceCommandBridge.llmAllowed(speaker.getUUID())) {
+			handle(speaker, new Interpretation(local.origin(), local.orders(), local.rejected(), addressed, local.reply(),
+					local.llmStatus(), local.retryAfter()));
+			return;
+		}
+		CompletableFuture<Interpretation> future = current.interpret(speaker.getUUID(), text, roster, explicitlyAddressed);
 		if (future.isDone()) {
 			handle(speaker, future.join());
 			return;
@@ -282,6 +293,9 @@ public final class CommanderService {
 					}
 					context = context(server, player.getUUID());
 				}
+				if (Math.floorMod(now + CommanderBrain.phaseOf(player.getUUID()), GuardHierarchy.ELECTION_INTERVAL_TICKS) == 0) {
+					VoiceCommandBridge.refreshPromptHint(player);
+				}
 				tickApproach(context, player, now);
 				context.brain.tick(server, player, context, now);
 				CommanderCallouts.flush(server, player.getUUID());
@@ -296,6 +310,7 @@ public final class CommanderService {
 	public static void forget(UUID owner) {
 		CONTEXTS.remove(owner);
 		CommanderCallouts.forget(owner);
+		VoiceCommandBridge.forget(owner);
 	}
 
 	public static void clearSessionState() {
