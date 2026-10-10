@@ -162,7 +162,8 @@ public final class GuardTacticsMenus {
 					guard.isStaying(),
 					guard.hasFollowOverride(),
 					false,
-					guard.getHome().isPresent()));
+					guard.getHome().isPresent(),
+					guard.getRank().id()));
 		}
 		for (GuardOwnershipIndex.UnloadedGuard unloaded : GuardOwnershipIndex.getUnloadedOwnedGuards(server, player.getUUID(), loadedIds)) {
 			if (guards.size() >= GuardRosterSyncPayload.MAX_GUARDS) {

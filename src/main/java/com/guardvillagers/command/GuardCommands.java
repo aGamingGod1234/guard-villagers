@@ -19,6 +19,7 @@ import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.network.GuardGroupResultPayload;
 import com.guardvillagers.shop.GuardShopScreenHandler;
 import com.guardvillagers.tactics.GuardTacticsMenus;
+import com.guardvillagers.tactics.GuardTacticsScreenHandler;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
@@ -113,8 +114,13 @@ public final class GuardCommands {
 						.then(Commands.argument("text", StringArgumentType.greedyString())
 								.executes(context -> say(context.getSource(), StringArgumentType.getString(context, "text")))))
 				.then(Commands.literal("appoint")
-						.then(Commands.literal("commander").executes(context -> appoint(context.getSource(), true)))
-						.then(Commands.literal("captain").executes(context -> appoint(context.getSource(), false)))
+						// Without a uuid: the guard the player looks at. With one: any loaded owned guard (tactics screen).
+						.then(Commands.literal("commander").executes(context -> appoint(context.getSource(), true, null))
+								.then(Commands.argument("guardUuid", UuidArgument.uuid())
+										.executes(context -> appoint(context.getSource(), true, UuidArgument.getUuid(context, "guardUuid")))))
+						.then(Commands.literal("captain").executes(context -> appoint(context.getSource(), false, null))
+								.then(Commands.argument("guardUuid", UuidArgument.uuid())
+										.executes(context -> appoint(context.getSource(), false, UuidArgument.getUuid(context, "guardUuid")))))
 						.then(Commands.literal("auto").executes(context -> appointAuto(context.getSource()))))
 				.then(Commands.literal("commander")
 						.then(Commands.literal("auto")
@@ -505,12 +511,17 @@ public final class GuardCommands {
 		return Command.SINGLE_SUCCESS;
 	}
 
-	/** Appoints the owned guard the player looks at (8 blocks) as commander or captain of its group. */
-	private static int appoint(CommandSourceStack source, boolean commander) throws CommandSyntaxException {
+	/**
+	 * Appoints an owned guard as commander or captain of its group: the one with {@code guardId}, or when that is null
+	 * the one the player looks at (8 blocks).
+	 */
+	private static int appoint(CommandSourceStack source, boolean commander, UUID guardId) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		GuardEntity guard = lookedAtOwnedGuard(player);
+		GuardEntity guard = guardId == null ? lookedAtOwnedGuard(player) : ownedGuard(player, guardId);
 		if (guard == null) {
-			source.sendFailure(Component.translatable("commands.guardvillagers.appoint.no_guard", (int) APPOINT_RANGE));
+			source.sendFailure(guardId == null
+					? Component.translatable("commands.guardvillagers.appoint.no_guard", (int) APPOINT_RANGE)
+					: Component.translatable("commands.guardvillagers.groups.guard_not_found"));
 			return 0;
 		}
 		GuardHierarchy.AppointResult result = commander
@@ -518,9 +529,15 @@ public final class GuardCommands {
 				: GuardHierarchy.appointCaptain(source.getServer(), player.getUUID(), guard);
 		String name = guard.getName().getString();
 		switch (result) {
-			case APPOINTED -> source.sendSuccess(() -> commander
+			case APPOINTED -> {
+				source.sendSuccess(() -> commander
 					? Component.translatable("commands.guardvillagers.appoint.commander", name)
 					: Component.translatable("commands.guardvillagers.appoint.captain", name, guard.getGroupName()), false);
+				// Elections ran synchronously; refresh an open tactics screen now instead of on the next 1 s tick.
+				if (player.containerMenu instanceof GuardTacticsScreenHandler) {
+					GuardTacticsMenus.syncOwnedGuardRoster(player);
+				}
+			}
 			case NO_GROUP -> {
 				source.sendFailure(Component.translatable("commands.guardvillagers.appoint.no_group", name));
 				return 0;
@@ -577,6 +594,15 @@ public final class GuardCommands {
 		source.sendSuccess(() -> Component.translatable(reloaded
 				? "commands.guardvillagers.voice.reloaded" : "commands.guardvillagers.voice.reload_failed"), true);
 		return reloaded ? 1 : 0;
+	}
+
+	private static GuardEntity ownedGuard(ServerPlayer player, UUID guardId) {
+		for (GuardEntity guard : ownedGuards(player)) {
+			if (guard.getUUID().equals(guardId) && guard.isAlive()) {
+				return guard;
+			}
+		}
+		return null;
 	}
 
 	private static GuardEntity lookedAtOwnedGuard(ServerPlayer player) {

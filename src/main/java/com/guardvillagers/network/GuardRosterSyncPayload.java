@@ -24,8 +24,8 @@ public record GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary>
 	private static final int WIRE_MAX_GROUPS = 256;
 	private static final int WIRE_MAX_GUARDS = MAX_GUARDS;
 
-	/** v3 added the per-guard state fields; the id changes so a v2 peer never decodes v3 bytes. */
-	public static final Type<GuardRosterSyncPayload> ID = new Type<>(Identifier.fromNamespaceAndPath(GuardVillagersMod.MOD_ID, "guard_roster_sync_v3"));
+	/** v3 added the per-guard state fields, v4 the rank; the id changes so an older peer never decodes newer bytes. */
+	public static final Type<GuardRosterSyncPayload> ID = new Type<>(Identifier.fromNamespaceAndPath(GuardVillagersMod.MOD_ID, "guard_roster_sync_v4"));
 	public static final StreamCodec<RegistryFriendlyByteBuf, GuardRosterSyncPayload> CODEC = CustomPacketPayload.codec(
 			GuardRosterSyncPayload::write,
 			GuardRosterSyncPayload::new);
@@ -114,6 +114,7 @@ public record GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary>
 	 * @param following    follow override active (follows the owner even when zoned)
 	 * @param holding      hold-position mode; always false until GuardEntity exposes one
 	 * @param hasHome      has a home zone
+	 * @param rank         {@code GuardRank} id (0 soldier, 1 captain, 2 commander); 0 for unloaded guards
 	 */
 	public record GuardSummary(
 			UUID guardUuid,
@@ -137,7 +138,8 @@ public record GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary>
 			boolean staying,
 			boolean following,
 			boolean holding,
-			boolean hasHome) {
+			boolean hasHome,
+			int rank) {
 		public GuardSummary {
 			displayName = trim(displayName, MAX_GUARD_NAME_LENGTH);
 			groupName = trim(groupName, MAX_GROUP_NAME_LENGTH);
@@ -155,7 +157,7 @@ public record GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary>
 		public int contentHash() {
 			int hash = Objects.hash(this.guardUuid, this.displayName, this.level, this.health, this.maxHealth, this.experience,
 					Math.round(this.distance), this.groupIndex, this.groupName, this.loaded, this.behavior, this.formation, this.role,
-					this.staying, this.following, this.holding, this.hasHome);
+					this.staying, this.following, this.holding, this.hasHome, this.rank);
 			for (ItemStack stack : List.of(this.mainHand, this.helmet, this.chest, this.legs, this.boots)) {
 				hash = 31 * hash + ItemStack.hashItemAndComponents(stack) + 7 * stack.getCount();
 			}
@@ -166,7 +168,7 @@ public record GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary>
 		public static GuardSummary unloaded(UUID guardUuid, String lastKnownName, int groupIndex, String groupName) {
 			return new GuardSummary(guardUuid, lastKnownName, -1, -1.0F, -1.0F, -1, -1.0D, groupIndex, groupName,
 					ItemStack.EMPTY, ItemStack.EMPTY, ItemStack.EMPTY, ItemStack.EMPTY, ItemStack.EMPTY,
-					false, "", "", "", false, false, false, false);
+					false, "", "", "", false, false, false, false, 0);
 		}
 
 		private void write(RegistryFriendlyByteBuf buf) {
@@ -190,6 +192,7 @@ public record GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary>
 			buf.writeUtf(this.role, MAX_ENUM_NAME_LENGTH);
 			int flags = (this.staying ? 1 : 0) | (this.following ? 2 : 0) | (this.holding ? 4 : 0) | (this.hasHome ? 8 : 0);
 			buf.writeByte(flags);
+			buf.writeByte(this.rank);
 		}
 
 		private static GuardSummary read(RegistryFriendlyByteBuf buf) {
@@ -212,9 +215,10 @@ public record GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary>
 			String formation = buf.readUtf(MAX_ENUM_NAME_LENGTH);
 			String role = buf.readUtf(MAX_ENUM_NAME_LENGTH);
 			int flags = buf.readByte();
+			int rank = buf.readByte();
 			return new GuardSummary(guardUuid, displayName, level, health, maxHealth, experience, distance, groupIndex,
 					groupName, mainHand, helmet, chest, legs, boots, loaded, behavior, formation, role,
-					(flags & 1) != 0, (flags & 2) != 0, (flags & 4) != 0, (flags & 8) != 0);
+					(flags & 1) != 0, (flags & 2) != 0, (flags & 4) != 0, (flags & 8) != 0, rank);
 		}
 	}
 }

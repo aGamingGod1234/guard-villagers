@@ -29,7 +29,7 @@ final class GuardRosterSyncPayloadTest {
 		GuardRosterSyncPayload.GuardSummary loaded = new GuardRosterSyncPayload.GuardSummary(
 				loadedId, "Guard Alice", 3, 18.0F, 20.0F, 40, 12.5D, 0, "Alpha",
 				ItemStack.EMPTY, ItemStack.EMPTY, ItemStack.EMPTY, ItemStack.EMPTY, ItemStack.EMPTY,
-				true, "DEFENSIVE", "FOLLOW", "BOWMAN", true, false, false, true);
+				true, "DEFENSIVE", "FOLLOW", "BOWMAN", true, false, false, true, 2);
 		GuardRosterSyncPayload.GuardSummary unloaded = GuardRosterSyncPayload.GuardSummary.unloaded(unloadedId, "Guard Bob", 0, "Alpha");
 		GuardRosterSyncPayload payload = new GuardRosterSyncPayload(List.of("Alpha"), List.of(loaded, unloaded));
 
@@ -45,12 +45,14 @@ final class GuardRosterSyncPayloadTest {
 		assertTrue(first.hasHome());
 		assertEquals("DEFENSIVE", first.behavior());
 		assertEquals("BOWMAN", first.role());
+		assertEquals(2, first.rank());
 		assertTrue(first.helmet().isEmpty(), "empty equipment must encode (the old STREAM_CODEC threw)");
 		assertEquals(payload.contentHash(), decoded.contentHash());
 		GuardRosterSyncPayload.GuardSummary second = decoded.guards().get(1);
 		assertFalse(second.loaded());
 		assertEquals(unloadedId, second.guardUuid());
 		assertEquals("Guard Bob", second.displayName());
+		assertEquals(0, second.rank());
 	}
 
 	@Test
