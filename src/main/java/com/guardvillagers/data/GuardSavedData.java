@@ -2,12 +2,13 @@ package com.guardvillagers.data;
 
 import com.guardvillagers.GuardVillagersMod;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.DirectoryNotEmptyException;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.storage.LevelResource;
@@ -25,6 +26,9 @@ public final class GuardSavedData {
 		"DIM1", "dimensions/minecraft/the_end"
 	);
 
+	/** {@code dimensions/<ns>/<path...>/data/<file>}; a datapack dimension path can have several segments. */
+	private static final int MAX_DIMENSION_DEPTH = 8;
+
 	private GuardSavedData() {
 	}
 
@@ -32,8 +36,10 @@ public final class GuardSavedData {
 		return Identifier.fromNamespaceAndPath(GuardVillagersMod.MOD_ID, path);
 	}
 
+	/** SERVER_STARTING: relocate legacy files, then import owned guards saved before the ownership index existed. */
 	public static void migrateLegacyFiles(MinecraftServer server) {
 		migrateLegacyFiles(server.getWorldPath(LevelResource.ROOT));
+		GuardOwnershipBackfill.runOnce(server);
 	}
 
 	/**
@@ -60,22 +66,26 @@ public final class GuardSavedData {
 			deleteIfEmptyDirectory(legacyDimension);
 		}
 
-		// Datapack dimensions already lived under dimensions/<ns>/<path>/; only the file name changed.
+		// Datapack dimensions already lived under dimensions/<ns>/<path>/; only the file name changed. The path can
+		// contain slashes (dimensions/<ns>/a/b/data), so walk a few levels instead of assuming one.
 		Path dimensionsRoot = worldRoot.resolve("dimensions");
 		if (!Files.isDirectory(dimensionsRoot)) {
 			return;
 		}
-		try (DirectoryStream<Path> namespaces = Files.newDirectoryStream(dimensionsRoot, Files::isDirectory)) {
-			for (Path namespace : namespaces) {
-				try (DirectoryStream<Path> dimensions = Files.newDirectoryStream(namespace, Files::isDirectory)) {
-					for (Path dimension : dimensions) {
-						Path data = dimension.resolve("data");
-						moveVillageState(data, data);
-					}
-				}
-			}
-		} catch (IOException e) {
+		String legacyName = legacyFileName(VILLAGE_STATE);
+		List<Path> legacyDataDirs;
+		try (Stream<Path> paths = Files.walk(dimensionsRoot, MAX_DIMENSION_DEPTH)) {
+			legacyDataDirs = paths
+					.filter(path -> path.getFileName().toString().equals(legacyName))
+					.map(Path::getParent)
+					.filter(parent -> parent.getFileName().toString().equals("data"))
+					.toList();
+		} catch (IOException | UncheckedIOException e) {
 			LOGGER.error("Failed to scan {} for legacy guard village data", dimensionsRoot, e);
+			return;
+		}
+		for (Path data : legacyDataDirs) {
+			moveVillageState(data, data);
 		}
 	}
 

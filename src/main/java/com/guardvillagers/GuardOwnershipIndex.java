@@ -98,23 +98,20 @@ public final class GuardOwnershipIndex {
 		if (server == null || ownerUuid == null) {
 			return 0;
 		}
-		GuardOwnershipState state = state(server);
-		int persisted = state.countOwned(ownerUuid, server.overworld().getGameTime());
-		// Loaded guards always have a fresh row; the max only matters if the state was reset under us.
+		int persisted = state(server).countOwned(ownerUuid);
+		// Loaded guards always have a row; the max only matters if the state was reset under us.
 		return Math.max(persisted, getOwnedGuards(server, ownerUuid).size());
 	}
 
 	/**
-	 * Owned guards that are not currently loaded, with their last known name and group, oldest-seen last.
-	 * Excludes expired rows.
+	 * Owned guards that are not currently loaded, with their last known name and group. Rows never age out; the
+	 * longest-unseen guards are listed last.
 	 */
 	public static List<UnloadedGuard> getUnloadedOwnedGuards(MinecraftServer server, UUID ownerUuid, Set<UUID> loadedIds) {
 		if (server == null || ownerUuid == null) {
 			return List.of();
 		}
 		GuardOwnershipState state = state(server);
-		long now = server.overworld().getGameTime();
-		state.countOwned(ownerUuid, now);
 		List<UnloadedGuard> unloaded = new ArrayList<>();
 		for (UUID guardId : state.guardsOf(ownerUuid)) {
 			if (loadedIds.contains(guardId)) {

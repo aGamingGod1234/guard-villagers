@@ -25,18 +25,26 @@ public final class GuardCommandQueue {
 	private GuardCommandQueue() {
 	}
 
-	/** Queues a command (without the leading slash). Returns false when there is no connection to send it on. */
-	public static boolean enqueue(String command) {
+	public enum EnqueueResult {
+		QUEUED,
+		NO_CONNECTION,
+		/** {@link #MAX_QUEUED} commands are already waiting; this one was dropped. */
+		QUEUE_FULL
+	}
+
+	/** Queues a command (without the leading slash) unless there is no connection or the queue is full. */
+	public static EnqueueResult enqueue(String command) {
 		Minecraft client = Minecraft.getInstance();
 		if (client.getConnection() == null) {
-			return false;
+			return EnqueueResult.NO_CONNECTION;
 		}
 		ensureRegistered();
-		if (QUEUE.size() < MAX_QUEUED) {
-			QUEUE.addLast(command);
+		if (QUEUE.size() >= MAX_QUEUED) {
+			return EnqueueResult.QUEUE_FULL;
 		}
+		QUEUE.addLast(command);
 		drain(client);
-		return true;
+		return EnqueueResult.QUEUED;
 	}
 
 	/** Commands still waiting for spam budget. */
