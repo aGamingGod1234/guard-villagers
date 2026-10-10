@@ -84,11 +84,12 @@ public class GuardTacticsClientGameTest implements FabricClientGameTest {
 			context.waitTicks(3);
 			context.takeScreenshot("tactics_map_panned");
 
-			// Left-drag selects a chunk rectangle.
-			input.setCursorPos(center[0] - 80, center[1] - 60);
+			// Left-drag selects a chunk rectangle. The pan above moved the discovered area right/down by 150x90 px, and
+			// a drag that starts on an undiscovered chunk clears the selection, so start inside it.
+			input.setCursorPos(center[0] + 60, center[1] + 40);
 			input.holdMouse(0);
 			for (int i = 0; i < 6; i++) {
-				input.moveCursor(25.0D, 18.0D);
+				input.moveCursor(15.0D, 8.0D);
 				context.waitTick();
 			}
 			context.takeScreenshot("tactics_map_selecting");

@@ -30,25 +30,45 @@ public class GuardDebugOverlayClientGameTest implements FabricClientGameTest {
 
 			UUID guardId = ClientTestSupport.spawnFrozenGuard(singleplayer, gx - 4.0D, y, gz, 90.0F,
 					java.util.Map.of(EquipmentSlot.MAINHAND, Items.IRON_SWORD), null);
+			// Two more guards so the overlay has to tell the focused guard apart from the rest.
+			UUID secondId = ClientTestSupport.spawnFrozenGuard(singleplayer, gx - 6.0D, y, gz + 3.0D, 90.0F,
+					java.util.Map.of(EquipmentSlot.MAINHAND, Items.BOW), null);
+			UUID thirdId = ClientTestSupport.spawnFrozenGuard(singleplayer, gx - 2.0D, y, gz - 2.0D, 90.0F,
+					java.util.Map.of(EquipmentSlot.MAINHAND, Items.IRON_SWORD, EquipmentSlot.OFFHAND, Items.SHIELD), null);
+			// Wide view of the arena, framed before anything moves so the first paths are on screen.
+			ClientTestSupport.placeCamera(context, singleplayer, gx + 1.0D, y + 2.5D, gz - 10.0D, 0.0F, 12.0F);
+			ClientTestSupport.clearOverlays(context);
+			context.waitTicks(10);
+			context.takeScreenshot("debug_overlay_idle");
+
 			singleplayer.getServer().runOnServer(server -> {
 				ServerLevel level = server.overworld();
 				Husk husk = EntityType.HUSK.create(level, EntitySpawnReason.MOB_SUMMONED);
-				husk.snapTo(gx + 6.0D, y, gz + 3.0D, 90.0F, 0.0F);
+				husk.snapTo(gx + 8.0D, y, gz + 4.0D, 90.0F, 0.0F);
 				husk.setNoAi(true);
 				husk.setPersistenceRequired();
 				level.addFreshEntity(husk);
-				GuardEntity guard = (GuardEntity) level.getEntity(guardId);
-				guard.setNoAi(false);
-				guard.setMainTarget(husk);
-				guard.setTarget(husk);
+				for (UUID id : java.util.List.of(guardId, secondId, thirdId)) {
+					GuardEntity guard = (GuardEntity) level.getEntity(id);
+					guard.setNoAi(false);
+					guard.setMainTarget(husk);
+					guard.setTarget(husk);
+				}
 			});
-
-			// Camera behind and above, looking down at the arena.
-			ClientTestSupport.placeCamera(context, singleplayer, gx, y + 3.0D, gz - 7.0D, 0.0F, 30.0F);
-			context.waitTicks(6);
+			context.waitTicks(3);
 			context.takeScreenshot("debug_overlay_chasing");
-			context.waitTicks(20);
+			context.waitTicks(15);
 			context.takeScreenshot("debug_overlay_later");
+
+			// Mid distance with the crosshair on one guard: only that guard should get the ring and full label.
+			Double[] midPos = singleplayer.getServer().computeOnServer(server -> {
+				GuardEntity guard = (GuardEntity) server.overworld().getEntity(guardId);
+				return guard == null ? null : new Double[] {guard.getX(), guard.getZ()};
+			});
+			if (midPos != null) {
+				ClientTestSupport.placeCamera(context, singleplayer, midPos[0], y, midPos[1] - 6.0D, 0.0F, 6.0F);
+				context.takeScreenshot("debug_overlay_crosshair_mid");
+			}
 
 			// Close-up on the label.
 			Double[] guardPos = singleplayer.getServer().computeOnServer(server -> {
