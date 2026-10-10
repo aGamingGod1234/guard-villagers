@@ -220,7 +220,8 @@ public final class ChunkTerrainCache {
 			int rowOffset = localZ * TILE_RESOLUTION;
 			for (int localX = 0; localX < TILE_RESOLUTION; localX++) {
 				int worldX = startX + localX;
-				int sampleY = Math.max(worldBottom, chunk.getHeight(Heightmap.Types.WORLD_SURFACE, localX, localZ) - 1);
+				// ChunkAccess#getHeight already returns the top block (first free Y minus one).
+				int sampleY = Math.max(worldBottom, chunk.getHeight(Heightmap.Types.WORLD_SURFACE, localX, localZ));
 
 				pos.set(worldX, sampleY, worldZ);
 				BlockState state = chunk.getBlockState(pos);
