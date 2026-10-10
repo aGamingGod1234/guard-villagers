@@ -167,6 +167,11 @@ public class GuardVillagersMod implements ModInitializer {
 		});
 	}
 
+	/** Shop price for the next hire; see {@link GuardHiring#getAdjustedGuardCost}. */
+	public static int getAdjustedGuardCost(ServerPlayer player) {
+		return GuardHiring.getAdjustedGuardCost(player);
+	}
+
 	/** Mutable, persisted upgrades. Creates a saved row, so only call this when about to change the upgrades. */
 	public static GuardPlayerUpgrades getUpgrades(ServerPlayer player) {
 		return upgradeState(player.level().getServer()).getOrCreate(player.getUUID());

@@ -211,7 +211,7 @@ public class GuardOwnershipGameTest {
 	 * README: "If the exact player X/Z column cannot support a spawn, the purchase fails cleanly".
 	 * The hired guard must not be dropped into a cavity it can never leave.
 	 */
-	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40, required = false)
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
 	public void shopHireDoesNotSpawnIntoSealedCavity(GameTestHelper helper) {
 		ServerPlayer player = entombedBuyer(helper);
 		GuardTestSupport.fill(helper, CENTER - 1, 4, CENTER - 1, CENTER + 1, 5, CENTER + 1, Blocks.AIR);

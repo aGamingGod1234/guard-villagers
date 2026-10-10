@@ -2,14 +2,18 @@ package com.guardvillagers.shop;
 
 import com.guardvillagers.GuardEconomy;
 import com.guardvillagers.GuardHiring;
+import com.guardvillagers.GuardOwnershipIndex;
 import com.guardvillagers.GuardPlayerUpgrades;
+import com.guardvillagers.GuardReputationManager;
 import com.guardvillagers.GuardSecurityLimits;
 import com.guardvillagers.GuardVillagersMod;
 import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.component.DataComponents;
+import it.unimi.dsi.fastutil.objects.ReferenceSortedSets;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.player.Player;
@@ -17,6 +21,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.ItemLore;
+import net.minecraft.world.item.component.TooltipDisplay;
 
 public class GuardShopInventory extends SimpleContainer {
 	public static final int SLOT_INFO = 4;
@@ -127,162 +132,110 @@ public class GuardShopInventory extends SimpleContainer {
 
 	public void refresh() {
 		for (int i = 0; i < this.getContainerSize(); i++) {
-			this.setItem(i, ItemStack.EMPTY);
-		}
-
-		for (int i = 0; i < this.getContainerSize(); i++) {
-			if (isInteractiveSlot(i)) {
-				continue;
-			}
-			this.setItem(i, this.decorativePane(i));
+			this.setItem(i, isInteractiveSlot(i) ? ItemStack.EMPTY : filler(i));
 		}
 
 		// Rendering must not create a saved upgrade row for players who never buy anything.
 		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgradesView(this.player);
 		boolean creativeMode = this.player.getAbilities().instabuild;
+		int ownedGuards = GuardOwnershipIndex.countOwnedGuards(this.player.level().getServer(), this.player.getUUID());
+		int guardLimit = GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER;
 
-		List<String> bookStats = this.buildCurrentGuardStats(upgrades);
-		this.setItem(SLOT_INFO, this.card(Items.BOOK, "Guard Villagers", ChatFormatting.GOLD, bookStats.toArray(String[]::new)));
+		this.setItem(SLOT_INFO, card(Items.BOOK, key("info.title"), ChatFormatting.GOLD,
+			line(key("info.armor", armorOdds(upgrades.getArmorDistribution())), ChatFormatting.GRAY),
+			line(key("info.weapons", swordName(upgrades.getWeaponLevel()), bowName(upgrades.getWeaponLevel())), ChatFormatting.GRAY),
+			line(key("info.support", healingText(upgrades.getSupportLevel()), shieldText(upgrades.getSupportLevel())), ChatFormatting.GRAY),
+			line(key("info.reputation", GuardReputationManager.formatReputation(GuardReputationManager.getEffectiveReputation(this.player))),
+				ChatFormatting.GRAY)));
 
 		int guardCost = GuardHiring.getAdjustedGuardCost(this.player);
-		String guardCostText = creativeMode ? "Cost: Free" : "Cost: " + guardCost + " emerald block(s)";
-		this.setItem(SLOT_BUY_GUARD, this.card(
-			Items.EMERALD_BLOCK,
-			"Hire Guard",
-			ChatFormatting.GREEN,
-			guardCostText,
-			"Shift-click to buy max."
-		));
+		this.setItem(SLOT_BUY_GUARD, card(Items.EMERALD_BLOCK, key("hire.title"), ChatFormatting.GREEN,
+			costLine(guardCost, creativeMode, ownedGuards >= guardLimit),
+			line(key("hire.owned", ownedGuards, guardLimit), ChatFormatting.GRAY),
+			Component.empty(),
+			line(key("hire.hint"), ChatFormatting.DARK_GRAY)));
 
 		int armorLevel = upgrades.getArmorLevel();
-		if (armorLevel >= GuardPlayerUpgrades.MAX_ARMOR_LEVEL) {
-			GuardPlayerUpgrades.ArmorDistribution currentDist = upgrades.getArmorDistribution();
-			this.setItem(SLOT_UPGRADE_ARMOR, this.card(
-				Items.IRON_CHESTPLATE,
-				"Upgrade Armor",
-				ChatFormatting.AQUA,
-				"Maxed",
-				"L:" + currentDist.leather() + "% I:" + currentDist.iron() + "% G:" + currentDist.gold() + "% D:" + currentDist.diamond() + "%"
-			));
-		} else {
-			int armorCost = upgrades.getArmorUpgradeCostForLevel(armorLevel);
-			String armorCostText = creativeMode ? "Cost: Free" : "Cost: " + armorCost + " emerald block(s)";
-			GuardPlayerUpgrades.ArmorDistribution currentDist = upgrades.getArmorDistribution();
-			GuardPlayerUpgrades nextArmor = upgrades.copy();
-			nextArmor.upgradeArmor();
-			GuardPlayerUpgrades.ArmorDistribution nextDist = nextArmor.getArmorDistribution();
-			this.setItem(SLOT_UPGRADE_ARMOR, this.card(
-				Items.IRON_CHESTPLATE,
-				"Upgrade Armor",
-				ChatFormatting.AQUA,
-				armorCostText,
-				"Current: L:" + currentDist.leather() + "% I:" + currentDist.iron() + "% G:" + currentDist.gold() + "% D:" + currentDist.diamond() + "%",
-				"Upgraded: L:" + nextDist.leather() + "% I:" + nextDist.iron() + "% G:" + nextDist.gold() + "% D:" + nextDist.diamond() + "%"
-			));
+		boolean armorMaxed = armorLevel >= GuardPlayerUpgrades.MAX_ARMOR_LEVEL;
+		List<Component> armorLines = new ArrayList<>();
+		armorLines.add(line(key("level", armorLevel, GuardPlayerUpgrades.MAX_ARMOR_LEVEL), ChatFormatting.GRAY));
+		armorLines.add(costLine(upgrades.getArmorUpgradeCostForLevel(armorLevel), creativeMode, armorMaxed));
+		armorLines.add(line(key("now", armorOdds(upgrades.getArmorDistribution())), ChatFormatting.WHITE));
+		if (!armorMaxed) {
+			GuardPlayerUpgrades next = upgrades.copy();
+			next.upgradeArmor();
+			armorLines.add(line(key("next", armorOdds(next.getArmorDistribution())), ChatFormatting.AQUA));
 		}
+		this.setItem(SLOT_UPGRADE_ARMOR, card(Items.IRON_CHESTPLATE, key("armor.title"), ChatFormatting.AQUA, armorLines.toArray(Component[]::new)));
 
 		int weaponLevel = upgrades.getWeaponLevel();
-		if (weaponLevel >= GuardPlayerUpgrades.MAX_WEAPON_LEVEL) {
-			this.setItem(SLOT_UPGRADE_WEAPON, this.card(
-				Items.IRON_SWORD,
-				"Upgrade Weapons",
-				ChatFormatting.RED,
-				"Maxed",
-				"Current: " + describeWeaponSummary(weaponLevel)
-			));
-		} else {
-			int weaponCost = upgrades.getWeaponUpgradeCostForLevel(weaponLevel);
-			String weaponCostText = creativeMode ? "Cost: Free" : "Cost: " + weaponCost + " emerald block(s)";
-			this.setItem(SLOT_UPGRADE_WEAPON, this.card(
-				Items.IRON_SWORD,
-				"Upgrade Weapons",
-				ChatFormatting.RED,
-				weaponCostText,
-				"Current: " + describeWeaponSummary(weaponLevel),
-				"Upgraded: " + describeWeaponSummary(weaponLevel + 1)
-			));
+		boolean weaponMaxed = weaponLevel >= GuardPlayerUpgrades.MAX_WEAPON_LEVEL;
+		List<Component> weaponLines = new ArrayList<>();
+		weaponLines.add(line(key("level", weaponLevel, GuardPlayerUpgrades.MAX_WEAPON_LEVEL), ChatFormatting.GRAY));
+		weaponLines.add(costLine(upgrades.getWeaponUpgradeCostForLevel(weaponLevel), creativeMode, weaponMaxed));
+		weaponLines.add(line(key("now", key("weapons", swordName(weaponLevel), bowName(weaponLevel))), ChatFormatting.WHITE));
+		if (!weaponMaxed) {
+			weaponLines.add(line(key("next", key("weapons", swordName(weaponLevel + 1), bowName(weaponLevel + 1))), ChatFormatting.RED));
 		}
+		this.setItem(SLOT_UPGRADE_WEAPON, card(Items.IRON_SWORD, key("weapon.title"), ChatFormatting.RED, weaponLines.toArray(Component[]::new)));
 
-		if (upgrades.getSupportLevel() >= GuardPlayerUpgrades.MAX_SUPPORT_LEVEL) {
-			this.setItem(SLOT_UPGRADE_HEAL, this.card(
-				Items.GOLDEN_APPLE,
-				"Support Upgrade",
-				ChatFormatting.LIGHT_PURPLE,
-				"Maxed",
-				"Heal: 1 heart / 1s",
-				"Shield: Enabled"
-			));
-		} else {
-			int supportCost = upgrades.getHealingUpgradeCost();
-			String supportCostText = creativeMode ? "Cost: Free" : "Cost: " + supportCost + " emerald block(s)";
-			String nextLabel = switch (upgrades.getSupportLevel()) {
-				case 0 -> "Next: Heal 1 heart / 2.5s";
-				case 1 -> "Next: Shield";
-				default -> "Next: Heal 1 heart / 1s";
-			};
-			this.setItem(SLOT_UPGRADE_HEAL, this.card(
-				Items.GOLDEN_APPLE,
-				"Support Upgrade",
-				ChatFormatting.LIGHT_PURPLE,
-				supportCostText,
-				nextLabel,
-				"Upgrades in 3 stages."
-			));
+		int supportLevel = upgrades.getSupportLevel();
+		boolean supportMaxed = supportLevel >= GuardPlayerUpgrades.MAX_SUPPORT_LEVEL;
+		List<Component> supportLines = new ArrayList<>();
+		supportLines.add(line(key("level", supportLevel, GuardPlayerUpgrades.MAX_SUPPORT_LEVEL), ChatFormatting.GRAY));
+		supportLines.add(costLine(upgrades.getHealingUpgradeCost(), creativeMode, supportMaxed));
+		supportLines.add(line(key("now", key("support", healingText(supportLevel), shieldText(supportLevel))), ChatFormatting.WHITE));
+		if (!supportMaxed) {
+			supportLines.add(line(key("next", key("support", healingText(supportLevel + 1), shieldText(supportLevel + 1))),
+				ChatFormatting.LIGHT_PURPLE));
 		}
+		this.setItem(SLOT_UPGRADE_HEAL, card(Items.GOLDEN_APPLE, key("support.title"), ChatFormatting.LIGHT_PURPLE,
+			supportLines.toArray(Component[]::new)));
 
-		this.setItem(SLOT_STATUS, this.card(
-			Items.COMPASS,
-			"Current Levels",
-			ChatFormatting.YELLOW,
-			"Armor Lv: " + upgrades.getArmorLevel() + "/" + GuardPlayerUpgrades.MAX_ARMOR_LEVEL,
-			"Weapon Lv: " + upgrades.getWeaponLevel() + "/" + GuardPlayerUpgrades.MAX_WEAPON_LEVEL,
-			"Support Lv: " + upgrades.getSupportLevel() + "/" + GuardPlayerUpgrades.MAX_SUPPORT_LEVEL
-		));
+		this.setItem(SLOT_STATUS, card(Items.COMPASS, key("status.title"), ChatFormatting.YELLOW,
+			line(key("status.armor", armorLevel, GuardPlayerUpgrades.MAX_ARMOR_LEVEL), ChatFormatting.GRAY),
+			line(key("status.weapon", weaponLevel, GuardPlayerUpgrades.MAX_WEAPON_LEVEL), ChatFormatting.GRAY),
+			line(key("status.support", supportLevel, GuardPlayerUpgrades.MAX_SUPPORT_LEVEL), ChatFormatting.GRAY),
+			line(key("status.hire_level", upgrades.getHireLevel()), ChatFormatting.GRAY)));
 	}
 
-	private List<String> buildCurrentGuardStats(GuardPlayerUpgrades upgrades) {
-		List<String> lines = new ArrayList<>();
-		GuardPlayerUpgrades.ArmorDistribution dist = upgrades.getArmorDistribution();
-		lines.add("\u00A77Armor odds: \u00A7fL:" + dist.leather() + "% I:" + dist.iron() + "% G:" + dist.gold() + "% D:" + dist.diamond() + "%");
-		lines.add("\u00A77Sword: \u00A7f" + describeSwordLevel(upgrades.getWeaponLevel()));
-		lines.add("\u00A77Bow: \u00A7f" + describeBowLevel(upgrades.getWeaponLevel()));
-		lines.add("\u00A77Healing: \u00A7f" + (upgrades.hasHealingUpgrade() ? "Enabled" : "Disabled"));
-		lines.add("\u00A77Shield: \u00A7f" + (upgrades.hasShieldUpgrade() ? "Enabled" : "Disabled"));
-		return lines;
+	private static MutableComponent key(String suffix, Object... args) {
+		return Component.translatable("shop.guardvillagers." + suffix, args);
 	}
 
-	private String describeWeaponSummary(int level) {
-		return "Sword: " + describeSwordLevel(level) + " | Bow: " + describeBowLevel(level);
+	/** Lore and names default to italic purple; every line sets its own color and turns italics off. */
+	private static Component line(MutableComponent text, ChatFormatting color) {
+		return text.withStyle(style -> style.withItalic(false).withColor(color));
 	}
 
-	private String describeSwordLevel(int level) {
-		return switch (Math.max(0, level)) {
-			case 0 -> "Stone";
-			case 1 -> "Iron";
-			case 2 -> "Diamond";
-			case 3 -> "Diamond (Sharp III)";
-			case 4 -> "Diamond (Sharp IV)";
-			case 5 -> "Diamond (Sharp V)";
-			default -> "Diamond (Sharp V)";
-		};
+	private static Component costLine(int cost, boolean creativeMode, boolean maxed) {
+		if (maxed) {
+			return line(key("maxed"), ChatFormatting.GOLD);
+		}
+		return creativeMode ? line(key("cost.free"), ChatFormatting.GREEN) : line(key("cost", cost), ChatFormatting.YELLOW);
 	}
 
-	private String describeBowLevel(int level) {
-		int powerLevel = Math.min(5, Math.max(1, level + 1));
-		return "Power " + toRoman(powerLevel);
+	private static Component armorOdds(GuardPlayerUpgrades.ArmorDistribution d) {
+		return key("armor.odds", d.leather(), d.iron(), d.gold(), d.diamond());
 	}
 
-	private String toRoman(int value) {
-		return switch (value) {
-			case 1 -> "I";
-			case 2 -> "II";
-			case 3 -> "III";
-			case 4 -> "IV";
-			default -> "V";
-		};
+	private static Component swordName(int weaponLevel) {
+		return key("sword." + Math.max(0, Math.min(GuardPlayerUpgrades.MAX_WEAPON_LEVEL, weaponLevel)));
 	}
 
-	private boolean isInteractiveSlot(int slot) {
+	private static Component bowName(int weaponLevel) {
+		return key("bow", Math.min(5, Math.max(1, weaponLevel + 1)));
+	}
+
+	private static Component healingText(int supportLevel) {
+		return key("healing." + Math.max(0, Math.min(GuardPlayerUpgrades.MAX_SUPPORT_LEVEL, supportLevel)));
+	}
+
+	private static Component shieldText(int supportLevel) {
+		return key(supportLevel >= 2 ? "shield.on" : "shield.off");
+	}
+
+	private static boolean isInteractiveSlot(int slot) {
 		return slot == SLOT_INFO
 			|| slot == SLOT_BUY_GUARD
 			|| slot == SLOT_UPGRADE_ARMOR
@@ -291,23 +244,20 @@ public class GuardShopInventory extends SimpleContainer {
 			|| slot == SLOT_STATUS;
 	}
 
-	private ItemStack decorativePane(int slot) {
-		Item pane = (slot % 2 == 0) ? Items.BLACK_STAINED_GLASS_PANE : Items.GRAY_STAINED_GLASS_PANE;
-		ItemStack stack = new ItemStack(pane);
-		stack.set(DataComponents.CUSTOM_NAME, Component.literal(" "));
+	private static ItemStack filler(int slot) {
+		ItemStack stack = new ItemStack((slot % 2 == 0) ? Items.BLACK_STAINED_GLASS_PANE : Items.GRAY_STAINED_GLASS_PANE);
+		stack.set(DataComponents.TOOLTIP_DISPLAY, new TooltipDisplay(true, ReferenceSortedSets.emptySet()));
 		return stack;
 	}
 
-	private ItemStack card(Item item, String title, ChatFormatting titleColor, String... lines) {
+	private static ItemStack card(Item item, MutableComponent title, ChatFormatting titleColor, Component... lines) {
 		ItemStack stack = new ItemStack(item);
-		stack.set(DataComponents.CUSTOM_NAME, Component.literal(title).withStyle(titleColor, ChatFormatting.BOLD));
-		if (lines.length > 0) {
-			List<Component> loreLines = new ArrayList<>();
-			for (String line : lines) {
-				loreLines.add(Component.literal(line));
-			}
-			stack.set(DataComponents.LORE, new ItemLore(loreLines));
-		}
+		stack.set(DataComponents.CUSTOM_NAME, title.withStyle(style -> style.withItalic(false).withBold(true).withColor(titleColor)));
+		stack.set(DataComponents.LORE, new ItemLore(List.of(lines)));
+		// Display items are not equipment: hide the vanilla "When on Chest: +6 Armor" style lines.
+		stack.set(DataComponents.TOOLTIP_DISPLAY, TooltipDisplay.DEFAULT
+			.withHidden(DataComponents.ATTRIBUTE_MODIFIERS, true)
+			.withHidden(DataComponents.ENCHANTMENTS, true));
 		return stack;
 	}
 }
