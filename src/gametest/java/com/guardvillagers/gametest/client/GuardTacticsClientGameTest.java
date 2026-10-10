@@ -39,6 +39,18 @@ public class GuardTacticsClientGameTest implements FabricClientGameTest {
 						feet.getZ() + offsets[i][1] + 0.5D, 0.0F, gear, owner));
 			}
 
+			// Fixed names so rows sort the same every run; typical first + last names, one long one.
+			String[] names = {"Abigail Henderson", "Felix Carter", "Liam Ortiz", "Isabella Moreno", "Crystal Hayes",
+					"Elijah Brooks", "Leah Kim"};
+			singleplayer.getServer().runOnServer(server -> {
+				for (int i = 0; i < guards.size(); i++) {
+					net.minecraft.world.entity.Entity guard = server.overworld().getEntity(guards.get(i));
+					if (guard != null) {
+						guard.setCustomName(net.minecraft.network.chat.Component.literal(names[i]));
+					}
+				}
+			});
+
 			// Groups through the real player commands, including one long name to check text overflow.
 			ClientTestSupport.playerCommand(context, "guards groups add");
 			ClientTestSupport.playerCommand(context, "guards groups add");
@@ -51,6 +63,9 @@ public class GuardTacticsClientGameTest implements FabricClientGameTest {
 			ClientTestSupport.playerCommand(context, "guards groups assign " + guards.get(1) + " 2");
 			ClientTestSupport.playerCommand(context, "guards groups assign " + guards.get(3) + " 2");
 			ClientTestSupport.playerCommand(context, "guards groups assign " + guards.get(4) + " 3");
+			// Ranks through the uuid form of /guards appoint, the same command the screen's rank menu sends.
+			ClientTestSupport.playerCommand(context, "guards appoint commander " + guards.get(0));
+			ClientTestSupport.playerCommand(context, "guards appoint captain " + guards.get(1));
 			context.waitTicks(10);
 
 			// Tactics map.
@@ -114,8 +129,57 @@ public class GuardTacticsClientGameTest implements FabricClientGameTest {
 			context.waitTicks(3);
 			context.takeScreenshot("groups_view_hover");
 
+			// Rank interactions. Window pixels for the default 854x480 test window at GUI scale 2; rows from the
+			// groups_view screenshot: Vanguard = Abigail (commander), Liam; Archers = Felix (captain), Isabella.
+			boolean defaultWindow = context.computeOnClient(client ->
+					client.getWindow().getWidth() == 854 && client.getWindow().getHeight() == 480
+							&& client.getWindow().getGuiScale() == 2);
+			if (defaultWindow) {
+				input.setCursorPos(566, 110);
+				context.waitTicks(3);
+				context.takeScreenshot("groups_rank_badge_tooltip");
+
+				input.setCursorPos(700, 234);
+				context.waitTicks(3);
+				context.takeScreenshot("groups_guard_tooltip");
+
+				// Right-click Isabella: the rank menu opens at the cursor (flipped left at the panel edge).
+				input.pressMouse(1);
+				context.waitTicks(3);
+				context.takeScreenshot("groups_rank_menu");
+
+				// "Make captain" is the second item: the menu is 96 GUI px wide, items start 13 px below its top.
+				input.setCursorPos(2 * (350 - 96) + 60, 2 * (117 + 13 + 12) + 12);
+				context.waitTicks(2);
+				context.takeScreenshot("groups_rank_menu_hover");
+				input.pressMouse(0);
+				context.waitTicks(15);
+				input.setCursorPos(300, 20);
+				context.waitTicks(2);
+				context.takeScreenshot("groups_captain_appointed");
+
+				// Collapse Vanguard to chips: the commander's star sits at the chip's right edge.
+				input.setCursorPos(640, 81);
+				input.pressMouse(0);
+				context.waitTicks(3);
+				input.setCursorPos(300, 20);
+				context.waitTicks(2);
+				context.takeScreenshot("groups_collapsed_chips");
+			}
+
 			context.runOnClient(client -> client.setScreen(null));
 			context.waitTicks(3);
+
+			// Nameplates: the commander under the crosshair (star + stats label), then a captain (chevrons).
+			ClientTestSupport.clearOverlays(context);
+			ClientTestSupport.placeCamera(context, singleplayer, feet.getX() + offsets[0][0] + 0.5D, feet.getY(),
+					feet.getZ() + offsets[0][1] + 0.5D - 2.5D, 0.0F, 5.0F);
+			context.waitTicks(5);
+			context.takeScreenshot("nameplate_commander");
+			ClientTestSupport.placeCamera(context, singleplayer, feet.getX() + offsets[1][0] + 0.5D, feet.getY(),
+					feet.getZ() + offsets[1][1] + 0.5D - 3.5D, 0.0F, -5.0F);
+			context.waitTicks(5);
+			context.takeScreenshot("nameplate_captain");
 		}
 	}
 }

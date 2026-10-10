@@ -69,6 +69,14 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private static final int DROP_ZONE_BACKGROUND = 0x18FFD166;
 	private static final int SCROLLBAR_TRACK_COLOR = 0x55394656;
 	private static final int PENDING_MARKER = 0xFFFFD36B;
+	private static final int RANK_COMMANDER_COLOR = 0xFFFFC83D;
+	private static final int RANK_CAPTAIN_COLOR = 0xFFC9D3DE;
+	private static final int RANK_SHADOW = 0xFF10161E;
+	private static final int LEVEL_COLOR = 0xFFD9C27A;
+	private static final int RANK_BADGE_SIZE = 5;
+	// 5x5 pixel art, one string per row: a star for the commander, a chevron for captains.
+	private static final String[] STAR_PIXELS = {"..#..", "#####", ".###.", ".#.#.", "#...#"};
+	private static final String[] CHEVRON_PIXELS = {"..#..", ".###.", "##.##", "#...#", "....."};
 	private static final int NO_COLOR_STRIPE = 0xFF4A5566;
 
 	// Button styles (fill, hover fill, border)
@@ -95,7 +103,8 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private static final int CHIP_WIDTH = 36;
 	private static final int CHIP_HEIGHT = 11;
 	private static final int CHIP_GAP = 2;
-	private static final int TRAY_CHIP_WIDTH = 52;
+	// Tray chips stretch to fill the row; this is the narrowest they get before wrapping to fewer per row.
+	private static final int TRAY_CHIP_MIN_WIDTH = 52;
 	private static final int TRAY_CHIP_HEIGHT = 13;
 	private static final int GROUP_GAP = 3;
 	private static final int WHEEL_SCROLL_PIXELS = 20;
@@ -115,7 +124,6 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private static final int MAX_BAR_SWATCHES = 10;
 	private static final Pattern GENERIC_GROUP_NAME = Pattern.compile("Role(\\s+\\d+)?");
 
-	private static final ItemStack GUARD_HEAD_ICON = new ItemStack(Items.PLAYER_HEAD);
 	private static final ItemStack SWORD_ICON = new ItemStack(Items.IRON_SWORD);
 	private static final ItemStack BOW_ICON = new ItemStack(Items.BOW);
 
@@ -175,6 +183,13 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private static final Component HELP_TITLE_GROUPS = tr("help.title.groups");
 	private static final Component RENAME_HINT = tr("rename.hint");
 	private static final Component GUARD_DRAG_HINT = tr("guard.drag_hint").withStyle(ChatFormatting.DARK_GRAY);
+	private static final Component GUARD_MENU_HINT = tr("guard.menu_hint").withStyle(ChatFormatting.DARK_GRAY);
+	private static final Component RANK_COMMANDER = tr("rank.commander");
+	private static final Component RANK_CAPTAIN = tr("rank.captain");
+	private static final List<Component> TOOLTIP_RANK_COMMANDER = List.of(RANK_COMMANDER.copy().withStyle(ChatFormatting.GOLD));
+	private static final List<Component> TOOLTIP_RANK_CAPTAIN = List.of(RANK_CAPTAIN.copy().withStyle(ChatFormatting.GRAY));
+	private static final Component MENU_MAKE_COMMANDER = tr("menu.make_commander");
+	private static final Component MENU_MAKE_CAPTAIN = tr("menu.make_captain");
 	private static final Component CHUNK_HINT = tr("chunk.hint").withStyle(ChatFormatting.DARK_GRAY);
 	private static final List<Component> TOOLTIP_HELP = List.of(tr("help.tooltip"));
 	private static final List<Component> TOOLTIP_CLOSE = List.of(tr("close.tooltip"));
@@ -199,7 +214,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private static final Component[][] HELP_GROUPS = {
 		helpRow("groups.drag"), helpRow("groups.unassign"), helpRow("groups.new"), helpRow("groups.collapse"),
 		helpRow("groups.rename"), helpRow("groups.color"), helpRow("groups.clearcolor"), helpRow("groups.orders"),
-		helpRow("groups.save")
+		helpRow("groups.rank"), helpRow("groups.save")
 	};
 	private static final Component HELP_NOTE_MAP = tr("help.zones.note");
 	private static final Component HELP_NOTE_GROUPS = tr("help.groups.note");
@@ -218,6 +233,14 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private boolean paletteOpen;
 	private boolean followMenuOpen;
 	private int orderGroupRow = -1;
+	// Right-click rank menu on a guard card; a snapshot, since the roster entry is replaced on every sync.
+	private ClientGuardRosterStore.GuardRosterEntry guardMenuGuard;
+	private int guardMenuGroup;
+	private int guardMenuX;
+	private int guardMenuY;
+	// Rank badge position of the card being drawn, picked up by addCardHit for the badge tooltip.
+	private int drawnBadgeX = Integer.MIN_VALUE;
+	private int drawnBadgeY;
 
 	// Layout
 	private int panelX;
@@ -399,6 +422,28 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		return available <= 0 ? "" : font.plainSubstrByWidth(text, available) + "...";
 	}
 
+	/**
+	 * Shortens "Abigail Henderson" in readable steps instead of cutting mid-word: the full name, then "Abigail H.",
+	 * then "Abigail", and only then an ellipsis.
+	 */
+	static String fitName(Font font, String name, int maxWidth) {
+		if (font.width(name) <= maxWidth) {
+			return name;
+		}
+		int space = name.indexOf(' ');
+		if (space > 0 && space + 1 < name.length()) {
+			String first = name.substring(0, space);
+			String initial = first + " " + name.charAt(space + 1) + ".";
+			if (font.width(initial) <= maxWidth) {
+				return initial;
+			}
+			if (font.width(first) <= maxWidth) {
+				return first;
+			}
+		}
+		return ellipsize(font, name, maxWidth);
+	}
+
 	static String levelText(int level) {
 		int index = Mth.clamp(level, 0, 999);
 		if (index >= levelTextCache.length) {
@@ -479,7 +524,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		boolean overlayOpen = this.showUnsavedDialog || this.helpVisible;
 		int contentMouseX = overlayOpen ? -1 : mouseX;
 		int contentMouseY = overlayOpen ? -1 : mouseY;
-		boolean popupOpen = this.paletteOpen || this.followMenuOpen;
+		boolean popupOpen = this.paletteOpen || this.followMenuOpen || this.guardMenuGuard != null;
 		int underPopupX = popupOpen ? -1 : contentMouseX;
 		int underPopupY = popupOpen ? -1 : contentMouseY;
 
@@ -500,6 +545,9 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		}
 		if (this.followMenuOpen) {
 			this.renderFollowMenu(graphics, contentMouseX, contentMouseY);
+		}
+		if (this.guardMenuGuard != null) {
+			this.renderGuardMenu(graphics, contentMouseX, contentMouseY);
 		}
 
 		if (this.editingRow >= 0 && this.groupRenameField != null && !this.groupRenameField.isVisible()) {
@@ -546,6 +594,10 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			this.handleFollowMenuClick(mouseX, mouseY);
 			return true;
 		}
+		if (this.guardMenuGuard != null) {
+			this.handleGuardMenuClick(mouseX, mouseY);
+			return true;
+		}
 
 		if (this.groupRenameField != null && this.groupRenameField.isVisible()) {
 			if (this.isInsideRenameField(mouseX, mouseY)) {
@@ -587,7 +639,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 	@Override
 	public boolean mouseDragged(MouseButtonEvent click, double deltaX, double deltaY) {
-		if (this.showUnsavedDialog || this.helpVisible || this.paletteOpen || this.followMenuOpen) {
+		if (this.showUnsavedDialog || this.helpVisible || this.paletteOpen || this.followMenuOpen || this.guardMenuGuard != null) {
 			return true;
 		}
 		if (this.dragHandler.isArmed()) {
@@ -626,7 +678,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 	@Override
 	public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
-		if (this.showUnsavedDialog || this.helpVisible || this.paletteOpen || this.followMenuOpen) {
+		if (this.showUnsavedDialog || this.helpVisible || this.paletteOpen || this.followMenuOpen || this.guardMenuGuard != null) {
 			return true;
 		}
 		if (this.contains(this.sideX, this.sideY, this.sideW, this.sideH, mouseX, mouseY)) {
@@ -674,9 +726,10 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 				this.dragHandler.cancel();
 				return true;
 			}
-			if (this.paletteOpen || this.followMenuOpen) {
+			if (this.paletteOpen || this.followMenuOpen || this.guardMenuGuard != null) {
 				this.paletteOpen = false;
 				this.followMenuOpen = false;
+				this.guardMenuGuard = null;
 				return true;
 			}
 			if (this.helpVisible) {
@@ -1268,6 +1321,63 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		}
 	}
 
+	private static final int GUARD_MENU_WIDTH = 96;
+	private static final int GUARD_MENU_ITEM_HEIGHT = 12;
+
+	/** Menu box {x, y, w, h}: opens at the click, flipped and clamped so it stays inside the panel. */
+	private int[] guardMenuBox() {
+		int h = 13 + 2 * GUARD_MENU_ITEM_HEIGHT + 3;
+		int w = GUARD_MENU_WIDTH;
+		int x = this.guardMenuX + w > this.panelX + this.panelWidth - 2 ? this.guardMenuX - w : this.guardMenuX;
+		int y = this.guardMenuY + h > this.panelY + this.panelHeight - 2 ? this.guardMenuY - h : this.guardMenuY;
+		return new int[] {Math.max(this.panelX + 2, x), Math.max(this.panelY + 2, y), w, h};
+	}
+
+	/** Whether item 0 (make commander) or 1 (make captain) applies to the guard the menu was opened on. */
+	private static boolean guardMenuItemEnabled(ClientGuardRosterStore.GuardRosterEntry guard, int group, int item) {
+		if (guard == null || !guard.loaded()) {
+			return false;
+		}
+		return item == 0 ? guard.rank() != 2 : guard.rank() != 1 && group >= 0;
+	}
+
+	private void renderGuardMenu(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+		int[] box = this.guardMenuBox();
+		int x = box[0];
+		int y = box[1];
+		int w = box[2];
+		graphics.fill(x, y, x + w, y + box[3], 0xF60F151D);
+		graphics.outline(x, y, w, box[3], ACCENT_GROUPS);
+		graphics.text(this.font, ellipsize(this.font, this.guardMenuGuard.displayName(), w - 8), x + 4, y + 3, TEXT_MUTED, false);
+		for (int item = 0; item < 2; item++) {
+			int iy = y + 13 + item * GUARD_MENU_ITEM_HEIGHT;
+			boolean enabled = guardMenuItemEnabled(this.guardMenuGuard, this.guardMenuGroup, item);
+			if (enabled && this.contains(x + 1, iy, w - 2, GUARD_MENU_ITEM_HEIGHT, mouseX, mouseY)) {
+				graphics.fill(x + 1, iy, x + w - 1, iy + GUARD_MENU_ITEM_HEIGHT, HEADER_ROW_HOVER_BACKGROUND);
+			}
+			this.drawRankBadge(graphics, item == 0 ? 2 : 1, x + 4, iy + 3);
+			graphics.text(this.font, item == 0 ? MENU_MAKE_COMMANDER : MENU_MAKE_CAPTAIN, x + 12, iy + 2, enabled ? TEXT_PRIMARY : TEXT_MUTED, false);
+		}
+		this.drawnBadgeX = Integer.MIN_VALUE;
+	}
+
+	private void handleGuardMenuClick(double mouseX, double mouseY) {
+		ClientGuardRosterStore.GuardRosterEntry guard = this.guardMenuGuard;
+		int group = this.guardMenuGroup;
+		int[] box = this.guardMenuBox();
+		this.guardMenuGuard = null;
+		int item = (int) Math.floor((mouseY - box[1] - 13) / GUARD_MENU_ITEM_HEIGHT);
+		if (!this.contains(box[0], box[1], box[2], box[3], mouseX, mouseY) || item < 0 || item > 1
+			|| !guardMenuItemEnabled(guard, group, item)) {
+			return;
+		}
+		boolean commander = item == 0;
+		this.sendOrder(
+			"guards appoint " + (commander ? "commander " : "captain ") + guard.guardUuid(),
+			Component.translatable(KEY + (commander ? "status.appoint_commander" : "status.appoint_captain"), guard.displayName())
+		);
+	}
+
 	// ---------------------------------------------------------------- orders
 
 	private void orderGroup(int row, boolean follow) {
@@ -1492,7 +1602,12 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	}
 
 	private int trayPerRow(int listW) {
-		return Math.max(1, (listW - 4 + CHIP_GAP) / (TRAY_CHIP_WIDTH + CHIP_GAP));
+		return Math.max(1, (listW - 4 + CHIP_GAP) / (TRAY_CHIP_MIN_WIDTH + CHIP_GAP));
+	}
+
+	private int trayChipWidth(int listW) {
+		int perRow = this.trayPerRow(listW);
+		return Math.max(TRAY_CHIP_MIN_WIDTH, (listW - 4 - (perRow - 1) * CHIP_GAP) / perRow);
 	}
 
 	private int trayHeight(int listW) {
@@ -1633,22 +1748,30 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			return;
 		}
 		int perRow = this.trayPerRow(w);
+		int chipW = this.trayChipWidth(w);
 		for (int i = 0; i < n; i++) {
-			int cx = x + 2 + (i % perRow) * (TRAY_CHIP_WIDTH + CHIP_GAP);
+			int cx = x + 2 + (i % perRow) * (chipW + CHIP_GAP);
 			int cyy = trayY + 2 + (i / perRow) * (TRAY_CHIP_HEIGHT + CHIP_GAP);
 			ClientGuardRosterStore.GuardRosterEntry guard = this.unassignedList.get(i);
-			this.renderTrayChip(graphics, guard, cx, cyy, mouseX, mouseY);
-			this.addCardHit(guard, cx, cyy, TRAY_CHIP_WIDTH, TRAY_CHIP_HEIGHT, -1);
+			this.renderTrayChip(graphics, guard, cx, cyy, chipW, mouseX, mouseY);
+			this.addCardHit(guard, cx, cyy, chipW, TRAY_CHIP_HEIGHT, -1);
 		}
 	}
 
+	/**
+	 * One guard in an expanded group. The name gets the room first: from the right, the order letter, level number
+	 * and a short health bar are fixed; the distance only shows when the full name still fits beside it.
+	 */
 	private void renderMemberRow(GuiGraphicsExtractor graphics, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int w, int mouseX, int mouseY) {
 		boolean hovered = this.cardHovered(x, y, w, MEMBER_ROW_HEIGHT, mouseX, mouseY);
 		graphics.fill(x, y, x + w, y + MEMBER_ROW_HEIGHT, hovered ? CARD_HOVER_BACKGROUND : CARD_BACKGROUND);
 		graphics.outline(x, y, w, MEMBER_ROW_HEIGHT, hovered ? CARD_HOVER_BORDER : ROW_BORDER);
 		this.drawPendingMarker(graphics, guard, x, y, MEMBER_ROW_HEIGHT);
-		this.drawSmallItem(graphics, GUARD_HEAD_ICON, x + 2, y + 3);
-		this.drawSmallItem(graphics, roleIcon(guard), x + 12, y + 3);
+		this.drawSmallItem(graphics, roleIcon(guard), x + 2, y + 3);
+		int nameX = x + 12;
+		if (this.drawRankBadge(graphics, guard.rank(), nameX, y + 4)) {
+			nameX += RANK_BADGE_SIZE + 2;
+		}
 
 		CardText text = this.cardText(guard);
 		if (!guard.loaded()) {
@@ -1656,66 +1779,100 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			String notLoaded = text.notLoaded(this.font);
 			int notLoadedWidth = this.font.width(notLoaded);
 			graphics.text(this.font, notLoaded, x + w - 3 - notLoadedWidth, y + 3, TEXT_MUTED, false);
-			graphics.text(this.font, text.rowName(this.font, x + w - 6 - notLoadedWidth - (x + 22)), x + 22, y + 3, TEXT_MUTED, false);
+			graphics.text(this.font, text.rowName(this.font, x + w - 6 - notLoadedWidth - nameX), nameX, y + 3, TEXT_MUTED, false);
 			graphics.fill(x, y, x + w, y + MEMBER_ROW_HEIGHT, 0x660E141B);
 			this.dimIfDragSource(graphics, guard, x, y, w, MEMBER_ROW_HEIGHT);
 			return;
 		}
-		boolean showDistance = w >= 130 && !text.distance.isEmpty();
-		int barW = w >= 130 ? 30 : 16;
+		String badge = orderBadge(guard);
+		int badgeWidth = badge.isEmpty() ? 0 : this.font.width(badge) + 3;
+		int levelWidth = this.font.width(text.levelNumber);
+		int nameRoom = x + w - 3 - levelWidth - 3 - badgeWidth - nameX - 3;
+		// Health bar: 16px, down to 8px when the name would otherwise be shortened.
+		int barW = nameRoom - 19 >= text.nameWidth ? 16 : 8;
+		nameRoom -= barW + 3;
+		boolean showDistance = !text.distance.isEmpty() && nameRoom - text.distanceWidth - 4 >= text.nameWidth;
+
 		int right = x + w - 3;
 		if (showDistance) {
 			graphics.text(this.font, text.distance, right - text.distanceWidth, y + 3, TEXT_MUTED, false);
-			right -= text.distanceWidth + 3;
+			right -= text.distanceWidth + 4;
 		}
 		this.drawHealthBar(graphics, guard, right - barW, y + 6, barW, 2);
 		right -= barW + 3;
-		String level = levelText(guard.level());
-		int levelWidth = this.font.width(level);
-		graphics.text(this.font, level, right - levelWidth, y + 3, TEXT_SECONDARY, false);
+		graphics.text(this.font, text.levelNumber, right - levelWidth, y + 3, LEVEL_COLOR, false);
 		right -= levelWidth + 3;
 		// One-letter order badge: F follow, S stay, H hold (full words in the tooltip).
-		String badge = orderBadge(guard);
 		if (!badge.isEmpty()) {
-			int badgeWidth = this.font.width(badge);
-			graphics.text(this.font, badge, right - badgeWidth, y + 3, orderColor(guard), false);
-			right -= badgeWidth + 3;
+			graphics.text(this.font, badge, right - badgeWidth + 3, y + 3, orderColor(guard), false);
+			right -= badgeWidth;
 		}
-		graphics.text(this.font, text.rowName(this.font, right - (x + 22)), x + 22, y + 3, TEXT_PRIMARY, false);
+		graphics.text(this.font, text.rowName(this.font, right - nameX), nameX, y + 3, TEXT_PRIMARY, false);
 		this.dimIfDragSource(graphics, guard, x, y, w, MEMBER_ROW_HEIGHT);
 	}
 
+	// Collapsed group chip: role icon, level and rank badge on top, the health bar along the bottom edge.
 	private void renderChip(GuiGraphicsExtractor graphics, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int mouseX, int mouseY) {
 		boolean hovered = this.cardHovered(x, y, CHIP_WIDTH, CHIP_HEIGHT, mouseX, mouseY);
 		graphics.fill(x, y, x + CHIP_WIDTH, y + CHIP_HEIGHT, hovered ? CARD_HOVER_BACKGROUND : CARD_BACKGROUND);
 		graphics.outline(x, y, CHIP_WIDTH, CHIP_HEIGHT, hovered ? CARD_HOVER_BORDER : ROW_BORDER);
 		this.drawPendingMarker(graphics, guard, x, y, CHIP_HEIGHT);
-		this.drawSmallItem(graphics, roleIcon(guard), x + 2, y + 2);
-		graphics.text(this.font, guard.loaded() ? this.cardText(guard).levelNumber : "?", x + 12, y + 2, guard.loaded() ? TEXT_PRIMARY : TEXT_MUTED, false);
-		this.drawHealthBar(graphics, guard, x + 24, y + 5, 10, 2);
+		this.drawSmallItem(graphics, roleIcon(guard), x + 2, y + 1);
+		graphics.text(this.font, guard.loaded() ? this.cardText(guard).levelNumber : "?", x + 12, y + 1, guard.loaded() ? LEVEL_COLOR : TEXT_MUTED, false);
+		this.drawRankBadge(graphics, guard.rank(), x + CHIP_WIDTH - 3 - RANK_BADGE_SIZE, y + 2);
+		this.drawHealthBar(graphics, guard, x + 2, y + CHIP_HEIGHT - 2, CHIP_WIDTH - 4, 1);
 		if (!guard.loaded()) {
 			graphics.fill(x, y, x + CHIP_WIDTH, y + CHIP_HEIGHT, 0x660E141B);
 		}
 		this.dimIfDragSource(graphics, guard, x, y, CHIP_WIDTH, CHIP_HEIGHT);
 	}
 
-	private void renderTrayChip(GuiGraphicsExtractor graphics, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int mouseX, int mouseY) {
-		boolean hovered = this.cardHovered(x, y, TRAY_CHIP_WIDTH, TRAY_CHIP_HEIGHT, mouseX, mouseY);
-		graphics.fill(x, y, x + TRAY_CHIP_WIDTH, y + TRAY_CHIP_HEIGHT, hovered ? CARD_HOVER_BACKGROUND : CARD_BACKGROUND);
-		graphics.outline(x, y, TRAY_CHIP_WIDTH, TRAY_CHIP_HEIGHT, hovered ? CARD_HOVER_BORDER : ROW_BORDER);
+	private void renderTrayChip(GuiGraphicsExtractor graphics, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int w, int mouseX, int mouseY) {
+		boolean hovered = this.cardHovered(x, y, w, TRAY_CHIP_HEIGHT, mouseX, mouseY);
+		graphics.fill(x, y, x + w, y + TRAY_CHIP_HEIGHT, hovered ? CARD_HOVER_BACKGROUND : CARD_BACKGROUND);
+		graphics.outline(x, y, w, TRAY_CHIP_HEIGHT, hovered ? CARD_HOVER_BORDER : ROW_BORDER);
 		this.drawPendingMarker(graphics, guard, x, y, TRAY_CHIP_HEIGHT);
-		this.drawSmallItem(graphics, GUARD_HEAD_ICON, x + 2, y + 2);
+		this.drawSmallItem(graphics, roleIcon(guard), x + 2, y + 2);
+		int nameX = x + 11;
+		if (this.drawRankBadge(graphics, guard.rank(), nameX, y + 3)) {
+			nameX += RANK_BADGE_SIZE + 2;
+		}
 		CardText text = this.cardText(guard);
-		int levelWidth = this.font.width(text.levelNumber);
+		int levelWidth = guard.loaded() ? this.font.width(text.levelNumber) : 0;
 		if (guard.loaded()) {
-			graphics.text(this.font, text.levelNumber, x + TRAY_CHIP_WIDTH - 3 - levelWidth, y + 3, TEXT_SECONDARY, false);
+			graphics.text(this.font, text.levelNumber, x + w - 3 - levelWidth, y + 3, LEVEL_COLOR, false);
 		}
-		graphics.text(this.font, text.miniName(this.font, TRAY_CHIP_WIDTH - 17 - (guard.loaded() ? levelWidth : 0)), x + 12, y + 3, guard.loaded() ? TEXT_PRIMARY : TEXT_MUTED, false);
-		this.drawHealthBar(graphics, guard, x + 12, y + TRAY_CHIP_HEIGHT - 2, TRAY_CHIP_WIDTH - 14, 1);
+		graphics.text(this.font, text.miniName(this.font, x + w - 5 - levelWidth - nameX), nameX, y + 3, guard.loaded() ? TEXT_PRIMARY : TEXT_MUTED, false);
+		this.drawHealthBar(graphics, guard, x + 2, y + TRAY_CHIP_HEIGHT - 2, w - 4, 1);
 		if (!guard.loaded()) {
-			graphics.fill(x, y, x + TRAY_CHIP_WIDTH, y + TRAY_CHIP_HEIGHT, 0x660E141B);
+			graphics.fill(x, y, x + w, y + TRAY_CHIP_HEIGHT, 0x660E141B);
 		}
-		this.dimIfDragSource(graphics, guard, x, y, TRAY_CHIP_WIDTH, TRAY_CHIP_HEIGHT);
+		this.dimIfDragSource(graphics, guard, x, y, w, TRAY_CHIP_HEIGHT);
+	}
+
+	/** Draws the rank badge with its top-left at (x, y); returns false (drawing nothing) for soldiers. */
+	private boolean drawRankBadge(GuiGraphicsExtractor graphics, int rank, int x, int y) {
+		String[] pixels = rank == 2 ? STAR_PIXELS : rank == 1 ? CHEVRON_PIXELS : null;
+		if (pixels == null) {
+			return false;
+		}
+		int color = rank == 2 ? RANK_COMMANDER_COLOR : RANK_CAPTAIN_COLOR;
+		for (int pass = 0; pass < 2; pass++) {
+			// First pass: a 1px drop shadow so the badge reads on hovered and plain cards alike.
+			int offset = pass == 0 ? 1 : 0;
+			int fill = pass == 0 ? RANK_SHADOW : color;
+			for (int row = 0; row < pixels.length; row++) {
+				String line = pixels[row];
+				for (int col = 0; col < line.length(); col++) {
+					if (line.charAt(col) == '#') {
+						graphics.fill(x + col + offset, y + row + offset, x + col + offset + 1, y + row + offset + 1, fill);
+					}
+				}
+			}
+		}
+		this.drawnBadgeX = x;
+		this.drawnBadgeY = y;
+		return true;
 	}
 
 	private boolean cardHovered(int x, int y, int w, int h, int mouseX, int mouseY) {
@@ -1875,11 +2032,17 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			return;
 		}
 
+		CardHit card = this.findCardHit(mouseX, mouseY);
+		if (card == null) {
+			return;
+		}
 		if (button == 0) {
-			CardHit card = this.findCardHit(mouseX, mouseY);
-			if (card != null) {
-				this.dragHandler.arm(card.guard, card.group, card.group < 0, mouseX, mouseY);
-			}
+			this.dragHandler.arm(card.guard, card.group, card.group < 0, mouseX, mouseY);
+		} else if (button == 1) {
+			this.guardMenuGuard = card.guard;
+			this.guardMenuGroup = card.group;
+			this.guardMenuX = (int) mouseX;
+			this.guardMenuY = (int) mouseY;
 		}
 	}
 
@@ -1976,6 +2139,10 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		}
 		CardHit card = this.findCardHit(mouseX, mouseY);
 		if (card != null) {
+			if (card.containsBadge(mouseX, mouseY)) {
+				graphics.setComponentTooltipForNextFrame(this.font, card.guard.rank() == 2 ? TOOLTIP_RANK_COMMANDER : TOOLTIP_RANK_CAPTAIN, mouseX, mouseY);
+				return;
+			}
 			this.renderGuardTooltip(graphics, card.guard, card.group, mouseX, mouseY);
 		}
 	}
@@ -1992,6 +2159,11 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private List<Component> buildGuardTooltip(ClientGuardRosterStore.GuardRosterEntry guard, int group) {
 		List<Component> tooltip = new ArrayList<>(10);
 		tooltip.add(Component.literal(guard.displayName()));
+		if (guard.rank() == 2) {
+			tooltip.add(RANK_COMMANDER.copy().withStyle(ChatFormatting.GOLD));
+		} else if (guard.rank() == 1) {
+			tooltip.add(RANK_CAPTAIN.copy().withStyle(ChatFormatting.GRAY));
+		}
 		String groupName = group < 0 ? UNASSIGNED.getString() : (group < this.groupNames.size() ? this.groupNames.get(group) : guard.groupName());
 		boolean pending = this.pendingAssignments.containsKey(guard.guardUuid());
 		if (!guard.loaded()) {
@@ -1999,6 +2171,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			tooltip.add(Component.translatable(KEY + (pending ? "guard.group_pending" : "guard.group"), groupName)
 				.withStyle(pending ? ChatFormatting.YELLOW : ChatFormatting.GRAY));
 			tooltip.add(GUARD_DRAG_HINT);
+			tooltip.add(GUARD_MENU_HINT);
 			return tooltip;
 		}
 		if (!guard.role().isEmpty()) {
@@ -2032,6 +2205,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		tooltip.add(Component.translatable(KEY + (pending ? "guard.group_pending" : "guard.group"), groupName)
 			.withStyle(pending ? ChatFormatting.YELLOW : ChatFormatting.GRAY));
 		tooltip.add(GUARD_DRAG_HINT);
+		tooltip.add(GUARD_MENU_HINT);
 		return tooltip;
 	}
 
@@ -2643,6 +2817,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			this.dragHandler.cancel();
 			this.paletteOpen = false;
 			this.followMenuOpen = false;
+			this.guardMenuGuard = null;
 			this.pendingAction = this::onClose;
 			this.showUnsavedDialog = true;
 			return;
@@ -2811,12 +2986,16 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		int top = Math.max(y, this.listTop);
 		int bottom = Math.min(y + h, this.listBottom);
 		if (bottom <= top) {
+			this.drawnBadgeX = Integer.MIN_VALUE;
 			return;
 		}
 		if (this.cardHitCount == this.cardHits.size()) {
 			this.cardHits.add(new CardHit());
 		}
 		CardHit hit = this.cardHits.get(this.cardHitCount++);
+		hit.badgeX = this.drawnBadgeX;
+		hit.badgeY = this.drawnBadgeY;
+		this.drawnBadgeX = Integer.MIN_VALUE;
 		hit.guard = guard;
 		hit.x = x;
 		hit.y = top;
@@ -2966,6 +3145,14 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 	private static final class CardHit {
 		private ClientGuardRosterStore.GuardRosterEntry guard;
+		// Top-left of the rank badge, Integer.MIN_VALUE when the guard has none.
+		private int badgeX;
+		private int badgeY;
+
+		private boolean containsBadge(double mouseX, double mouseY) {
+			return this.badgeX != Integer.MIN_VALUE && mouseX >= this.badgeX - 1 && mouseY >= this.badgeY - 1
+				&& mouseX < this.badgeX + RANK_BADGE_SIZE + 1 && mouseY < this.badgeY + RANK_BADGE_SIZE + 1;
+		}
 		private int x;
 		private int y;
 		private int w;
@@ -3040,6 +3227,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	/** Per-guard display strings, rebuilt when a new roster arrives. */
 	private static final class CardText {
 		private final String name;
+		private final int nameWidth;
 		private final String distance;
 		private final int distanceWidth;
 		private final String levelNumber;
@@ -3050,6 +3238,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 		private CardText(ClientGuardRosterStore.GuardRosterEntry guard, Font font) {
 			this.name = guard.displayName();
+			this.nameWidth = font.width(this.name);
 			this.distance = guard.distance() >= 0.0D
 				? Component.translatable(KEY + "distance", (int) Math.round(guard.distance())).getString()
 				: "";
@@ -3060,7 +3249,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		private String miniName(Font font, int width) {
 			if (width != this.miniWidth) {
 				this.miniWidth = width;
-				this.miniName = ellipsize(font, this.name, width);
+				this.miniName = fitName(font, this.name, width);
 			}
 			return this.miniName;
 		}
@@ -3077,7 +3266,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		private String rowName(Font font, int width) {
 			if (width != this.rowWidth) {
 				this.rowWidth = width;
-				this.rowName = ellipsize(font, this.name, width);
+				this.rowName = fitName(font, this.name, width);
 			}
 			return this.rowName;
 		}

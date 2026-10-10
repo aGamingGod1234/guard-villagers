@@ -101,7 +101,8 @@ public final class ClientGuardRosterStore {
 				summary.staying(),
 				summary.following(),
 				summary.holding(),
-				summary.hasHome());
+				summary.hasHome(),
+				summary.rank());
 	}
 
 	private String key(ClientTacticsDataStore.WorldContext context) {
@@ -131,7 +132,9 @@ public final class ClientGuardRosterStore {
 			boolean staying,
 			boolean following,
 			boolean holding,
-			boolean hasHome) {
+			boolean hasHome,
+			// v4: GuardRank id, 0 soldier / 1 captain / 2 commander.
+			int rank) {
 		public GuardRosterEntry {
 			displayName = displayName == null ? "" : displayName;
 			groupName = groupName == null ? "" : groupName;

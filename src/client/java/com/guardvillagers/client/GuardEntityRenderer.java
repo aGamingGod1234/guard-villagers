@@ -1,5 +1,6 @@
 package com.guardvillagers.client;
 
+import com.guardvillagers.command.hierarchy.GuardRank;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.GuardRole;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -40,6 +41,8 @@ public class GuardEntityRenderer
 			"textures/entity/guard/guard_outfit.png");
 	private static final Map<ResourceKey<VillagerType>, Identifier> TYPE_TEXTURES = new HashMap<>();
 	private static final Identifier PLAINS_TEXTURE = typeTexture(VillagerType.PLAINS);
+	private static final Component COMMANDER_MARKER = Component.literal("★ ").withStyle(ChatFormatting.GOLD);
+	private static final Component CAPTAIN_MARKER = Component.literal("» ").withStyle(ChatFormatting.GRAY);
 
 	public GuardEntityRenderer(EntityRendererProvider.Context context) {
 		super(
@@ -120,10 +123,14 @@ public class GuardEntityRenderer
 	@Override
 	protected @Nullable Component getNameTag(GuardEntity entity) {
 		Component name = super.getNameTag(entity);
+		Component marker = rankMarker(entity.getRank());
 		if (!this.isLookedAt(entity)) {
-			return name;
+			return name == null || marker == null ? name : Component.empty().append(marker).append(name);
 		}
 		MutableComponent label = Component.empty();
+		if (marker != null) {
+			label.append(marker);
+		}
 		if (name != null && entity.hasCustomName()) {
 			label.append(name).append(Component.literal("  "));
 		}
@@ -134,6 +141,15 @@ public class GuardEntityRenderer
 		ChatFormatting healthColor = ratio > 0.6F ? ChatFormatting.GREEN : ratio > 0.3F ? ChatFormatting.YELLOW : ChatFormatting.RED;
 		label.append(Component.literal("❤ " + Mth.ceil(entity.getHealth()) + "/" + Mth.ceil(maxHealth)).withStyle(healthColor));
 		return label;
+	}
+
+	/** Gold star for the commander, silver chevrons for captains, nothing for soldiers. */
+	private static @Nullable Component rankMarker(GuardRank rank) {
+		return switch (rank) {
+			case COMMANDER -> COMMANDER_MARKER;
+			case CAPTAIN -> CAPTAIN_MARKER;
+			case SOLDIER -> null;
+		};
 	}
 
 	private static String roleLabel(GuardRole role) {
