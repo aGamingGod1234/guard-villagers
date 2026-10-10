@@ -511,7 +511,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		}
 		if (!java.util.Objects.equals(previousOwner, ownerUuid)) {
 			this.setRank(GuardRank.SOLDIER);
-			if (this.level() instanceof ServerLevel) {
+			if (this.level() instanceof ServerLevel serverLevel) {
+				GuardHierarchy.onGuardLeftOwner(serverLevel.getServer(), previousOwner, this.getUUID());
 				GuardHierarchy.requestElection(previousOwner);
 				GuardHierarchy.requestElection(ownerUuid);
 			}
@@ -2350,6 +2351,9 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		}
 		if (reason.shouldDestroy()) {
 			GuardOwnershipIndex.untrack(this);
+		}
+		if (reason == Entity.RemovalReason.DISCARDED && this.level() instanceof ServerLevel serverLevel) {
+			GuardHierarchy.onGuardLeftOwner(serverLevel.getServer(), this.ownerUuid, this.getUUID());
 		}
 		if (this.ownerUuid != null && this.getHealth() > 0.0F) {
 			GuardHierarchy.onGuardLost(this, false);
