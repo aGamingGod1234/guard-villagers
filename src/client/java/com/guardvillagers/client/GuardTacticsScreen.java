@@ -1,17 +1,22 @@
 package com.guardvillagers.client;
 
 import com.guardvillagers.tactics.GuardTacticsScreenHandler;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.EditBox;
@@ -23,15 +28,16 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
-import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
-import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.ChunkPos;
 
+/**
+ * "Command post" tactics screen: chunk zone map on the left, a collapsible groups roster on the right and a
+ * command bar (zone tools + orders) along the bottom. One screen, no view switching.
+ */
 public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacticsScreenHandler> {
 	private static final String KEY = "gui.guardvillagers.tactics.";
 
@@ -42,55 +48,56 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private static final int TEXT_MUTED = 0xFF7D8DA0;
 	private static final int ACCENT_ZONES = 0xFF8FD2FF;
 	private static final int ACCENT_GROUPS = 0xFFFFCB90;
+	private static final int KEY_COLOR = 0xFFFFD166;
 	private static final int STATUS_SUCCESS = 0xFF6FD49A;
 	private static final int STATUS_ERROR = 0xFFFF7A7A;
 	private static final int STATUS_WARNING = 0xFFFFD36B;
-	private static final int PANE_BACKGROUND = 0xCC131B25;
-	private static final int ROW_BACKGROUND = 0xCC1B2531;
-	private static final int ROW_HOVER_BACKGROUND = 0xCC223041;
+	private static final int SIDEBAR_BACKGROUND = 0xB30E131A;
+	private static final int BAR_BACKGROUND = 0xE6131B25;
+	private static final int CHIP_BACKGROUND = 0xD10E131A;
+	private static final int HEADER_ROW_BACKGROUND = 0xFF1B2531;
+	private static final int HEADER_ROW_OPEN_BACKGROUND = 0xFF24324A;
+	private static final int HEADER_ROW_HOVER_BACKGROUND = 0xFF2B3B55;
 	private static final int ROW_BORDER = 0xFF334154;
-	private static final int CARD_BACKGROUND = 0xEE17212D;
-	private static final int CARD_HOVER_BACKGROUND = 0xEE213044;
-	private static final int CARD_BORDER = 0xFF425067;
-	private static final int CARD_HOVER_BORDER = 0xFF6C95BC;
-	private static final int DROP_IDLE_BORDER = 0xFF3E5A78;
-	private static final int DROP_HOVER_BORDER = 0xFF7FB2FF;
-	private static final int DROP_HOVER_BACKGROUND = 0xCC253545;
-	private static final int DROP_ZONE_BACKGROUND = 0x66131B25;
-	private static final int DROP_ZONE_BORDER = 0xFF2A3548;
-	private static final int BAR_BACKGROUND = 0xAA131B25;
+	private static final int CARD_BACKGROUND = 0xF217212D;
+	private static final int CARD_HOVER_BACKGROUND = 0xF2213044;
+	private static final int CARD_HOVER_BORDER = 0xFF8FD2FF;
+	private static final int DROP_IDLE_BORDER = 0xFF6A5A30;
+	private static final int DROP_HOVER_BORDER = 0xFFFFD166;
+	private static final int DROP_HOVER_BACKGROUND = 0x33FFD166;
+	private static final int DROP_ZONE_BACKGROUND = 0x18FFD166;
 	private static final int SCROLLBAR_TRACK_COLOR = 0x55394656;
 	private static final int PENDING_MARKER = 0xFFFFD36B;
-	private static final int BUTTON_FILL = 0xFF2A3E54;
-	private static final int BUTTON_HOVER_FILL = 0xFF3B5771;
-	private static final int BUTTON_BORDER = 0xFF6C95BC;
-	private static final int SAVE_FILL = 0xFF1E5A3A;
-	private static final int SAVE_HOVER_FILL = 0xFF2A7A4A;
-	private static final int SAVE_BORDER = 0xFF3EAA6A;
+	private static final int NO_COLOR_STRIPE = 0xFF4A5566;
+
+	// Button styles (fill, hover fill, border)
+	private static final int[] STYLE_DARK = {0xFF2A3443, 0xFF3A4A60, 0xFF43546B};
+	private static final int[] STYLE_GREY = {0xFF5C5C5C, 0xFF6C76A8, 0xFF9A9A9A};
+	private static final int[] STYLE_WARN = {0xFF8A6A25, 0xFF9E7C30, 0xFFD6B15C};
+	private static final int[] STYLE_ON = {0xFF3E7A3E, 0xFF4A8C4A, 0xFF77C277};
 	private static final int DISABLED_FILL = 0xFF222B36;
 	private static final int DISABLED_BORDER = 0xFF3A4654;
 
-	private static final int HEADER_HEIGHT = 28;
-	private static final int BOTTOM_BAR_HEIGHT = 18;
-	private static final int CONTROL_HEIGHT = 14;
-	private static final int SWATCH_SIZE = 14;
-	private static final int SWATCH_GAP = 4;
-	private static final int PALETTE_SCROLL_ANIMATION_MILLIS = 140;
-	private static final int PANE_GAP = 6;
-	private static final int LEFT_PANE_RATIO = 55;
-	private static final int PANE_HEADER_HEIGHT = 15;
+	private static final int HEADER_HEIGHT = 16;
+	private static final int BAR_HEIGHT = 33;
+	private static final int BUTTON_HEIGHT = 12;
+	private static final int SMALL_BUTTON_HEIGHT = 11;
+	private static final int SWATCH_SIZE = 10;
+	private static final int SWATCH_STRIDE = 14;
+	private static final int SIDEBAR_MIN_WIDTH = 120;
+	private static final int SIDEBAR_MAX_WIDTH = 210;
+	private static final int MAP_MIN_WIDTH = 120;
 	private static final int SCROLLBAR_SPACE = 5;
-	private static final int GROUP_HEADER_HEIGHT = 20;
-	private static final int GROUP_BOX_GAP = 4;
-	private static final int NEW_GROUP_BOX_HEIGHT = 26;
-	private static final int EMPTY_GROUPS_BOX_HEIGHT = 40;
-	private static final int MINI_CARD_WIDTH = 78;
-	private static final int MINI_CARD_HEIGHT = 38;
-	private static final int MINI_CARD_GAP = 4;
-	private static final int ROSTER_CARD_HEIGHT = 26;
-	private static final int ROSTER_CARD_GAP = 2;
-	private static final int UNASSIGN_DROP_HEIGHT = 18;
-	private static final int WHEEL_SCROLL_PIXELS = 24;
+	private static final int GROUP_HEADER_HEIGHT = 13;
+	private static final int MEMBER_ROW_HEIGHT = 14;
+	private static final int MEMBER_ROW_STRIDE = 15;
+	private static final int CHIP_WIDTH = 36;
+	private static final int CHIP_HEIGHT = 11;
+	private static final int CHIP_GAP = 2;
+	private static final int TRAY_CHIP_WIDTH = 52;
+	private static final int TRAY_CHIP_HEIGHT = 13;
+	private static final int GROUP_GAP = 3;
+	private static final int WHEEL_SCROLL_PIXELS = 20;
 	private static final int DRAG_AUTOSCROLL_EDGE = 14;
 	private static final int DRAG_AUTOSCROLL_SPEED = 5;
 	private static final double PANE_SCROLL_LERP_FACTOR = 0.35D;
@@ -104,40 +111,50 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private static final int MAX_COMMAND_LENGTH = 256;
 	// Mirrors the server's MAX_BATCH_ASSIGN for assignmany.
 	private static final int MAX_UUIDS_PER_COMMAND = 64;
+	private static final int MAX_BAR_SWATCHES = 10;
 	private static final Pattern GENERIC_GROUP_NAME = Pattern.compile("Role(\\s+\\d+)?");
 
 	private static final ItemStack GUARD_HEAD_ICON = new ItemStack(Items.PLAYER_HEAD);
+	private static final ItemStack SWORD_ICON = new ItemStack(Items.IRON_SWORD);
+	private static final ItemStack BOW_ICON = new ItemStack(Items.BOW);
 
-	private static final Component TAB_ZONES = tr("tab.zones");
-	private static final Component TAB_GROUPS = tr("tab.groups");
-	private static final Component SUBTITLE_ZONES = tr("subtitle.zones");
-	private static final Component SUBTITLE_GROUPS = tr("subtitle.groups");
-	private static final Component HELP_LABEL = Component.literal("?");
+	private static final Component TITLE = tr("title");
+	private static final Component HELP_LABEL = tr("help.button");
+	private static final Component CLOSE_LABEL = tr("close");
+	private static final Component REVERT = tr("revert");
+	private static final Component SAVED = tr("saved");
+	private static final Component SAVING = tr("saving");
 	private static final Component GROUPS_HEADER = tr("groups.header");
-	private static final Component UNASSIGN_TARGET = tr("guards.unassign_target");
+	private static final Component ADD_GROUP = tr("add_group");
+	private static final Component ZONE_LABEL = tr("bar.zone");
+	private static final Component ORDERS_LABEL = tr("bar.orders");
+	private static final Component PALETTE_MORE = Component.literal("+");
+	private static final Component ERASE_LABEL = tr("bar.erase");
+	private static final Component CLEAR_LABEL = tr("bar.clear");
+	private static final Component FOLLOW_ALL = tr("bar.follow_all");
+	private static final Component STAY_ALL = tr("bar.stay_all");
+	private static final Component FOLLOW = tr("group.follow");
+	private static final Component STAY = tr("group.stay");
+	private static final Component FOLLOW_SHORT = tr("group.follow.short");
+	private static final Component STAY_SHORT = tr("group.stay.short");
 	private static final Component GROUP_EMPTY = tr("group.empty");
 	private static final Component GROUP_NEW = tr("group.new");
 	private static final Component GROUPS_NONE_TITLE = tr("group.none.title");
 	private static final Component GROUPS_NONE_BODY = tr("group.none.body");
 	private static final Component GUARDS_SYNCING = tr("guards.syncing");
-	private static final Component GUARDS_SYNCING_BODY = tr("guards.syncing_body");
 	private static final Component GUARDS_EMPTY_TITLE = tr("guards.empty.title");
 	private static final Component GUARDS_EMPTY_BODY = tr("guards.empty.body");
-	private static final Component GUARDS_FILTERED_EMPTY = tr("guards.filtered_empty");
+	private static final Component TRAY_EMPTY = tr("tray.empty");
 	private static final Component UNASSIGNED = tr("unassigned");
-	private static final Component ADD_GROUP = tr("add_group");
-	private static final Component SAVED = tr("saved");
-	private static final Component SAVING = tr("saving");
-	private static final Component REVERT = tr("revert");
 	private static final Component HINT_IDLE = tr("hint.idle");
 	private static final Component HINT_MAP = tr("hint.map");
 	private static final Component HINT_PAINTING = tr("hint.painting");
 	private static final Component HINT_ERASING = tr("hint.erasing");
 	private static final Component HINT_PANNING = tr("hint.panning");
-	private static final Component HINT_GROUPS = tr("hint.groups");
+	private static final Component HINT_SIDEBAR = tr("hint.groups");
 	private static final Component HINT_DRAGGING = tr("hint.dragging");
 	private static final Component HINT_SYNCING = tr("hint.syncing");
-	private static final Component BRUSH_ERASE = tr("brush.erase");
+	private static final Component PAINT_ERASING = tr("paint.erasing");
 	private static final Component MAP_EMPTY_TITLE = tr("map.empty.title");
 	private static final Component MAP_EMPTY_BODY = tr("map.empty.body");
 	private static final Component MAP_OFFSCREEN_TITLE = tr("map.offscreen.title");
@@ -152,139 +169,159 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private static final Component DIALOG_DISCARD = tr("dialog.discard");
 	private static final Component DIALOG_CANCEL = tr("dialog.cancel");
 	private static final Component HELP_DISMISS = tr("help.dismiss");
-	private static final Component HELP_TITLE_ZONES = tr("help.title.zones");
+	private static final Component HELP_NEXT = tr("help.next");
+	private static final Component HELP_TITLE_MAP = tr("help.title.zones");
 	private static final Component HELP_TITLE_GROUPS = tr("help.title.groups");
 	private static final Component RENAME_HINT = tr("rename.hint");
-	private static final Component GUARD_DRAG_HINT = tr("guard.drag_hint").withStyle(net.minecraft.ChatFormatting.DARK_GRAY);
-	private static final List<Component> TOOLTIP_TAB_ZONES = List.of(TAB_ZONES, tr("tab.zones.tooltip").withStyle(net.minecraft.ChatFormatting.GRAY));
-	private static final List<Component> TOOLTIP_TAB_GROUPS = List.of(TAB_GROUPS, tr("tab.groups.tooltip").withStyle(net.minecraft.ChatFormatting.GRAY));
+	private static final Component GUARD_DRAG_HINT = tr("guard.drag_hint").withStyle(ChatFormatting.DARK_GRAY);
+	private static final Component CHUNK_HINT = tr("chunk.hint").withStyle(ChatFormatting.DARK_GRAY);
 	private static final List<Component> TOOLTIP_HELP = List.of(tr("help.tooltip"));
+	private static final List<Component> TOOLTIP_CLOSE = List.of(tr("close.tooltip"));
 	private static final List<Component> TOOLTIP_ADD_GROUP = List.of(tr("add_group.tooltip"));
 	private static final List<Component> TOOLTIP_SAVE = List.of(tr("save.tooltip"));
 	private static final List<Component> TOOLTIP_REVERT = List.of(tr("revert.tooltip"));
-	private static final List<Component> TOOLTIP_FILTER_ALL = List.of(tr("filter.tooltip.all"));
-	private static final List<Component> TOOLTIP_FILTER_UNASSIGNED = List.of(tr("filter.tooltip.unassigned"));
-	private static final List<Component> TOOLTIP_RENAME = List.of(tr("group.name.tooltip"));
-	private static final Component[][] HELP_ZONES = {
+	private static final List<Component> TOOLTIP_PALETTE_MORE = List.of(tr("bar.more.tooltip"));
+	private static final List<Component> TOOLTIP_ERASE = List.of(tr("bar.erase.tooltip"));
+	private static final List<Component> TOOLTIP_CLEAR = List.of(tr("bar.clear.tooltip"));
+	private static final List<Component> TOOLTIP_FOLLOW_ALL = List.of(tr("bar.follow_all.tooltip"));
+	private static final List<Component> TOOLTIP_STAY_ALL = List.of(tr("bar.stay_all.tooltip"));
+	private static final List<Component> TOOLTIP_FOLLOW_GROUP = List.of(
+		tr("bar.follow_group.tooltip"),
+		tr("bar.follow_group.tooltip.body").withStyle(ChatFormatting.GRAY)
+	);
+	private static final List<Component> TOOLTIP_FOLLOW_GROUP_NONE = List.of(tr("bar.follow_group.none"));
+	private static final Component[][] HELP_MAP = {
 		helpRow("zones.select"), helpRow("zones.paint"), helpRow("zones.brush"), helpRow("zones.erase"),
 		helpRow("zones.pan"), helpRow("zones.zoom"), helpRow("zones.color"), helpRow("zones.clear"),
-		helpRow("zones.center"), helpRow("common.tab"), helpRow("common.esc")
+		helpRow("zones.center"), helpRow("common.esc")
 	};
 	private static final Component[][] HELP_GROUPS = {
-		helpRow("groups.drag"), helpRow("groups.unassign"), helpRow("groups.new"), helpRow("groups.rename"),
-		helpRow("groups.color"), helpRow("groups.clearcolor"), helpRow("groups.save"), helpRow("groups.sort"),
-		helpRow("common.tab"), helpRow("common.esc")
+		helpRow("groups.drag"), helpRow("groups.unassign"), helpRow("groups.new"), helpRow("groups.collapse"),
+		helpRow("groups.rename"), helpRow("groups.color"), helpRow("groups.clearcolor"), helpRow("groups.orders"),
+		helpRow("groups.save")
 	};
-	private static final Component HELP_NOTE_ZONES = tr("help.zones.note");
+	private static final Component HELP_NOTE_MAP = tr("help.zones.note");
 	private static final Component HELP_NOTE_GROUPS = tr("help.groups.note");
 
-	// Shown once per game session per view so new players see the controls without hunting for them.
-	private static boolean zonesHelpShown;
-	private static boolean groupsHelpShown;
+	// Shown once per game session so new players see the controls without hunting for them.
+	private static boolean helpShownThisSession;
 	private static String[] levelTextCache = new String[0];
 
 	private final ClientTacticsDataStore dataStore = ClientTacticsDataStore.getInstance();
 	private final ClientGuardRosterStore rosterStore = ClientGuardRosterStore.getInstance();
 	private final ChunkMapWidget chunkMapWidget = new ChunkMapWidget(this.dataStore, GuardVillagersClient.terrainCache());
 	private final GuardDragHandler dragHandler = new GuardDragHandler();
-	private ViewMode mode;
 	private boolean helpVisible;
+	private int helpPage;
+	private boolean eraseTool;
+	private boolean paletteOpen;
+	private boolean followMenuOpen;
+	private int orderGroupRow = -1;
 
 	// Layout
 	private int panelX;
 	private int panelY;
 	private int panelWidth;
 	private int panelHeight;
-	private int contentX;
-	private int contentY;
-	private int contentWidth;
-	private int contentHeight;
+	private int mapX;
+	private int mapY;
+	private int mapW;
+	private int mapH;
+	private int sideX;
+	private int sideY;
+	private int sideW;
+	private int sideH;
+	private int barX;
 	private int barY;
+	private int barW;
+	private boolean barWide;
 
 	// Buttons (reused every frame)
-	private final UiButton zonesTab = new UiButton();
-	private final UiButton groupsTab = new UiButton();
 	private final UiButton helpButton = new UiButton();
-	private final UiButton addGroupButton = new UiButton();
 	private final UiButton saveButton = new UiButton();
 	private final UiButton revertButton = new UiButton();
+	private final UiButton closeButton = new UiButton();
+	private final UiButton addGroupButton = new UiButton();
 	private final UiButton sortButton = new UiButton();
-	private final UiButton filterButton = new UiButton();
+	private final UiButton paletteMoreButton = new UiButton();
+	private final UiButton eraseButton = new UiButton();
+	private final UiButton clearButton = new UiButton();
+	private final UiButton followAllButton = new UiButton();
+	private final UiButton stayAllButton = new UiButton();
+	private final UiButton followGroupButton = new UiButton();
 	private final UiButton[] buttons = {
-		this.zonesTab, this.groupsTab, this.helpButton, this.addGroupButton, this.saveButton, this.revertButton, this.sortButton, this.filterButton
+		this.helpButton, this.saveButton, this.revertButton, this.closeButton, this.addGroupButton, this.sortButton,
+		this.paletteMoreButton, this.eraseButton, this.clearButton, this.followAllButton, this.stayAllButton, this.followGroupButton
 	};
 
-	// Palette
-	private int visibleSwatches = 4;
-	private int paletteScrollOffset;
-	private double paletteScrollAnimationFrom;
-	private double paletteScrollAnimationTo;
-	private long paletteScrollAnimationStartedAt;
-	private int paletteClipX;
-	private int paletteClipY;
-	private int paletteClipWidth;
-	private int paletteClipHeight;
-	private RegionColor hoveredSwatch;
+	// Command bar swatches: colours bound to groups (in row order) plus the active colour
+	private final RegionColor[] barSwatches = new RegionColor[MAX_BAR_SWATCHES];
+	private int barSwatchCount;
+	private int barSwatchX;
+	private int barSwatchY;
 	private RegionColor tooltipSwatch;
 	private List<Component> swatchTooltip = List.of();
 
 	// World context cache (resolving it builds strings, so do it once per level)
 	private ClientLevel contextLevel;
 	private ClientTacticsDataStore.WorldContext cachedContext;
+	private String dimensionName = "";
 
-	// Tactics view text caches
-	private long tacticsHintKey = Long.MIN_VALUE;
-	private Component tacticsHint = HINT_IDLE;
-	private RegionColor brushLabelColor;
-	private Component brushLabel = Component.empty();
+	// Text caches
+	private long hintKey = Long.MIN_VALUE;
+	private Component hint = HINT_IDLE;
+	private final FitText hintFit = new FitText();
+	private final FitText statusFit = new FitText();
+	private final FitText paintFit = new FitText();
+	private final FitText subtitleFit = new FitText();
+	private final FitText followGroupFit = new FitText();
+	private final FitText newGroupFit = new FitText();
+	private final FitText trayFit = new FitText();
+	private long paintLabelKey = Long.MIN_VALUE;
+	private String paintLabelName;
+	private Component paintLabel = Component.empty();
+	private long subtitleKey = Long.MIN_VALUE;
+	private Component subtitle = Component.empty();
 	private int zoomPercentShown = -1;
 	private String zoomText = "";
-	private final FitText hintFit = new FitText();
+	private long selectionChipKey = Long.MIN_VALUE;
+	private String selectionChipText = "";
+	private int trayLabelCount = -1;
+	private String trayLabel = "";
+	private int followGroupLabelRow = Integer.MIN_VALUE;
+	private String followGroupLabelName;
+	private Component followGroupLabel = Component.empty();
 	private long hoveredChunkKey = Long.MIN_VALUE;
 	private long hoveredChunkSince;
 	private RegionColor tooltipZoneColor;
 	private String tooltipGroupName;
+	private int tooltipGroupCount = -1;
 	private List<Component> chunkTooltip = List.of();
 
-	// Groups view: roster grouped and sorted, rebuilt only when inputs change
+	// Roster grouped and sorted, rebuilt only when inputs change
 	private int viewRosterRevision = -1;
 	private int viewLocalRevision = -1;
 	private int localRevision;
 	private SortMode viewSort;
-	private boolean viewFilterUnassigned;
 	private ClientTacticsDataStore.WorldContext viewContext;
 	private int viewGroupCount;
 	private final List<List<ClientGuardRosterStore.GuardRosterEntry>> groupMembers = new ArrayList<>();
-	private final List<ClientGuardRosterStore.GuardRosterEntry> rosterList = new ArrayList<>();
+	private final List<ClientGuardRosterStore.GuardRosterEntry> unassignedList = new ArrayList<>();
 	private final List<String> groupNames = new ArrayList<>();
 	private final Map<UUID, CardText> cardTexts = new HashMap<>();
 	private int viewRosterSize;
 	private boolean viewRosterLoaded;
-	private Component guardsHeader = GUARDS_SYNCING;
 	private SortMode sortMode = SortMode.GEAR;
-	private boolean filterUnassigned;
+	private final BitSet collapsedRows = new BitSet();
 
-	// Groups pane geometry and scroll
-	private int leftPaneX;
-	private int leftPaneY;
-	private int leftPaneW;
-	private int leftPaneH;
-	private int rightPaneX;
-	private int rightPaneY;
-	private int rightPaneW;
-	private int rightPaneH;
-	private int leftListTop;
-	private int leftListBottom;
-	private int rightListTop;
-	private int rightListBottom;
-	private int leftPaneScrollTarget;
-	private int rightPaneScrollTarget;
-	private double leftPaneScrollAnimated;
-	private double rightPaneScrollAnimated;
-	private int leftPaneMaxScroll;
-	private int rightPaneMaxScroll;
+	// Sidebar list geometry and scroll
+	private int listTop;
+	private int listBottom;
+	private int listScrollTarget;
+	private double listScrollAnimated;
+	private int listMaxScroll;
 
-	// Hitboxes, pooled so the groups view does not allocate per frame
+	// Hitboxes, pooled so the screen does not allocate per frame
 	private final List<CardHit> cardHits = new ArrayList<>();
 	private int cardHitCount;
 	private final List<RowHit> rowHits = new ArrayList<>();
@@ -304,14 +341,11 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private int awaitingCheckedRevision = -1;
 	private boolean showUnsavedDialog;
 	private Runnable pendingAction;
-	private int saveLabelCount = -1;
-	private Component saveLabel = SAVED;
-	private Component unsavedLabel = Component.empty();
-	private final FitText groupsHintFit = new FitText();
-	private final FitText guardsHeaderFit = new FitText();
+	private int saveLabelKey = Integer.MIN_VALUE;
 
 	// Drag feedback
 	private DropHit dragTarget;
+	private final DropHit dragTargetScratch = new DropHit();
 	private Object dragLabelKey;
 	private Component dragLabel;
 	private int dragAccent = DROP_IDLE_BORDER;
@@ -320,19 +354,19 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private Component statusText;
 	private int statusColor;
 	private long statusUntil;
-	private final FitText statusFit = new FitText();
 
-	// Tooltip caches for guards and group swatches
+	// Tooltip caches
 	private ClientGuardRosterStore.GuardRosterEntry tooltipGuard;
 	private int tooltipGuardGroup = Integer.MIN_VALUE;
 	private List<Component> guardTooltip = List.of();
-	private int tooltipSwatchRow = -1;
-	private RegionColor tooltipSwatchColor;
-	private List<Component> groupSwatchTooltip = List.of();
+	private int tooltipRow = -1;
+	private int tooltipRowPart = -1;
+	private RegionColor tooltipRowColor;
+	private List<Component> rowTooltip = List.of();
+	private List<Component> groupLimitTooltipCache;
 
 	public GuardTacticsScreen(GuardTacticsScreenHandler handler, Inventory inventory, Component title) {
 		super(handler, inventory, title);
-		this.mode = isGroupsTitle(title) ? ViewMode.GROUPS : ViewMode.TACTICS;
 	}
 
 	private static MutableComponent tr(String suffix) {
@@ -341,15 +375,6 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 	private static Component[] helpRow(String id) {
 		return new Component[] {tr("help." + id + ".key"), tr("help." + id + ".desc")};
-	}
-
-	private static boolean isGroupsTitle(Component title) {
-		if (title.getContents() instanceof TranslatableContents content) {
-			String key = content.getKey();
-			return "screen.guardvillagers.groups".equals(key) || "screen.guardvillagers.hierarchy".equals(key);
-		}
-		String normalized = title.getString().toLowerCase(Locale.ROOT);
-		return normalized.contains("group") || normalized.contains("hierarchy");
 	}
 
 	/** Trims {@code text} to {@code maxWidth} pixels, ending with "..." when it had to cut. */
@@ -388,62 +413,46 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		levelTextCache = new String[0];
 		this.cardTexts.clear();
 		this.viewRosterRevision = -1;
-		this.tacticsHintKey = Long.MIN_VALUE;
-		this.brushLabelColor = null;
-		this.saveLabelCount = -1;
+		this.hintKey = Long.MIN_VALUE;
+		this.paintLabelKey = Long.MIN_VALUE;
+		this.subtitleKey = Long.MIN_VALUE;
+		this.saveLabelKey = Integer.MIN_VALUE;
+		this.followGroupLabelRow = Integer.MIN_VALUE;
+		this.trayLabelCount = -1;
+		this.zoomPercentShown = -1;
+		this.selectionChipKey = Long.MIN_VALUE;
 		this.tooltipGuard = null;
 		this.tooltipSwatch = null;
-		this.tooltipSwatchRow = -1;
+		this.tooltipRow = -1;
 		this.hoveredChunkKey = Long.MIN_VALUE;
 
-		this.zonesTab.setLabel(this.font, TAB_ZONES, 10);
-		this.groupsTab.setLabel(this.font, TAB_GROUPS, 10);
-		this.helpButton.setLabel(this.font, HELP_LABEL, 8);
-		this.helpButton.tooltip = TOOLTIP_HELP;
-		this.zonesTab.tooltip = TOOLTIP_TAB_ZONES;
-		this.groupsTab.tooltip = TOOLTIP_TAB_GROUPS;
-		this.revertButton.setLabel(this.font, REVERT, 8);
-		this.addGroupButton.setLabel(this.font, ADD_GROUP, 10);
-		this.revertButton.tooltip = TOOLTIP_REVERT;
-		this.computeLayout();
+		this.helpButton.setLabel(this.font, HELP_LABEL, 8, TOOLTIP_HELP);
+		this.closeButton.setLabel(this.font, CLOSE_LABEL, 8, TOOLTIP_CLOSE);
+		this.revertButton.setLabel(this.font, REVERT, 8, TOOLTIP_REVERT);
+		this.addGroupButton.setLabel(this.font, ADD_GROUP, 8, TOOLTIP_ADD_GROUP);
+		this.paletteMoreButton.setLabel(this.font, PALETTE_MORE, 6, TOOLTIP_PALETTE_MORE);
+		this.eraseButton.setLabel(this.font, ERASE_LABEL, 8, TOOLTIP_ERASE);
+		this.clearButton.setLabel(this.font, CLEAR_LABEL, 8, TOOLTIP_CLEAR);
+		this.followAllButton.setLabel(this.font, FOLLOW_ALL, 8, TOOLTIP_FOLLOW_ALL);
+		this.stayAllButton.setLabel(this.font, STAY_ALL, 8, TOOLTIP_STAY_ALL);
+		this.sortButton.setLabel(this.font, this.sortMode.label, 6, this.sortMode.tooltip);
 
-		this.groupRenameField = new EditBox(this.font, 0, 0, 120, 16, RENAME_HINT);
+		this.groupRenameField = new EditBox(this.font, 0, 0, 80, 12, RENAME_HINT);
 		this.groupRenameField.setVisible(false);
 		this.groupRenameField.setMaxLength(24);
 		this.groupRenameField.setHint(RENAME_HINT);
 		this.addRenderableWidget(this.groupRenameField);
 		this.editingRow = -1;
-		this.paletteScrollAnimationFrom = this.paletteScrollOffset;
-		this.paletteScrollAnimationTo = this.paletteScrollOffset;
-		this.leftPaneScrollAnimated = this.leftPaneScrollTarget;
-		this.rightPaneScrollAnimated = this.rightPaneScrollTarget;
+		this.listScrollAnimated = this.listScrollTarget;
 
 		if (this.minecraft != null && this.minecraft.player != null) {
 			this.chunkMapWidget.ensureCameraCentered(this.minecraft.player.chunkPosition());
 		}
-		this.showFirstTimeHelp();
-	}
-
-	private void showFirstTimeHelp() {
-		if (this.mode == ViewMode.TACTICS && !zonesHelpShown) {
-			zonesHelpShown = true;
+		if (!helpShownThisSession) {
+			helpShownThisSession = true;
 			this.helpVisible = true;
-		} else if (this.mode == ViewMode.GROUPS && !groupsHelpShown) {
-			groupsHelpShown = true;
-			this.helpVisible = true;
+			this.helpPage = 0;
 		}
-	}
-
-	private void switchMode(ViewMode next) {
-		if (this.mode == next) {
-			return;
-		}
-		// Pending group moves live on this screen, so switching views keeps them; no prompt needed.
-		this.cancelGroupRename();
-		this.dragHandler.cancel();
-		this.mode = next;
-		this.helpVisible = false;
-		this.showFirstTimeHelp();
 	}
 
 	// Replaces the container render path on purpose: this menu has no slots, labels or carried item.
@@ -458,12 +467,32 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		boolean overlayOpen = this.showUnsavedDialog || this.helpVisible;
 		int contentMouseX = overlayOpen ? -1 : mouseX;
 		int contentMouseY = overlayOpen ? -1 : mouseY;
-		if (this.mode == ViewMode.TACTICS) {
-			this.renderTactics(graphics, contentMouseX, contentMouseY);
-		} else {
-			this.renderGroups(graphics, contentMouseX, contentMouseY);
+		boolean popupOpen = this.paletteOpen || this.followMenuOpen;
+		int underPopupX = popupOpen ? -1 : contentMouseX;
+		int underPopupY = popupOpen ? -1 : contentMouseY;
+
+		ClientTacticsDataStore.WorldContext worldContext = this.worldContext();
+		// Drop target is resolved against last frame's hitboxes (same geometry) before they are rebuilt.
+		this.updateDragTarget(contentMouseX, contentMouseY);
+		this.resetHits();
+		if (worldContext != null) {
+			this.refreshRosterView(worldContext);
 		}
-		this.renderHeader(graphics, contentMouseX, contentMouseY);
+
+		this.renderMap(graphics, worldContext, underPopupX, underPopupY);
+		this.renderSidebar(graphics, worldContext, underPopupX, underPopupY);
+		this.renderCommandBar(graphics, worldContext, underPopupX, underPopupY);
+		this.renderHeader(graphics, underPopupX, underPopupY);
+		if (this.paletteOpen) {
+			this.renderPalettePopup(graphics, contentMouseX, contentMouseY);
+		}
+		if (this.followMenuOpen) {
+			this.renderFollowMenu(graphics, contentMouseX, contentMouseY);
+		}
+
+		if (this.editingRow >= 0 && this.groupRenameField != null && !this.groupRenameField.isVisible()) {
+			this.cancelGroupRename();
+		}
 		if (this.groupRenameField != null && this.groupRenameField.isVisible()) {
 			this.groupRenameField.extractRenderState(graphics, mouseX, mouseY, delta);
 		}
@@ -477,7 +506,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			this.renderUnsavedDialog(graphics, mouseX, mouseY);
 		}
 		if (!overlayOpen && !this.dragHandler.isActive()) {
-			this.renderButtonTooltip(graphics, mouseX, mouseY);
+			this.renderTooltips(graphics, worldContext, contentMouseX, contentMouseY, popupOpen);
 		}
 	}
 
@@ -497,6 +526,14 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			this.helpVisible = false;
 			return true;
 		}
+		if (this.paletteOpen) {
+			this.handlePaletteClick(mouseX, mouseY);
+			return true;
+		}
+		if (this.followMenuOpen) {
+			this.handleFollowMenuClick(mouseX, mouseY);
+			return true;
+		}
 
 		if (this.groupRenameField != null && this.groupRenameField.isVisible()) {
 			if (this.isInsideRenameField(mouseX, mouseY)) {
@@ -505,32 +542,29 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			this.commitGroupRename();
 		}
 
-		if (button == 0 && this.handleHeaderClick(mouseX, mouseY)) {
+		if (button == 0 && this.handleButtonClick(mouseX, mouseY)) {
 			return true;
 		}
-
-		if (this.mode == ViewMode.TACTICS) {
-			if (button == 0 && this.hoveredSwatchAt(mouseX, mouseY) != null) {
-				this.chunkMapWidget.setActiveColor(this.hoveredSwatchAt(mouseX, mouseY));
+		if (button == 0) {
+			RegionColor swatch = this.barSwatchAt(mouseX, mouseY);
+			if (swatch != null) {
+				this.selectColor(swatch);
 				return true;
 			}
-			if (this.chunkMapWidget.mouseClicked(
-				mouseX,
-				mouseY,
-				button,
-				click.hasShiftDown(),
-				this.minecraft == null ? null : this.minecraft.level,
-				this.worldContext()
-			)) {
-				return true;
-			}
-			if (this.contains(this.panelX, this.panelY, this.panelWidth, this.panelHeight, mouseX, mouseY)) {
-				return true;
-			}
-			return super.mouseClicked(click, doubleClick);
 		}
-
-		if (this.handleGroupsClick(mouseX, mouseY, button, click.hasShiftDown(), doubleClick)) {
+		if (this.contains(this.sideX, this.sideY, this.sideW, this.sideH, mouseX, mouseY)) {
+			this.handleSidebarClick(mouseX, mouseY, button, click.hasShiftDown(), doubleClick);
+			return true;
+		}
+		if (this.chunkMapWidget.mouseClicked(
+			mouseX,
+			mouseY,
+			button,
+			// The Erase tool flips what Shift does, so Shift+right-click paints while erasing.
+			click.hasShiftDown() != this.eraseTool,
+			this.minecraft == null ? null : this.minecraft.level,
+			this.worldContext()
+		)) {
 			return true;
 		}
 		if (this.contains(this.panelX, this.panelY, this.panelWidth, this.panelHeight, mouseX, mouseY)) {
@@ -541,25 +575,23 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 	@Override
 	public boolean mouseDragged(MouseButtonEvent click, double deltaX, double deltaY) {
-		if (this.showUnsavedDialog || this.helpVisible) {
+		if (this.showUnsavedDialog || this.helpVisible || this.paletteOpen || this.followMenuOpen) {
 			return true;
 		}
 		if (this.dragHandler.isArmed()) {
 			this.dragHandler.updateDrag(click.x(), click.y());
 			return true;
 		}
-		if (this.mode == ViewMode.TACTICS) {
-			if (this.chunkMapWidget.mouseDragged(
-				click.x(),
-				click.y(),
-				click.button(),
-				deltaX,
-				deltaY,
-				this.minecraft == null ? null : this.minecraft.level,
-				this.worldContext()
-			)) {
-				return true;
-			}
+		if (this.chunkMapWidget.mouseDragged(
+			click.x(),
+			click.y(),
+			click.button(),
+			deltaX,
+			deltaY,
+			this.minecraft == null ? null : this.minecraft.level,
+			this.worldContext()
+		)) {
+			return true;
 		}
 		return super.mouseDragged(click, deltaX, deltaY);
 	}
@@ -574,7 +606,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			}
 			return true;
 		}
-		if (this.mode == ViewMode.TACTICS && this.chunkMapWidget.mouseReleased(click.x(), click.y(), click.button())) {
+		if (this.chunkMapWidget.mouseReleased(click.x(), click.y(), click.button())) {
 			return true;
 		}
 		return super.mouseReleased(click);
@@ -582,29 +614,15 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 	@Override
 	public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
-		if (this.showUnsavedDialog || this.helpVisible) {
+		if (this.showUnsavedDialog || this.helpVisible || this.paletteOpen || this.followMenuOpen) {
 			return true;
 		}
-		if (this.mode == ViewMode.TACTICS) {
-			if (this.isPaletteHovered(mouseX, mouseY)) {
-				int direction = verticalAmount < 0 ? 1 : -1;
-				int maxOffset = Math.max(0, RegionColor.paletteCount() - this.visibleSwatches);
-				this.startPaletteWheelAnimation(Mth.clamp(this.paletteScrollOffset + direction, 0, maxOffset));
-				return true;
-			}
-			if (this.chunkMapWidget.mouseScrolled(mouseX, mouseY, verticalAmount)) {
-				return true;
-			}
-			return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
-		}
-
-		int step = (int) Math.round(-verticalAmount * WHEEL_SCROLL_PIXELS);
-		if (this.contains(this.leftPaneX, this.leftPaneY, this.leftPaneW, this.leftPaneH, mouseX, mouseY)) {
-			this.leftPaneScrollTarget = Mth.clamp(this.leftPaneScrollTarget + step, 0, this.leftPaneMaxScroll);
+		if (this.contains(this.sideX, this.sideY, this.sideW, this.sideH, mouseX, mouseY)) {
+			int step = (int) Math.round(-verticalAmount * WHEEL_SCROLL_PIXELS);
+			this.listScrollTarget = Mth.clamp(this.listScrollTarget + step, 0, this.listMaxScroll);
 			return true;
 		}
-		if (this.contains(this.rightPaneX, this.rightPaneY, this.rightPaneW, this.rightPaneH, mouseX, mouseY)) {
-			this.rightPaneScrollTarget = Mth.clamp(this.rightPaneScrollTarget + step, 0, this.rightPaneMaxScroll);
+		if (this.chunkMapWidget.mouseScrolled(mouseX, mouseY, verticalAmount)) {
 			return true;
 		}
 		return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
@@ -644,49 +662,49 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 				this.dragHandler.cancel();
 				return true;
 			}
+			if (this.paletteOpen || this.followMenuOpen) {
+				this.paletteOpen = false;
+				this.followMenuOpen = false;
+				return true;
+			}
 			if (this.helpVisible) {
 				this.helpVisible = false;
 				return true;
 			}
 			return super.keyPressed(keyInput);
 		}
-		if (this.helpVisible && key != GLFW.GLFW_KEY_H) {
-			this.helpVisible = false;
-		}
 
 		if (key == GLFW.GLFW_KEY_H) {
-			this.helpVisible = !this.helpVisible;
+			this.toggleHelp();
 			return true;
 		}
-		if (key == GLFW.GLFW_KEY_TAB) {
-			this.switchMode(this.mode == ViewMode.TACTICS ? ViewMode.GROUPS : ViewMode.TACTICS);
-			return true;
+		if (this.helpVisible) {
+			this.helpVisible = false;
 		}
-
-		if (this.mode == ViewMode.TACTICS && this.handleTacticsKey(keyInput)) {
-			return true;
-		}
-		if (this.mode == ViewMode.GROUPS && key == GLFW.GLFW_KEY_S && keyInput.hasControlDown()) {
+		if (key == GLFW.GLFW_KEY_S && keyInput.hasControlDown()) {
 			this.saveAssignments();
+			return true;
+		}
+		if (this.handleMapKey(keyInput)) {
 			return true;
 		}
 		return super.keyPressed(keyInput);
 	}
 
-	private boolean handleTacticsKey(KeyEvent keyInput) {
+	private boolean handleMapKey(KeyEvent keyInput) {
 		int key = keyInput.input();
 		int digit = keyInput.getDigit();
 		if (digit >= 0 && !keyInput.hasControlDown()) {
 			RegionColor color = RegionColor.forHotkeyDigit(digit);
 			if (color != null) {
-				this.chunkMapWidget.setActiveColor(color);
-				this.scrollPaletteToShow(color);
+				this.selectColor(color);
 				return true;
 			}
 		}
 		ClientTacticsDataStore.WorldContext context = this.worldContext();
 		switch (key) {
 			case GLFW.GLFW_KEY_C -> this.chunkMapWidget.clearSelection();
+			case GLFW.GLFW_KEY_X -> this.eraseTool = !this.eraseTool;
 			case GLFW.GLFW_KEY_DELETE, GLFW.GLFW_KEY_BACKSPACE -> this.chunkMapWidget.paintSelection(context, true);
 			case GLFW.GLFW_KEY_SPACE -> {
 				if (this.minecraft != null && this.minecraft.player != null) {
@@ -714,156 +732,130 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		return super.charTyped(charInput);
 	}
 
-	private boolean handleHeaderClick(double mouseX, double mouseY) {
-		if (this.zonesTab.contains(mouseX, mouseY)) {
-			this.switchMode(ViewMode.TACTICS);
-			return true;
+	private boolean handleButtonClick(double mouseX, double mouseY) {
+		if (this.helpButton.isClickable(mouseX, mouseY)) {
+			this.toggleHelp();
+		} else if (this.saveButton.isClickable(mouseX, mouseY)) {
+			this.saveAssignments();
+		} else if (this.revertButton.isClickable(mouseX, mouseY)) {
+			this.revertAssignments();
+		} else if (this.closeButton.isClickable(mouseX, mouseY)) {
+			this.onClose();
+		} else if (this.addGroupButton.isClickable(mouseX, mouseY)) {
+			this.addGroup(this.worldContext());
+		} else if (this.sortButton.isClickable(mouseX, mouseY)) {
+			this.sortMode = this.sortMode.next();
+			this.sortButton.setLabel(this.font, this.sortMode.label, 6, this.sortMode.tooltip);
+		} else if (this.paletteMoreButton.isClickable(mouseX, mouseY)) {
+			this.paletteOpen = true;
+		} else if (this.eraseButton.isClickable(mouseX, mouseY)) {
+			this.eraseTool = !this.eraseTool;
+		} else if (this.clearButton.isClickable(mouseX, mouseY)) {
+			this.chunkMapWidget.clearSelection();
+		} else if (this.followAllButton.isClickable(mouseX, mouseY)) {
+			this.sendOrder("guards follow", tr("status.follow_all"));
+		} else if (this.stayAllButton.isClickable(mouseX, mouseY)) {
+			this.sendOrder("guards stay", tr("status.stay_all"));
+		} else if (this.followGroupButton.isClickable(mouseX, mouseY)) {
+			// The arrow end opens the chooser; the label end repeats the order for the chosen group.
+			boolean onArrow = mouseX >= this.followGroupButton.x + this.followGroupButton.w - 12;
+			if (onArrow || this.orderGroupRow < 0 || this.orderGroupRow >= this.viewGroupCount) {
+				this.followMenuOpen = this.viewGroupCount > 0;
+			} else {
+				this.orderGroup(this.orderGroupRow, true);
+			}
+		} else {
+			return false;
 		}
-		if (this.groupsTab.contains(mouseX, mouseY)) {
-			this.switchMode(ViewMode.GROUPS);
-			return true;
-		}
-		if (this.helpButton.contains(mouseX, mouseY)) {
-			this.helpVisible = !this.helpVisible;
-			return true;
-		}
-		return false;
+		return true;
 	}
 
-	// ---------------------------------------------------------------- header, help, tooltips
+	private void toggleHelp() {
+		if (!this.helpVisible) {
+			this.helpVisible = true;
+			this.helpPage = 0;
+		} else if (!this.helpFitsTwoColumns() && this.helpPage == 0) {
+			this.helpPage = 1;
+		} else {
+			this.helpVisible = false;
+		}
+	}
+
+	private void selectColor(RegionColor color) {
+		this.chunkMapWidget.setActiveColor(color);
+		this.eraseTool = false;
+	}
+
+	// ---------------------------------------------------------------- header
 
 	private void renderHeader(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
-		// Clip the title block so long titles or translations never run under the palette or tabs.
-		graphics.enableScissor(this.panelX + 1, this.panelY + 1, Math.max(this.panelX + 2, this.titleAreaRight()), this.panelY + HEADER_HEIGHT);
-		graphics.text(this.font, this.title, this.panelX + 10, this.panelY + 6, TEXT_PRIMARY, false);
-		graphics.text(
-			this.font,
-			this.mode == ViewMode.GROUPS ? SUBTITLE_GROUPS : SUBTITLE_ZONES,
-			this.panelX + 10,
-			this.panelY + 17,
-			this.mode == ViewMode.GROUPS ? ACCENT_GROUPS : ACCENT_ZONES,
-			false
-		);
-		graphics.disableScissor();
+		int y = this.panelY + 4;
+		int titleX = this.panelX + 6;
+		graphics.text(this.font, TITLE, titleX, y, TEXT_PRIMARY, false);
 
-		boolean zones = this.mode == ViewMode.TACTICS;
-		this.drawTab(graphics, this.zonesTab, zones, ACCENT_ZONES, mouseX, mouseY);
-		this.drawTab(graphics, this.groupsTab, !zones, ACCENT_GROUPS, mouseX, mouseY);
-		this.drawButton(graphics, this.helpButton, mouseX, mouseY, this.helpVisible ? BUTTON_HOVER_FILL : BUTTON_FILL, BUTTON_HOVER_FILL, BUTTON_BORDER);
+		int pendingCount = this.pendingAssignments.size();
+		this.drawButton(graphics, this.closeButton, mouseX, mouseY, STYLE_DARK);
+		this.drawButton(graphics, this.saveButton, mouseX, mouseY, pendingCount > 0 ? STYLE_WARN : STYLE_DARK);
+		if (pendingCount > 0) {
+			// Unsaved dot, drawn as a small square so it does not depend on font glyphs.
+			graphics.fill(this.saveButton.x + 4, this.saveButton.y + 4, this.saveButton.x + 8, this.saveButton.y + 8, KEY_COLOR);
+		}
+		this.drawButton(graphics, this.revertButton, mouseX, mouseY, STYLE_DARK);
+		this.drawButton(graphics, this.helpButton, mouseX, mouseY, this.helpVisible ? STYLE_ON : STYLE_DARK);
+
+		int subtitleX = titleX + this.font.width(TITLE) + 8;
+		int subtitleMax = this.helpButton.x - 6 - subtitleX;
+		graphics.text(this.font, this.subtitleFit.fit(this.font, this.subtitle(), subtitleMax), subtitleX, y, TEXT_MUTED, false);
 	}
 
-	private void drawTab(GuiGraphicsExtractor graphics, UiButton tab, boolean active, int accent, int mouseX, int mouseY) {
-		boolean hovered = tab.contains(mouseX, mouseY);
-		int fill = active ? (accent & 0x00FFFFFF) | 0x55000000 : hovered ? 0xFF2C3A4B : 0xFF1C2532;
-		graphics.fill(tab.x, tab.y, tab.x + tab.w, tab.y + tab.h, fill);
-		graphics.outline(tab.x, tab.y, tab.w, tab.h, active ? accent : hovered ? CARD_HOVER_BORDER : PANEL_BORDER);
-		if (active) {
-			graphics.fill(tab.x + 1, tab.y + tab.h - 2, tab.x + tab.w - 1, tab.y + tab.h - 1, accent);
+	private Component subtitle() {
+		long key = ((long) this.viewRosterSize << 40) | ((long) this.viewGroupCount << 20) | (this.viewRosterLoaded ? 1 : 0);
+		String dimension = this.dimensionName;
+		if (key != this.subtitleKey || this.subtitle == null || !this.subtitle.getString().endsWith(dimension)) {
+			this.subtitleKey = key;
+			this.subtitle = this.viewRosterLoaded
+				? Component.translatable(KEY + "subtitle", this.viewRosterSize, this.viewGroupCount, dimension)
+				: Component.translatable(KEY + "subtitle.syncing", dimension);
 		}
-		graphics.text(this.font, tab.label, tab.x + (tab.w - tab.labelWidth) / 2, tab.y + 3, active ? TEXT_PRIMARY : TEXT_SECONDARY, false);
+		return this.subtitle;
 	}
 
-	private void drawButton(GuiGraphicsExtractor graphics, UiButton button, int mouseX, int mouseY, int fill, int hoverFill, int border) {
-		if (!button.visible) {
-			return;
+	private void layoutHeaderButtons() {
+		int y = this.panelY + 2;
+		int right = this.panelX + this.panelWidth - 4;
+		this.closeButton.place(right - this.closeButton.w, y, BUTTON_HEIGHT);
+		int pendingCount = this.pendingAssignments.size();
+		boolean awaiting = !this.awaitingConfirmation.isEmpty();
+		int labelKey = pendingCount > 0 ? pendingCount : awaiting ? -2 : -1;
+		if (labelKey != this.saveLabelKey) {
+			this.saveLabelKey = labelKey;
+			Component label = pendingCount > 0 ? Component.translatable(KEY + "save", pendingCount) : awaiting ? SAVING : SAVED;
+			this.saveButton.setLabel(this.font, label, pendingCount > 0 ? 16 : 8, TOOLTIP_SAVE);
 		}
-		boolean hovered = button.enabled && button.contains(mouseX, mouseY);
-		graphics.fill(button.x, button.y, button.x + button.w, button.y + button.h, button.enabled ? (hovered ? hoverFill : fill) : DISABLED_FILL);
-		graphics.outline(button.x, button.y, button.w, button.h, button.enabled ? (hovered ? TEXT_PRIMARY : border) : DISABLED_BORDER);
-		graphics.text(
-			this.font,
-			button.label,
-			button.x + (button.w - button.labelWidth) / 2,
-			button.y + (button.h - 8) / 2,
-			button.enabled ? TEXT_PRIMARY : TEXT_MUTED,
-			false
-		);
+		this.saveButton.place(this.closeButton.x - 3 - this.saveButton.w, y, BUTTON_HEIGHT);
+		this.saveButton.enabled = pendingCount > 0;
+		this.revertButton.visible = pendingCount > 0;
+		int helpRight = this.saveButton.x - 3;
+		if (this.revertButton.visible) {
+			this.revertButton.place(helpRight - this.revertButton.w, y, BUTTON_HEIGHT);
+			helpRight = this.revertButton.x - 3;
+		}
+		this.helpButton.place(helpRight - this.helpButton.w, y, BUTTON_HEIGHT);
 	}
 
-	private void renderButtonTooltip(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
-		for (UiButton button : this.buttons) {
-			if (button.contains(mouseX, mouseY) && !button.tooltip.isEmpty()) {
-				graphics.setComponentTooltipForNextFrame(this.font, button.tooltip, mouseX, mouseY);
-				return;
-			}
-		}
-	}
+	// ---------------------------------------------------------------- map
 
-	private void renderHelp(GuiGraphicsExtractor graphics) {
-		Component[][] rows = this.mode == ViewMode.TACTICS ? HELP_ZONES : HELP_GROUPS;
-		Component title = this.mode == ViewMode.TACTICS ? HELP_TITLE_ZONES : HELP_TITLE_GROUPS;
-		Component note = this.mode == ViewMode.TACTICS ? HELP_NOTE_ZONES : HELP_NOTE_GROUPS;
-		int accent = this.mode == ViewMode.TACTICS ? ACCENT_ZONES : ACCENT_GROUPS;
-
-		int keyWidth = 0;
-		int descWidth = 0;
-		for (Component[] row : rows) {
-			keyWidth = Math.max(keyWidth, this.font.width(row[0]));
-			descWidth = Math.max(descWidth, this.font.width(row[1]));
-		}
-		int lineHeight = 10;
-		int maxWidth = this.contentWidth - 12;
-		int width = Math.min(maxWidth, keyWidth + descWidth + 28);
-		keyWidth = Math.min(keyWidth, width / 2 - 10);
-		int descMax = width - keyWidth - 28;
-		int height = 22 + rows.length * lineHeight + 26;
-		int maxHeight = this.contentHeight - 4;
-		int visibleRows = rows.length;
-		if (height > maxHeight) {
-			visibleRows = Math.max(1, (maxHeight - 48) / lineHeight);
-			height = 22 + visibleRows * lineHeight + 26;
-		}
-		int x = this.contentX + (this.contentWidth - width) / 2;
-		int y = this.contentY + Math.max(2, (this.contentHeight - height) / 2);
-
-		graphics.fill(this.contentX, this.contentY, this.contentX + this.contentWidth, this.contentY + this.contentHeight, 0x88000000);
-		graphics.fill(x, y, x + width, y + height, 0xF60F151D);
-		graphics.outline(x, y, width, height, accent);
-		graphics.text(this.font, title, x + 8, y + 7, accent, false);
-		int rowY = y + 22;
-		for (int i = 0; i < visibleRows; i++) {
-			Component[] row = rows[i];
-			// Long translations are trimmed per frame here; the legend is a rare overlay, not a hot path.
-			graphics.text(this.font, ellipsize(this.font, row[0].getString(), keyWidth), x + 8, rowY, TEXT_PRIMARY, false);
-			graphics.text(this.font, ellipsize(this.font, row[1].getString(), descMax), x + 20 + keyWidth, rowY, TEXT_SECONDARY, false);
-			rowY += lineHeight;
-		}
-		graphics.text(this.font, ellipsize(this.font, note.getString(), width - 16), x + 8, y + height - 22, TEXT_MUTED, false);
-		graphics.text(this.font, ellipsize(this.font, HELP_DISMISS.getString(), width - 16), x + 8, y + height - 12, TEXT_MUTED, false);
-	}
-
-	private void setStatus(Component text, int color) {
-		this.statusText = text;
-		this.statusColor = color;
-		this.statusUntil = System.currentTimeMillis() + STATUS_DURATION_MILLIS;
-	}
-
-	private boolean hasStatus() {
-		if (this.statusText != null && System.currentTimeMillis() > this.statusUntil) {
-			this.statusText = null;
-		}
-		return this.statusText != null;
-	}
-
-	// ---------------------------------------------------------------- tactics view
-
-	private void renderTactics(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
-		if (this.groupRenameField != null && this.groupRenameField.isVisible()) {
-			this.cancelGroupRename();
-		}
-
-		ClientTacticsDataStore.WorldContext worldContext = this.worldContext();
+	private void renderMap(GuiGraphicsExtractor graphics, ClientTacticsDataStore.WorldContext worldContext, int mouseX, int mouseY) {
 		if (this.minecraft != null && this.minecraft.player != null) {
 			this.chunkMapWidget.ensureCameraCentered(this.minecraft.player.chunkPosition());
 		}
 		boolean shiftDown = this.minecraft != null && this.minecraft.hasShiftDown();
-
-		int mapH = this.contentHeight - BOTTOM_BAR_HEIGHT - 2;
-		this.chunkMapWidget.setBounds(this.contentX, this.contentY, this.contentWidth, mapH);
-		this.renderPalette(graphics, mouseX, mouseY);
-		this.chunkMapWidget.render(graphics, this.font, this.minecraft == null ? null : this.minecraft.level, worldContext, mouseX, mouseY, shiftDown);
-		graphics.outline(this.contentX - 1, this.contentY - 1, this.contentWidth + 2, mapH + 2, PANEL_BORDER);
-		this.renderPlayerMarker(graphics, mapH);
+		this.chunkMapWidget.setBounds(this.mapX, this.mapY, this.mapW, this.mapH);
+		this.chunkMapWidget.render(graphics, this.font, this.minecraft == null ? null : this.minecraft.level, worldContext, mouseX, mouseY, shiftDown != this.eraseTool);
+		graphics.outline(this.mapX - 1, this.mapY - 1, this.mapW + 2, this.mapH + 2, PANEL_BORDER);
+		if (this.minecraft != null && this.minecraft.player != null) {
+			this.chunkMapWidget.drawPlayerMarker(graphics, this.minecraft.player.getX() / 16.0D, this.minecraft.player.getZ() / 16.0D, this.minecraft.player.getYRot());
+		}
 
 		if (worldContext != null && this.chunkMapWidget.visibleChunkCount() == 0) {
 			boolean anyDiscovered = this.chunkMapWidget.hasDiscoveredChunks();
@@ -871,116 +863,43 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 				graphics,
 				anyDiscovered ? MAP_OFFSCREEN_TITLE : MAP_EMPTY_TITLE,
 				anyDiscovered ? MAP_OFFSCREEN_BODY : MAP_EMPTY_BODY,
-				this.contentX,
-				this.contentY,
-				this.contentWidth,
-				mapH
+				this.mapX,
+				this.mapY,
+				this.mapW,
+				this.mapH
 			);
 		}
 
-		this.renderTacticsBar(graphics, mouseX, mouseY, shiftDown);
-		this.renderTacticsTooltip(graphics, worldContext, mouseX, mouseY);
-	}
-
-	private void renderPlayerMarker(GuiGraphicsExtractor graphics, int mapH) {
-		if (this.minecraft == null || this.minecraft.player == null) {
-			return;
-		}
-		this.chunkMapWidget.drawPlayerMarker(graphics, this.minecraft.player.getX() / 16.0D, this.minecraft.player.getZ() / 16.0D, this.minecraft.player.getYRot());
-	}
-
-	private void renderTacticsBar(GuiGraphicsExtractor graphics, int mouseX, int mouseY, boolean shiftDown) {
-		graphics.fill(this.contentX, this.barY, this.contentX + this.contentWidth, this.barY + BOTTOM_BAR_HEIGHT, BAR_BACKGROUND);
-		int textY = this.barY + 5;
-
-		// Brush chip: always shows what a right-click will do.
-		boolean erase = this.chunkMapWidget.isPainting() ? this.chunkMapWidget.isErasing() : shiftDown;
-		RegionColor brush = this.chunkMapWidget.activeColor();
-		int chipX = this.contentX + 4;
-		int chipY = this.barY + 3;
-		if (erase) {
-			graphics.fill(chipX, chipY, chipX + 12, chipY + 12, 0xFF3A1A1A);
-			graphics.outline(chipX, chipY, 12, 12, STATUS_ERROR);
-			graphics.text(this.font, "x", chipX + 4, chipY + 2, STATUS_ERROR, false);
-		} else {
-			graphics.fill(chipX, chipY, chipX + 12, chipY + 12, brush.swatchArgb());
-			graphics.outline(chipX, chipY, 12, 12, TEXT_PRIMARY);
-			graphics.text(this.font, brush.hotkeyLabel(), chipX + 4, chipY + 2, brush.prefersDarkText() ? 0xFF10161D : 0xFFFFFFFF, false);
-		}
-		if (this.brushLabelColor != brush) {
-			this.brushLabelColor = brush;
-			this.brushLabel = Component.translatable(KEY + "brush.paint", brush.labelText());
-		}
-		Component brushText = erase ? BRUSH_ERASE : this.brushLabel;
-		int brushTextX = chipX + 16;
-		graphics.text(this.font, brushText, brushTextX, textY, erase ? STATUS_ERROR : TEXT_PRIMARY, false);
-		int hintX = brushTextX + this.font.width(brushText) + 10;
-
+		// Overlay chips, top-left: zoom and selection size.
 		int zoomPercent = (int) Math.round(this.chunkMapWidget.zoom() * 100.0D);
 		if (zoomPercent != this.zoomPercentShown) {
 			this.zoomPercentShown = zoomPercent;
 			this.zoomText = Component.translatable(KEY + "zoom", zoomPercent).getString();
 		}
-		int zoomWidth = this.font.width(this.zoomText);
-		int zoomX = this.contentX + this.contentWidth - zoomWidth - 6;
-		graphics.text(this.font, this.zoomText, zoomX, textY, ACCENT_ZONES, false);
-
-		int hintWidth = zoomX - 8 - hintX;
-		if (this.hasStatus()) {
-			graphics.text(this.font, this.statusFit.fit(this.font, this.statusText, hintWidth), hintX, textY, this.statusColor, false);
-		} else {
-			Component hint = this.currentTacticsHint(mouseX, mouseY, shiftDown);
-			graphics.text(this.font, this.hintFit.fit(this.font, hint, hintWidth), hintX, textY, TEXT_SECONDARY, false);
-		}
-	}
-
-	// The hint depends on what the cursor is doing; components are rebuilt only when that state changes.
-	private Component currentTacticsHint(int mouseX, int mouseY, boolean shiftDown) {
-		ChunkMapWidget map = this.chunkMapWidget;
-		int state;
-		if (map.isPanning()) {
-			state = 1;
-		} else if (map.isPainting()) {
-			state = map.isErasing() ? 2 : 3;
-		} else if (map.isSelecting()) {
-			state = 4;
-		} else if (map.hasSelection()) {
-			state = shiftDown ? 5 : 6;
-		} else if (map.isMouseOver(mouseX, mouseY)) {
-			state = 7;
-		} else {
-			state = 0;
-		}
-		long key = ((long) state << 48) | ((long) map.selectionWidth() << 32) | ((long) map.selectionHeight() << 16) | map.activeColor().id();
-		if (key != this.tacticsHintKey) {
-			this.tacticsHintKey = key;
-			this.tacticsHint = switch (state) {
-				case 1 -> HINT_PANNING;
-				case 2 -> HINT_ERASING;
-				case 3 -> HINT_PAINTING;
-				case 4 -> Component.translatable(KEY + "hint.selecting", map.selectionWidth(), map.selectionHeight());
-				case 5 -> Component.translatable(KEY + "hint.selection_erase", map.selectionWidth(), map.selectionHeight());
-				case 6 -> Component.translatable(KEY + "hint.selection", map.selectionWidth(), map.selectionHeight(), map.activeColor().labelText());
-				case 7 -> HINT_MAP;
-				default -> HINT_IDLE;
-			};
-		}
-		return this.tacticsHint;
-	}
-
-	private void renderTacticsTooltip(GuiGraphicsExtractor graphics, ClientTacticsDataStore.WorldContext worldContext, int mouseX, int mouseY) {
-		if (this.hoveredSwatch != null) {
-			if (this.tooltipSwatch != this.hoveredSwatch) {
-				this.tooltipSwatch = this.hoveredSwatch;
-				this.swatchTooltip = List.of(
-					Component.translatable(KEY + "palette.tooltip", this.hoveredSwatch.labelText(), this.hoveredSwatch.hotkeyLabel()),
-					Component.translatable(KEY + "palette.tooltip.body").withStyle(net.minecraft.ChatFormatting.GRAY)
-				);
+		int chipX = this.mapX + 3;
+		int chipY = this.mapY + 3;
+		chipX = this.drawChip(graphics, this.zoomText, chipX, chipY, ACCENT_ZONES) + 3;
+		if (this.chunkMapWidget.hasSelection()) {
+			long key = ((long) this.chunkMapWidget.selectionWidth() << 32) | this.chunkMapWidget.selectionHeight();
+			if (key != this.selectionChipKey) {
+				this.selectionChipKey = key;
+				this.selectionChipText = Component.translatable(KEY + "selection.chip", this.chunkMapWidget.selectionWidth(), this.chunkMapWidget.selectionHeight()).getString();
 			}
-			graphics.setComponentTooltipForNextFrame(this.font, this.swatchTooltip, mouseX, mouseY);
-			return;
+			if (chipX + this.font.width(this.selectionChipText) + 6 < this.mapX + this.mapW) {
+				this.drawChip(graphics, this.selectionChipText, chipX, chipY, TEXT_SECONDARY);
+			}
 		}
+	}
 
+	private int drawChip(GuiGraphicsExtractor graphics, String text, int x, int y, int color) {
+		int w = this.font.width(text) + 6;
+		graphics.fill(x, y, x + w, y + 11, CHIP_BACKGROUND);
+		graphics.outline(x, y, w, 11, PANEL_BORDER);
+		graphics.text(this.font, text, x + 3, y + 2, color, false);
+		return x + w;
+	}
+
+	private void renderChunkTooltip(GuiGraphicsExtractor graphics, ClientTacticsDataStore.WorldContext worldContext, int mouseX, int mouseY) {
 		ChunkPos hovered = this.chunkMapWidget.hoveredChunk();
 		ChunkMapWidget map = this.chunkMapWidget;
 		if (hovered == null || worldContext == null || map.isPainting() || map.isSelecting() || map.isPanning()) {
@@ -999,135 +918,371 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			return;
 		}
 		RegionColor zoneColor = this.dataStore.getRegionColor(worldContext, hovered.x(), hovered.z());
-		String groupName = zoneColor == RegionColor.NONE
-			? null
-			: this.dataStore.groupBindingForColor(worldContext, zoneColor).map(ClientTacticsDataStore.GroupColorBinding::groupName).orElse(null);
-		if (this.chunkTooltip.isEmpty() || zoneColor != this.tooltipZoneColor || !java.util.Objects.equals(groupName, this.tooltipGroupName)) {
+		int boundRow = this.rowForColor(worldContext, zoneColor);
+		String groupName = boundRow >= 0 ? this.groupNames.get(boundRow) : null;
+		int memberCount = boundRow >= 0 ? this.groupMembers.get(boundRow).size() : -1;
+		if (this.chunkTooltip.isEmpty() || zoneColor != this.tooltipZoneColor || !Objects.equals(groupName, this.tooltipGroupName) || memberCount != this.tooltipGroupCount) {
 			this.tooltipZoneColor = zoneColor;
 			this.tooltipGroupName = groupName;
-			List<Component> lines = new ArrayList<>(3);
+			this.tooltipGroupCount = memberCount;
+			List<Component> lines = new ArrayList<>(4);
 			lines.add(Component.translatable(KEY + "chunk.position", hovered.x(), hovered.z()));
 			lines.add(zoneColor == RegionColor.NONE
-				? tr("chunk.zone_none").copy().withStyle(net.minecraft.ChatFormatting.GRAY)
-				: Component.translatable(KEY + "chunk.zone", zoneColor.labelText(), zoneColor.hotkeyLabel()).withStyle(net.minecraft.ChatFormatting.GRAY));
+				? tr("chunk.zone_none").withStyle(ChatFormatting.GRAY)
+				: Component.translatable(KEY + "chunk.zone", zoneColor.labelText(), zoneColor.hotkeyLabel()).withStyle(ChatFormatting.GRAY));
 			if (zoneColor != RegionColor.NONE) {
 				lines.add(groupName == null
-					? tr("chunk.group_none").copy().withStyle(net.minecraft.ChatFormatting.DARK_GRAY)
-					: Component.translatable(KEY + "chunk.group", groupName).withStyle(net.minecraft.ChatFormatting.GRAY));
+					? tr("chunk.group_none").withStyle(ChatFormatting.DARK_GRAY)
+					: Component.translatable(KEY + "chunk.group", groupName, memberCount).withStyle(ChatFormatting.GRAY));
 			}
+			lines.add(CHUNK_HINT);
 			this.chunkTooltip = lines;
 		}
 		graphics.setComponentTooltipForNextFrame(this.font, this.chunkTooltip, mouseX, mouseY);
 	}
 
-	private void renderPalette(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
-		RegionColor[] allColors = RegionColor.paletteColors();
-		int maxOffset = Math.max(0, allColors.length - this.visibleSwatches);
-		if (this.paletteScrollOffset > maxOffset) {
-			this.paletteScrollOffset = maxOffset;
-			this.paletteScrollAnimationFrom = maxOffset;
-			this.paletteScrollAnimationTo = maxOffset;
-			this.paletteScrollAnimationStartedAt = 0L;
+	/** Lowest group row bound to {@code color}, or -1. Iterates rows directly to avoid an Optional per frame. */
+	private int rowForColor(ClientTacticsDataStore.WorldContext worldContext, RegionColor color) {
+		if (worldContext == null || color == null || color == RegionColor.NONE) {
+			return -1;
 		}
-		double renderedOffset = this.currentPaletteScrollOffset();
-		this.hoveredSwatch = this.hoveredSwatchAt(mouseX, mouseY);
+		for (int row = 0; row < this.viewGroupCount; row++) {
+			if (this.dataStore.getGroupColor(worldContext, row) == color) {
+				return row;
+			}
+		}
+		return -1;
+	}
 
-		int y = this.paletteClipY;
-		int startX = this.paletteClipX;
-		graphics.enableScissor(this.paletteClipX, this.paletteClipY - 2, this.paletteClipX + this.paletteClipWidth, this.paletteClipY + this.paletteClipHeight + 2);
-		int swatchStride = SWATCH_SIZE + SWATCH_GAP;
+	// ---------------------------------------------------------------- command bar
+
+	private void renderCommandBar(GuiGraphicsExtractor graphics, ClientTacticsDataStore.WorldContext worldContext, int mouseX, int mouseY) {
+		int barRight = this.barX + this.barW;
+		graphics.fill(this.barX, this.barY, barRight, this.barY + BAR_HEIGHT, BAR_BACKGROUND);
+		graphics.outline(this.barX, this.barY, this.barW, BAR_HEIGHT, PANEL_BORDER);
+
+		// Swatches: colours already bound to groups, in group order, then the active colour if unbound.
+		this.barSwatchCount = 0;
+		if (worldContext != null) {
+			for (int row = 0; row < this.viewGroupCount && this.barSwatchCount < MAX_BAR_SWATCHES; row++) {
+				this.addBarSwatch(this.dataStore.getGroupColor(worldContext, row));
+			}
+		}
+		this.addBarSwatch(this.chunkMapWidget.activeColor());
+
+		int rowY = this.barY + 3;
+		int textY = this.barY + 21;
+		boolean wide = this.barWide;
+		int x = this.barX + 4;
+		if (wide) {
+			graphics.text(this.font, ZONE_LABEL, x, rowY + 2, ACCENT_ZONES, false);
+			x += this.font.width(ZONE_LABEL) + 5;
+		}
+		int ordersWidth = this.ordersWidth(wide);
+		int zoneLimit = wide ? barRight - 4 - ordersWidth - 10 : barRight - 4;
+		int toolsWidth = this.paletteMoreButton.w + this.eraseButton.w + this.clearButton.w + 9;
+		int maxSwatches = Math.max(1, (zoneLimit - x - toolsWidth) / SWATCH_STRIDE);
+		this.barSwatchCount = Math.min(this.barSwatchCount, maxSwatches);
+		this.barSwatchX = x;
+		this.barSwatchY = rowY + 1;
 		RegionColor active = this.chunkMapWidget.activeColor();
-		for (int colorIndex = 0; colorIndex < allColors.length; colorIndex++) {
-			int x = startX + (int) Math.round((colorIndex - renderedOffset) * swatchStride);
-			if (x + SWATCH_SIZE < this.paletteClipX || x > this.paletteClipX + this.paletteClipWidth) {
-				continue;
+		for (int i = 0; i < this.barSwatchCount; i++) {
+			RegionColor color = this.barSwatches[i];
+			int sx = x + i * SWATCH_STRIDE;
+			int sy = this.barSwatchY;
+			boolean selected = color == active && !this.eraseTool;
+			boolean hovered = this.contains(sx, sy, SWATCH_SIZE, SWATCH_SIZE, mouseX, mouseY);
+			if (selected) {
+				graphics.outline(sx - 2, sy - 2, SWATCH_SIZE + 4, SWATCH_SIZE + 4, 0xFFFFFFFF);
 			}
-			RegionColor color = allColors[colorIndex];
-			graphics.fill(x, y, x + SWATCH_SIZE, y + SWATCH_SIZE, color.swatchArgb());
-			if (color == active) {
-				graphics.outline(x - 1, y - 1, SWATCH_SIZE + 2, SWATCH_SIZE + 2, 0xFFFFFFFF);
-				graphics.outline(x, y, SWATCH_SIZE, SWATCH_SIZE, 0xFF10161D);
-			} else {
-				graphics.outline(x, y, SWATCH_SIZE, SWATCH_SIZE, color == this.hoveredSwatch ? TEXT_SECONDARY : PANEL_BORDER);
-			}
-			graphics.text(this.font, color.hotkeyLabel(), x + 5, y + 3, color.prefersDarkText() ? 0xFF10161D : 0xFFFFFFFF, false);
+			graphics.fill(sx, sy, sx + SWATCH_SIZE, sy + SWATCH_SIZE, color.swatchArgb());
+			graphics.outline(sx, sy, SWATCH_SIZE, SWATCH_SIZE, hovered ? TEXT_PRIMARY : 0xFF000000);
+			graphics.text(this.font, color.hotkeyLabel(), sx + 3, sy + 1, color.prefersDarkText() ? 0xFF10161D : 0xFFFFFFFF, false);
 		}
-		graphics.disableScissor();
+		x += this.barSwatchCount * SWATCH_STRIDE;
+		this.paletteMoreButton.place(x, rowY, BUTTON_HEIGHT);
+		this.drawButton(graphics, this.paletteMoreButton, mouseX, mouseY, this.paletteOpen ? STYLE_ON : STYLE_DARK);
+		this.eraseButton.place(this.paletteMoreButton.x + this.paletteMoreButton.w + 3, rowY, BUTTON_HEIGHT);
+		this.drawButton(graphics, this.eraseButton, mouseX, mouseY, this.eraseTool ? STYLE_ON : STYLE_DARK);
+		this.clearButton.place(this.eraseButton.x + this.eraseButton.w + 3, rowY, BUTTON_HEIGHT);
+		this.clearButton.enabled = this.chunkMapWidget.hasSelection();
+		this.drawButton(graphics, this.clearButton, mouseX, mouseY, STYLE_DARK);
+		int zoneToolsEnd = this.clearButton.x + this.clearButton.w;
 
-		// Edge arrows say "more colours this way"; the wheel scrolls them.
-		if (renderedOffset > 0.01D) {
-			graphics.text(this.font, "<", this.paletteClipX - 7, y + 3, TEXT_SECONDARY, false);
+		// Orders: right-aligned on the first row when wide, on the second row otherwise.
+		int ordersY = wide ? rowY : this.barY + 18;
+		int ox = wide ? barRight - 4 - ordersWidth : this.barX + 4;
+		if (wide) {
+			graphics.text(this.font, ORDERS_LABEL, ox, rowY + 2, ACCENT_GROUPS, false);
+			ox += this.font.width(ORDERS_LABEL) + 5;
 		}
-		if (renderedOffset < maxOffset - 0.01D) {
-			graphics.text(this.font, ">", this.paletteClipX + this.paletteClipWidth + 2, y + 3, TEXT_SECONDARY, false);
+		this.followAllButton.place(ox, ordersY, BUTTON_HEIGHT);
+		this.drawButton(graphics, this.followAllButton, mouseX, mouseY, STYLE_GREY);
+		this.stayAllButton.place(this.followAllButton.x + this.followAllButton.w + 3, ordersY, BUTTON_HEIGHT);
+		this.drawButton(graphics, this.stayAllButton, mouseX, mouseY, STYLE_GREY);
+		this.layoutFollowGroupButton(this.stayAllButton.x + this.stayAllButton.w + 3, ordersY);
+		this.drawFollowGroupButton(graphics, mouseX, mouseY);
+		int ordersEnd = this.followGroupButton.x + this.followGroupButton.w;
+
+		// Text line(s): what the brush does, then the context hint or the latest status.
+		Component paint = this.paintLabel(worldContext);
+		Component hintOrStatus = this.hasStatus() ? this.statusText : this.currentHint(mouseX, mouseY);
+		int hintColor = this.hasStatus() ? this.statusColor : TEXT_SECONDARY;
+		if (wide) {
+			int ordersX = barRight - 4 - ordersWidth;
+			graphics.text(this.font, this.paintFit.fit(this.font, paint, ordersX - 10 - (this.barX + 4)), this.barX + 4, textY, TEXT_SECONDARY, false);
+			graphics.text(this.font, this.hintFit.fit(this.font, hintOrStatus, barRight - 4 - ordersX), ordersX, textY, hintColor, false);
+		} else {
+			// Narrow: brush label shares row 1 with the zone tools, the hint shares row 2 with the orders.
+			int paintX = zoneToolsEnd + 6;
+			graphics.text(this.font, this.paintFit.fit(this.font, paint, barRight - 4 - paintX), paintX, rowY + 2, TEXT_SECONDARY, false);
+			int hintX = ordersEnd + 6;
+			graphics.text(this.font, this.hintFit.fit(this.font, hintOrStatus, barRight - 4 - hintX), hintX, ordersY + 2, hintColor, false);
 		}
 	}
 
-	private RegionColor hoveredSwatchAt(double mouseX, double mouseY) {
-		if (this.mode != ViewMode.TACTICS || !this.isPaletteHovered(mouseX, mouseY)) {
-			return null;
-		}
-		int stride = SWATCH_SIZE + SWATCH_GAP;
-		double local = mouseX - this.paletteClipX + (this.currentPaletteScrollOffset() * stride);
-		int index = (int) Math.floor(local / stride);
-		double within = local - (index * (double) stride);
-		if (index < 0 || index >= RegionColor.paletteCount() || within >= SWATCH_SIZE) {
-			return null;
-		}
-		return RegionColor.paletteAt(index);
-	}
-
-	private void scrollPaletteToShow(RegionColor color) {
-		int index = color.paletteIndex();
-		if (index < this.paletteScrollOffset) {
-			this.startPaletteWheelAnimation(index);
-		} else if (index >= this.paletteScrollOffset + this.visibleSwatches) {
-			this.startPaletteWheelAnimation(index - this.visibleSwatches + 1);
-		}
-	}
-
-	private void startPaletteWheelAnimation(int targetOffset) {
-		if (targetOffset == this.paletteScrollOffset) {
+	private void addBarSwatch(RegionColor color) {
+		if (color == null || color == RegionColor.NONE || this.barSwatchCount >= MAX_BAR_SWATCHES) {
 			return;
 		}
-		double currentOffset = this.currentPaletteScrollOffset();
-		this.paletteScrollOffset = targetOffset;
-		this.paletteScrollAnimationFrom = currentOffset;
-		this.paletteScrollAnimationTo = targetOffset;
-		this.paletteScrollAnimationStartedAt = System.currentTimeMillis();
-	}
-
-	private double currentPaletteScrollOffset() {
-		if (this.paletteScrollAnimationStartedAt <= 0L) {
-			return this.paletteScrollOffset;
+		for (int i = 0; i < this.barSwatchCount; i++) {
+			if (this.barSwatches[i] == color) {
+				return;
+			}
 		}
-		long elapsed = System.currentTimeMillis() - this.paletteScrollAnimationStartedAt;
-		if (elapsed >= PALETTE_SCROLL_ANIMATION_MILLIS) {
-			this.paletteScrollAnimationStartedAt = 0L;
-			return this.paletteScrollOffset;
+		this.barSwatches[this.barSwatchCount++] = color;
+	}
+
+	private RegionColor barSwatchAt(double mouseX, double mouseY) {
+		if (mouseY < this.barSwatchY - 1 || mouseY >= this.barSwatchY + SWATCH_SIZE + 1) {
+			return null;
 		}
-		double progress = elapsed / (double) PALETTE_SCROLL_ANIMATION_MILLIS;
-		double eased = progress * progress * (3.0D - 2.0D * progress);
-		return this.paletteScrollAnimationFrom + ((this.paletteScrollAnimationTo - this.paletteScrollAnimationFrom) * eased);
+		for (int i = 0; i < this.barSwatchCount; i++) {
+			int sx = this.barSwatchX + i * SWATCH_STRIDE;
+			if (mouseX >= sx - 1 && mouseX < sx + SWATCH_SIZE + 1) {
+				return this.barSwatches[i];
+			}
+		}
+		return null;
 	}
 
-	private boolean isPaletteHovered(double mouseX, double mouseY) {
-		return this.mode == ViewMode.TACTICS
-			&& this.paletteClipWidth > 0
-			&& mouseX >= this.paletteClipX
-			&& mouseX < this.paletteClipX + this.paletteClipWidth
-			&& mouseY >= this.paletteClipY
-			&& mouseY < this.paletteClipY + this.paletteClipHeight;
+	private int ordersWidth(boolean withLabel) {
+		int width = this.followAllButton.w + this.stayAllButton.w + this.followGroupButton.w + 6;
+		return withLabel ? width + this.font.width(ORDERS_LABEL) + 5 : width;
 	}
 
-	// ---------------------------------------------------------------- groups view
+	private void layoutFollowGroupButton(int x, int y) {
+		this.followGroupButton.place(x, y, BUTTON_HEIGHT);
+	}
+
+	private void updateFollowGroupLabel() {
+		int row = this.orderGroupRow < this.viewGroupCount ? this.orderGroupRow : -1;
+		String name = row >= 0 ? this.groupNames.get(row) : null;
+		if (row != this.followGroupLabelRow || !Objects.equals(name, this.followGroupLabelName)) {
+			this.followGroupLabelRow = row;
+			this.followGroupLabelName = name;
+			this.followGroupLabel = name == null ? tr("bar.follow_group.empty") : Component.translatable(KEY + "bar.follow_group", name);
+		}
+		// Long group names are trimmed so the button never pushes the bar off screen.
+		int textWidth = Math.min(this.font.width(this.followGroupLabel), 92);
+		this.followGroupButton.label = this.followGroupLabel;
+		this.followGroupButton.labelWidth = textWidth;
+		this.followGroupButton.w = textWidth + 18;
+		this.followGroupButton.tooltip = row >= 0 ? TOOLTIP_FOLLOW_GROUP : TOOLTIP_FOLLOW_GROUP_NONE;
+		this.followGroupButton.enabled = this.viewGroupCount > 0;
+	}
+
+	private void drawFollowGroupButton(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+		UiButton button = this.followGroupButton;
+		boolean hovered = button.enabled && button.contains(mouseX, mouseY);
+		int[] style = STYLE_GREY;
+		graphics.fill(button.x, button.y, button.x + button.w, button.y + button.h, button.enabled ? (hovered ? style[1] : style[0]) : DISABLED_FILL);
+		graphics.outline(button.x, button.y, button.w, button.h, button.enabled ? (hovered ? TEXT_PRIMARY : style[2]) : DISABLED_BORDER);
+		String text = this.followGroupFit.fit(this.font, button.label, button.labelWidth);
+		graphics.text(this.font, text, button.x + 4, button.y + 2, button.enabled ? TEXT_PRIMARY : TEXT_MUTED, false);
+		// Divider and a drawn down-arrow for the chooser end.
+		int arrowX = button.x + button.w - 12;
+		graphics.fill(arrowX, button.y + 2, arrowX + 1, button.y + button.h - 2, button.enabled ? style[2] : DISABLED_BORDER);
+		this.drawArrow(graphics, arrowX + 4, button.y + 5, true, button.enabled ? TEXT_PRIMARY : TEXT_MUTED);
+	}
+
+	private Component paintLabel(ClientTacticsDataStore.WorldContext worldContext) {
+		if (this.eraseTool) {
+			return PAINT_ERASING;
+		}
+		RegionColor color = this.chunkMapWidget.activeColor();
+		int row = this.rowForColor(worldContext, color);
+		String name = row >= 0 ? this.groupNames.get(row) : null;
+		long key = ((long) color.id() << 32) | (row & 0xFFFFFFFFL);
+		if (key != this.paintLabelKey || !Objects.equals(name, this.paintLabelName)) {
+			this.paintLabelKey = key;
+			this.paintLabelName = name;
+			Component colorName = color.labelText().copy().withColor(color.swatchArgb() | 0xFF000000);
+			this.paintLabel = name == null
+				? Component.translatable(KEY + "paint.unbound", colorName)
+				: Component.translatable(KEY + "paint.bound", colorName, name);
+		}
+		return this.paintLabel;
+	}
+
+	// The hint depends on what the cursor is doing; components are rebuilt only when that state changes.
+	private Component currentHint(int mouseX, int mouseY) {
+		ChunkMapWidget map = this.chunkMapWidget;
+		int state;
+		if (this.dragHandler.isActive()) {
+			state = 8;
+		} else if (map.isPanning()) {
+			state = 1;
+		} else if (map.isPainting()) {
+			state = map.isErasing() ? 2 : 3;
+		} else if (map.isSelecting()) {
+			state = 4;
+		} else if (map.isMouseOver(mouseX, mouseY)) {
+			state = map.hasSelection() ? 6 : 7;
+		} else if (this.contains(this.sideX, this.sideY, this.sideW, this.sideH, mouseX, mouseY)) {
+			state = this.viewRosterLoaded ? 9 : 10;
+		} else {
+			state = 0;
+		}
+		long key = ((long) state << 48) | ((long) map.selectionWidth() << 32) | ((long) map.selectionHeight() << 16) | map.activeColor().id();
+		if (key != this.hintKey) {
+			this.hintKey = key;
+			this.hint = switch (state) {
+				case 1 -> HINT_PANNING;
+				case 2 -> HINT_ERASING;
+				case 3 -> HINT_PAINTING;
+				case 4 -> Component.translatable(KEY + "hint.selecting", map.selectionWidth(), map.selectionHeight());
+				case 6 -> Component.translatable(KEY + "hint.selection", map.selectionWidth(), map.selectionHeight());
+				case 7 -> HINT_MAP;
+				case 8 -> HINT_DRAGGING;
+				case 9 -> HINT_SIDEBAR;
+				case 10 -> HINT_SYNCING;
+				default -> HINT_IDLE;
+			};
+		}
+		return this.hint;
+	}
+
+	private void renderPalettePopup(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+		int count = RegionColor.paletteCount();
+		int w = count * SWATCH_STRIDE + 6;
+		int h = SWATCH_SIZE + 8;
+		int x = this.paletteX(w);
+		int y = this.barY - h - 2;
+		graphics.fill(x, y, x + w, y + h, 0xF60F151D);
+		graphics.outline(x, y, w, h, ACCENT_ZONES);
+		RegionColor active = this.chunkMapWidget.activeColor();
+		for (int i = 0; i < count; i++) {
+			RegionColor color = RegionColor.paletteAt(i);
+			int sx = x + 4 + i * SWATCH_STRIDE;
+			int sy = y + 4;
+			if (color == active) {
+				graphics.outline(sx - 2, sy - 2, SWATCH_SIZE + 4, SWATCH_SIZE + 4, 0xFFFFFFFF);
+			}
+			graphics.fill(sx, sy, sx + SWATCH_SIZE, sy + SWATCH_SIZE, color.swatchArgb());
+			graphics.outline(sx, sy, SWATCH_SIZE, SWATCH_SIZE, this.contains(sx, sy, SWATCH_SIZE, SWATCH_SIZE, mouseX, mouseY) ? TEXT_PRIMARY : 0xFF000000);
+			graphics.text(this.font, color.hotkeyLabel(), sx + 3, sy + 1, color.prefersDarkText() ? 0xFF10161D : 0xFFFFFFFF, false);
+		}
+	}
+
+	private int paletteX(int popupWidth) {
+		return Mth.clamp(this.paletteMoreButton.x - popupWidth / 2, this.barX, this.barX + this.barW - popupWidth);
+	}
+
+	private RegionColor paletteColorAt(double mouseX, double mouseY) {
+		int count = RegionColor.paletteCount();
+		int w = count * SWATCH_STRIDE + 6;
+		int h = SWATCH_SIZE + 8;
+		int x = this.paletteX(w);
+		int y = this.barY - h - 2;
+		if (!this.contains(x, y, w, h, mouseX, mouseY)) {
+			return null;
+		}
+		int index = (int) ((mouseX - x - 2) / SWATCH_STRIDE);
+		return index >= 0 && index < count ? RegionColor.paletteAt(index) : null;
+	}
+
+	private void handlePaletteClick(double mouseX, double mouseY) {
+		RegionColor color = this.paletteColorAt(mouseX, mouseY);
+		if (color != null) {
+			this.selectColor(color);
+		}
+		this.paletteOpen = false;
+	}
+
+	private int followMenuItemHeight() {
+		return 12;
+	}
+
+	private void renderFollowMenu(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+		int itemH = this.followMenuItemHeight();
+		int maxItems = Math.max(1, (this.barY - this.panelY - 20) / itemH);
+		int count = Math.min(this.viewGroupCount, maxItems);
+		int w = Math.max(this.followGroupButton.w, 100);
+		int x = Math.min(this.followGroupButton.x, this.barX + this.barW - w);
+		int h = count * itemH + 4;
+		int y = this.followGroupButton.y - h - 2;
+		graphics.fill(x, y, x + w, y + h, 0xF60F151D);
+		graphics.outline(x, y, w, h, ACCENT_GROUPS);
+		ClientTacticsDataStore.WorldContext context = this.worldContext();
+		for (int row = 0; row < count; row++) {
+			int iy = y + 2 + row * itemH;
+			boolean hovered = this.contains(x + 1, iy, w - 2, itemH, mouseX, mouseY);
+			if (hovered || row == this.orderGroupRow) {
+				graphics.fill(x + 1, iy, x + w - 1, iy + itemH, hovered ? HEADER_ROW_HOVER_BACKGROUND : HEADER_ROW_OPEN_BACKGROUND);
+			}
+			RegionColor color = context == null ? RegionColor.NONE : this.dataStore.getGroupColor(context, row);
+			graphics.fill(x + 3, iy + 2, x + 6, iy + itemH - 2, color == RegionColor.NONE ? NO_COLOR_STRIPE : color.swatchArgb());
+			graphics.text(this.font, this.fitGroupName(row, w - 14), x + 9, iy + 2, TEXT_PRIMARY, false);
+		}
+	}
+
+	private void handleFollowMenuClick(double mouseX, double mouseY) {
+		int itemH = this.followMenuItemHeight();
+		int maxItems = Math.max(1, (this.barY - this.panelY - 20) / itemH);
+		int count = Math.min(this.viewGroupCount, maxItems);
+		int w = Math.max(this.followGroupButton.w, 100);
+		int x = Math.min(this.followGroupButton.x, this.barX + this.barW - w);
+		int h = count * itemH + 4;
+		int y = this.followGroupButton.y - h - 2;
+		this.followMenuOpen = false;
+		if (!this.contains(x, y, w, h, mouseX, mouseY)) {
+			return;
+		}
+		int row = (int) ((mouseY - y - 2) / itemH);
+		if (row >= 0 && row < count) {
+			this.orderGroupRow = row;
+			this.orderGroup(row, true);
+		}
+	}
+
+	// ---------------------------------------------------------------- orders
+
+	private void orderGroup(int row, boolean follow) {
+		if (row < 0 || row >= this.viewGroupCount) {
+			return;
+		}
+		String name = this.groupNames.get(row);
+		// Follow/stay match guards by group name on the server (same as typing /guards follow <name>).
+		this.sendOrder(
+			(follow ? "guards follow " : "guards stay ") + name,
+			Component.translatable(KEY + (follow ? "status.follow_group" : "status.stay_group"), name)
+		);
+	}
+
+	private void sendOrder(String command, Component status) {
+		if (this.sendCommand(command)) {
+			this.setStatus(status, STATUS_SUCCESS);
+		}
+	}
+
+	// ---------------------------------------------------------------- sidebar
 
 	private void refreshRosterView(ClientTacticsDataStore.WorldContext context) {
 		int rosterRevision = this.rosterStore.revision();
 		if (rosterRevision == this.viewRosterRevision
 			&& this.localRevision == this.viewLocalRevision
 			&& this.sortMode == this.viewSort
-			&& this.filterUnassigned == this.viewFilterUnassigned
 			&& context.equals(this.viewContext)) {
 			return;
 		}
@@ -1138,7 +1293,6 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		this.viewRosterRevision = rosterRevision;
 		this.viewLocalRevision = this.localRevision;
 		this.viewSort = this.sortMode;
-		this.viewFilterUnassigned = this.filterUnassigned;
 		this.viewContext = context;
 
 		List<ClientGuardRosterStore.GuardRosterEntry> roster = this.rosterStore.roster(context);
@@ -1155,131 +1309,138 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		for (List<ClientGuardRosterStore.GuardRosterEntry> members : this.groupMembers) {
 			members.clear();
 		}
-		this.rosterList.clear();
+		this.unassignedList.clear();
 		for (ClientGuardRosterStore.GuardRosterEntry guard : roster) {
 			int group = this.displayGroup(guard);
 			if (group >= 0) {
 				this.groupMembers.get(group).add(guard);
-			}
-			if (!this.filterUnassigned || group < 0) {
-				this.rosterList.add(guard);
+			} else {
+				this.unassignedList.add(guard);
 			}
 		}
 		Comparator<ClientGuardRosterStore.GuardRosterEntry> sorter = this.sortMode.comparator;
 		for (int row = 0; row < groupCount; row++) {
 			this.groupMembers.get(row).sort(sorter);
 		}
-		this.rosterList.sort(sorter);
+		this.unassignedList.sort(sorter);
 
 		this.groupNames.clear();
 		for (int row = 0; row < groupCount; row++) {
 			this.groupNames.add(this.resolveGroupName(context, row, this.groupMembers.get(row)));
 		}
-
-		this.guardsHeader = this.viewRosterLoaded
-			? Component.translatable(KEY + "guards.header", roster.size())
-			: GUARDS_SYNCING;
-		this.sortButton.setLabel(this.font, this.sortMode.label, 6);
-		this.sortButton.tooltip = this.sortMode.tooltip;
-		this.filterButton.setLabel(this.font, this.filterUnassigned ? SortMode.FILTER_UNASSIGNED : SortMode.FILTER_ALL, 6);
-		this.filterButton.tooltip = this.filterUnassigned ? TOOLTIP_FILTER_UNASSIGNED : TOOLTIP_FILTER_ALL;
+		if (this.orderGroupRow < 0 && groupCount > 0) {
+			this.orderGroupRow = 0;
+		}
+		this.updateFollowGroupLabel();
 	}
 
-	private void renderGroups(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
-		// Resolve the drop target against last frame's hitboxes (same geometry) before they are rebuilt.
-		this.updateDragTarget(mouseX, mouseY);
-		this.resetHits();
-		ClientTacticsDataStore.WorldContext worldContext = this.worldContext();
-		if (worldContext == null || this.minecraft == null || this.minecraft.player == null || this.minecraft.level == null) {
-			this.renderCenteredMessage(graphics, UNAVAILABLE, null, this.contentX, this.contentY, this.contentWidth, this.contentHeight);
+	private void renderSidebar(GuiGraphicsExtractor graphics, ClientTacticsDataStore.WorldContext worldContext, int mouseX, int mouseY) {
+		int x = this.sideX;
+		int y = this.sideY;
+		int w = this.sideW;
+		graphics.fill(x, y, x + w, y + this.sideH, SIDEBAR_BACKGROUND);
+		graphics.outline(x, y, w, this.sideH, PANEL_BORDER);
+		graphics.text(this.font, GROUPS_HEADER, x + 4, y + 3, ACCENT_GROUPS, false);
+		this.addGroupButton.place(x + w - 3 - this.addGroupButton.w, y + 2, 10);
+		boolean canCreate = this.viewGroupCount < ClientTacticsDataStore.MAX_GROUPS;
+		this.addGroupButton.enabled = canCreate && worldContext != null;
+		this.addGroupButton.tooltip = canCreate ? TOOLTIP_ADD_GROUP : this.groupLimitTooltip();
+		this.drawButton(graphics, this.addGroupButton, mouseX, mouseY, STYLE_DARK);
+		this.sortButton.place(this.addGroupButton.x - 3 - this.sortButton.w, y + 2, 10);
+		this.sortButton.visible = this.sortButton.x > x + 4 + this.font.width(GROUPS_HEADER) + 4;
+		this.drawButton(graphics, this.sortButton, mouseX, mouseY, STYLE_DARK);
+
+		if (worldContext == null) {
+			this.renderCenteredMessage(graphics, UNAVAILABLE, null, x, y + 14, w, 40);
 			return;
 		}
-		this.refreshRosterView(worldContext);
-
-		int paneH = this.contentHeight - BOTTOM_BAR_HEIGHT - 2;
-		this.leftPaneW = (this.contentWidth - PANE_GAP) * LEFT_PANE_RATIO / 100;
-		this.rightPaneW = this.contentWidth - PANE_GAP - this.leftPaneW;
-		this.leftPaneX = this.contentX;
-		this.rightPaneX = this.contentX + this.leftPaneW + PANE_GAP;
-		this.leftPaneY = this.contentY;
-		this.rightPaneY = this.contentY;
-		this.leftPaneH = paneH;
-		this.rightPaneH = paneH;
-
-		this.renderGroupsPane(graphics, worldContext, mouseX, mouseY);
-		this.renderRosterPane(graphics, worldContext, mouseX, mouseY);
-		this.renderGroupsBar(graphics, mouseX, mouseY);
-
-		if (this.editingRow >= 0 && this.groupRenameField != null && !this.groupRenameField.isVisible()) {
-			this.cancelGroupRename();
-		}
-		if (!this.dragHandler.isActive()) {
-			this.renderGroupsTooltip(graphics, worldContext, mouseX, mouseY);
-		}
-	}
-
-	private void renderGroupsPane(GuiGraphicsExtractor graphics, ClientTacticsDataStore.WorldContext worldContext, int mouseX, int mouseY) {
-		graphics.fill(this.leftPaneX, this.leftPaneY, this.leftPaneX + this.leftPaneW, this.leftPaneY + this.leftPaneH, PANE_BACKGROUND);
-		graphics.outline(this.leftPaneX, this.leftPaneY, this.leftPaneW, this.leftPaneH, ROW_BORDER);
-		graphics.text(this.font, GROUPS_HEADER, this.leftPaneX + 6, this.leftPaneY + 4, ACCENT_GROUPS, false);
 		if (this.editingRow >= this.viewGroupCount) {
 			this.cancelGroupRename();
 		}
 
-		this.leftListTop = this.leftPaneY + PANE_HEADER_HEIGHT;
-		this.leftListBottom = this.leftPaneY + this.leftPaneH - 2;
-		int listH = this.leftListBottom - this.leftListTop;
-		int boxX = this.leftPaneX + 4;
-		int boxW = this.leftPaneW - 8 - SCROLLBAR_SPACE;
-		int cardW = Math.min(MINI_CARD_WIDTH, boxW - 10);
-		int perRow = Math.max(1, (boxW - 10 + MINI_CARD_GAP) / (cardW + MINI_CARD_GAP));
-		int groupCount = this.viewGroupCount;
-		boolean canCreate = groupCount < ClientTacticsDataStore.MAX_GROUPS;
-		int newBoxH = groupCount == 0 ? EMPTY_GROUPS_BOX_HEIGHT : NEW_GROUP_BOX_HEIGHT;
+		this.listTop = y + 14;
+		this.listBottom = y + this.sideH - 2;
+		int listX = x + 2;
+		int listW = w - 4 - SCROLLBAR_SPACE;
+		int listH = this.listBottom - this.listTop;
+		boolean dragging = this.dragHandler.isActive();
+		boolean showNewGroup = this.viewGroupCount == 0 || (dragging && canCreate);
+		int newGroupH = this.viewGroupCount == 0 ? 30 : GROUP_HEADER_HEIGHT;
 
 		int total = 0;
-		for (int row = 0; row < groupCount; row++) {
-			total += this.groupBoxHeight(this.groupMembers.get(row).size(), perRow) + GROUP_BOX_GAP;
+		for (int row = 0; row < this.viewGroupCount; row++) {
+			total += this.groupBlockHeight(row, listW) + GROUP_GAP;
 		}
-		if (canCreate) {
-			total += newBoxH + GROUP_BOX_GAP;
+		if (showNewGroup) {
+			total += newGroupH + GROUP_GAP;
 		}
-		this.leftPaneMaxScroll = Math.max(0, total - listH);
-		this.autoScrollWhileDragging(true, mouseX, mouseY);
-		this.leftPaneScrollTarget = Mth.clamp(this.leftPaneScrollTarget, 0, this.leftPaneMaxScroll);
-		this.leftPaneScrollAnimated = lerpPaneScroll(this.leftPaneScrollAnimated, this.leftPaneScrollTarget);
-		int scroll = Mth.clamp((int) Math.round(this.leftPaneScrollAnimated), 0, this.leftPaneMaxScroll);
+		total += 11 + this.trayHeight(listW);
+		this.listMaxScroll = Math.max(0, total - listH);
+		this.autoScrollWhileDragging(mouseX, mouseY);
+		this.listScrollTarget = Mth.clamp(this.listScrollTarget, 0, this.listMaxScroll);
+		this.listScrollAnimated = lerpPaneScroll(this.listScrollAnimated, this.listScrollTarget);
+		int scroll = Mth.clamp((int) Math.round(this.listScrollAnimated), 0, this.listMaxScroll);
 
-		graphics.enableScissor(this.leftPaneX + 1, this.leftListTop, this.leftPaneX + this.leftPaneW - 1, this.leftListBottom);
-		int y = this.leftListTop - scroll;
-		for (int row = 0; row < groupCount; row++) {
-			int h = this.groupBoxHeight(this.groupMembers.get(row).size(), perRow);
-			if (y + h >= this.leftListTop && y <= this.leftListBottom) {
-				this.renderGroupBox(graphics, worldContext, row, boxX, y, boxW, h, cardW, perRow, mouseX, mouseY);
+		graphics.enableScissor(x + 1, this.listTop, x + w - 1, this.listBottom);
+		int cy = this.listTop - scroll;
+		for (int row = 0; row < this.viewGroupCount; row++) {
+			int h = this.groupBlockHeight(row, listW);
+			if (cy + h >= this.listTop && cy <= this.listBottom) {
+				this.renderGroupBlock(graphics, worldContext, row, listX, cy, listW, h, mouseX, mouseY);
 			} else if (this.editingRow == row && this.groupRenameField != null) {
 				this.groupRenameField.setVisible(false);
 			}
-			y += h + GROUP_BOX_GAP;
+			cy += h + GROUP_GAP;
 		}
-		if (canCreate) {
-			this.renderNewGroupBox(graphics, groupCount, boxX, y, boxW, newBoxH, mouseX, mouseY);
+		if (showNewGroup) {
+			this.renderNewGroupDrop(graphics, listX, cy, listW, newGroupH);
+			cy += newGroupH + GROUP_GAP;
 		}
+		this.renderTray(graphics, listX, cy, listW, mouseX, mouseY);
 		graphics.disableScissor();
 
-		if (this.leftPaneMaxScroll > 0) {
-			this.renderScrollbar(graphics, this.leftPaneX + this.leftPaneW - 4, this.leftListTop, 3, listH, scroll, this.leftPaneMaxScroll, total);
-			if (scroll < this.leftPaneMaxScroll) {
-				graphics.fillGradient(this.leftPaneX + 1, this.leftListBottom - 12, this.leftPaneX + this.leftPaneW - SCROLLBAR_SPACE, this.leftListBottom, 0x00131B25, 0x99131B25);
+		if (this.listMaxScroll > 0) {
+			this.renderScrollbar(graphics, x + w - 4, this.listTop, 3, listH, scroll, this.listMaxScroll, total);
+			if (scroll < this.listMaxScroll) {
+				graphics.fillGradient(x + 1, this.listBottom - 10, x + w - SCROLLBAR_SPACE, this.listBottom, 0x000E131A, 0xAA0E131A);
 			}
 		}
 	}
 
-	private int groupBoxHeight(int memberCount, int perRow) {
-		int rows = Math.max(1, (memberCount + perRow - 1) / perRow);
-		return GROUP_HEADER_HEIGHT + rows * (MINI_CARD_HEIGHT + MINI_CARD_GAP) + 1;
+	private int groupBlockHeight(int row, int listW) {
+		int members = this.groupMembers.get(row).size();
+		if (this.collapsedRows.get(row)) {
+			return GROUP_HEADER_HEIGHT + 1 + this.chipRowsHeight(members, listW);
+		}
+		return GROUP_HEADER_HEIGHT + 1 + (members == 0 ? MEMBER_ROW_HEIGHT : members * MEMBER_ROW_STRIDE);
 	}
 
-	private void renderGroupBox(
+	private int chipsPerRow(int listW) {
+		return Math.max(1, (listW - 2 + CHIP_GAP) / (CHIP_WIDTH + CHIP_GAP));
+	}
+
+	private int chipRowsHeight(int members, int listW) {
+		if (members == 0) {
+			return CHIP_HEIGHT + 2;
+		}
+		int rows = (members + this.chipsPerRow(listW) - 1) / this.chipsPerRow(listW);
+		return rows * (CHIP_HEIGHT + CHIP_GAP);
+	}
+
+	private int trayPerRow(int listW) {
+		return Math.max(1, (listW - 4 + CHIP_GAP) / (TRAY_CHIP_WIDTH + CHIP_GAP));
+	}
+
+	private int trayHeight(int listW) {
+		int n = this.unassignedList.size();
+		if (n == 0) {
+			return 18;
+		}
+		int rows = (n + this.trayPerRow(listW) - 1) / this.trayPerRow(listW);
+		return Math.max(18, rows * (TRAY_CHIP_HEIGHT + CHIP_GAP) + 3);
+	}
+
+	private void renderGroupBlock(
 		GuiGraphicsExtractor graphics,
 		ClientTacticsDataStore.WorldContext worldContext,
 		int row,
@@ -1287,291 +1448,285 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		int y,
 		int w,
 		int h,
-		int cardW,
-		int perRow,
 		int mouseX,
 		int mouseY
 	) {
 		boolean dragging = this.dragHandler.isActive();
+		boolean collapsed = this.collapsedRows.get(row);
 		boolean dropHovered = dragging && this.dragTarget != null && this.dragTarget.kind == DropKind.GROUP && this.dragTarget.group == row;
-		boolean headerHovered = !dragging && this.inLeftList(mouseX, mouseY) && this.contains(x, y, w, GROUP_HEADER_HEIGHT, mouseX, mouseY);
+		boolean inList = this.inList(mouseY);
+		boolean headerHovered = !dragging && inList && this.contains(x, y, w, GROUP_HEADER_HEIGHT, mouseX, mouseY);
 
-		graphics.fill(x, y, x + w, y + h, dropHovered ? DROP_HOVER_BACKGROUND : ROW_BACKGROUND);
-		if (headerHovered) {
-			graphics.fill(x + 1, y + 1, x + w - 1, y + GROUP_HEADER_HEIGHT, ROW_HOVER_BACKGROUND);
+		if (dropHovered) {
+			graphics.fill(x, y, x + w, y + h, DROP_HOVER_BACKGROUND);
 		}
-		graphics.outline(x, y, w, h, dropHovered ? DROP_HOVER_BORDER : dragging ? DROP_IDLE_BORDER : ROW_BORDER);
-
-		int swatchX = x + 5;
-		int swatchY = y + 4;
+		// Header row
+		graphics.fill(x, y, x + w, y + GROUP_HEADER_HEIGHT, headerHovered ? HEADER_ROW_HOVER_BACKGROUND : collapsed ? HEADER_ROW_BACKGROUND : HEADER_ROW_OPEN_BACKGROUND);
+		graphics.outline(x, y, w, GROUP_HEADER_HEIGHT, dropHovered ? DROP_HOVER_BORDER : dragging ? DROP_IDLE_BORDER : ROW_BORDER);
 		RegionColor groupColor = this.dataStore.getGroupColor(worldContext, row);
-		boolean swatchHovered = !dragging && this.inLeftList(mouseX, mouseY) && this.contains(swatchX, swatchY, 12, 12, mouseX, mouseY);
-		if (groupColor == RegionColor.NONE) {
-			graphics.fill(swatchX, swatchY, swatchX + 12, swatchY + 12, 0xFF2C323D);
-			graphics.fill(swatchX + 3, swatchY + 6, swatchX + 9, swatchY + 7, TEXT_MUTED);
-		} else {
-			graphics.fill(swatchX, swatchY, swatchX + 12, swatchY + 12, groupColor.swatchArgb());
-			graphics.text(this.font, groupColor.hotkeyLabel(), swatchX + 4, swatchY + 2, groupColor.prefersDarkText() ? 0xFF10161D : 0xFFFFFFFF, false);
-		}
-		graphics.outline(swatchX, swatchY, 12, 12, swatchHovered ? TEXT_PRIMARY : 0xFF6A7A8D);
+		boolean stripeHovered = !dragging && inList && this.contains(x, y, 6, GROUP_HEADER_HEIGHT, mouseX, mouseY);
+		graphics.fill(x, y, x + (stripeHovered ? 5 : 3), y + GROUP_HEADER_HEIGHT, groupColor == RegionColor.NONE ? NO_COLOR_STRIPE : groupColor.swatchArgb());
+		this.drawArrow(graphics, x + 9, y + 5, !collapsed, TEXT_SECONDARY);
 
 		List<ClientGuardRosterStore.GuardRosterEntry> members = this.groupMembers.get(row);
-		String countText = this.countText(members.size());
-		int countWidth = this.font.width(countText);
-		graphics.text(this.font, countText, x + w - countWidth - 6, y + 6, TEXT_MUTED, false);
-		int nameX = swatchX + 17;
-		int nameMax = x + w - countWidth - 12 - nameX;
+		boolean compact = w < 150;
+		Component followLabel = compact ? FOLLOW_SHORT : FOLLOW;
+		Component stayLabel = compact ? STAY_SHORT : STAY;
+		int stayW = this.font.width(stayLabel) + 6;
+		int followW = this.font.width(followLabel) + 6;
+		int stayX = x + w - 2 - stayW;
+		int followX = stayX - 2 - followW;
+		int buttonY = y + 1;
+		this.drawSmallButton(graphics, stayLabel, stayX, buttonY, stayW, inList && !dragging && this.contains(stayX, buttonY, stayW, SMALL_BUTTON_HEIGHT, mouseX, mouseY));
+		this.drawSmallButton(graphics, followLabel, followX, buttonY, followW, inList && !dragging && this.contains(followX, buttonY, followW, SMALL_BUTTON_HEIGHT, mouseX, mouseY));
+		String count = this.countText(members.size());
+		int countX = followX - 3 - this.font.width(count);
+		graphics.text(this.font, count, countX, y + 3, TEXT_SECONDARY, false);
+
+		int nameX = x + 15;
 		if (this.editingRow == row && this.groupRenameField != null) {
 			this.groupRenameField.setVisible(true);
 			this.groupRenameField.setX(nameX - 2);
-			this.groupRenameField.setY(y + 2);
-			this.groupRenameField.setWidth(Math.max(40, x + w - 6 - (nameX - 2)));
+			this.groupRenameField.setY(y + 1);
+			this.groupRenameField.setWidth(Math.max(30, countX - 2 - (nameX - 2)));
 		} else {
-			graphics.text(this.font, this.fitGroupName(row, nameMax), nameX, y + 6, TEXT_PRIMARY, false);
+			graphics.text(this.font, this.fitGroupName(row, countX - 4 - nameX), nameX, y + 3, TEXT_PRIMARY, false);
 		}
-		this.addRowHit(row, swatchX, swatchY, x, y, w, GROUP_HEADER_HEIGHT);
+		this.addRowHit(row, x, y, w, GROUP_HEADER_HEIGHT, followX, followW, stayX, stayW);
 		this.addDropHit(DropKind.GROUP, row, x, y, w, h);
 
-		int cardsY = y + GROUP_HEADER_HEIGHT;
+		int bodyY = y + GROUP_HEADER_HEIGHT + 1;
 		if (members.isEmpty()) {
-			int textWidth = this.font.width(GROUP_EMPTY);
-			graphics.text(this.font, GROUP_EMPTY, x + Math.max(6, (w - textWidth) / 2), cardsY + (MINI_CARD_HEIGHT - 8) / 2, TEXT_MUTED, false);
+			String empty = this.newGroupFit.fit(this.font, GROUP_EMPTY, w - 8);
+			graphics.text(this.font, empty, x + 6, bodyY + 3, TEXT_MUTED, false);
+			return;
+		}
+		if (collapsed) {
+			int perRow = this.chipsPerRow(w);
+			for (int i = 0; i < members.size(); i++) {
+				int cx = x + 1 + (i % perRow) * (CHIP_WIDTH + CHIP_GAP);
+				int cyy = bodyY + (i / perRow) * (CHIP_HEIGHT + CHIP_GAP);
+				ClientGuardRosterStore.GuardRosterEntry guard = members.get(i);
+				this.renderChip(graphics, guard, cx, cyy, mouseX, mouseY);
+				this.addCardHit(guard, cx, cyy, CHIP_WIDTH, CHIP_HEIGHT, row);
+			}
 			return;
 		}
 		for (int i = 0; i < members.size(); i++) {
-			int cx = x + 5 + (i % perRow) * (cardW + MINI_CARD_GAP);
-			int cy = cardsY + (i / perRow) * (MINI_CARD_HEIGHT + MINI_CARD_GAP);
-			if (cy > this.leftListBottom || cy + MINI_CARD_HEIGHT < this.leftListTop) {
+			int ry = bodyY + i * MEMBER_ROW_STRIDE;
+			if (ry > this.listBottom || ry + MEMBER_ROW_HEIGHT < this.listTop) {
 				continue;
 			}
 			ClientGuardRosterStore.GuardRosterEntry guard = members.get(i);
-			this.renderGuardMiniCard(graphics, guard, cx, cy, cardW, mouseX, mouseY);
-			this.addCardHit(guard, cx, cy, cardW, MINI_CARD_HEIGHT, row, this.leftListTop, this.leftListBottom);
+			this.renderMemberRow(graphics, guard, x + 2, ry, w - 2, mouseX, mouseY);
+			this.addCardHit(guard, x + 2, ry, w - 2, MEMBER_ROW_HEIGHT, row);
 		}
 	}
 
-	private void renderNewGroupBox(GuiGraphicsExtractor graphics, int groupCount, int x, int y, int w, int h, int mouseX, int mouseY) {
+	private void renderNewGroupDrop(GuiGraphicsExtractor graphics, int x, int y, int w, int h) {
 		boolean dragging = this.dragHandler.isActive();
 		boolean hovered = dragging && this.dragTarget != null && this.dragTarget.kind == DropKind.NEW_GROUP;
 		graphics.fill(x, y, x + w, y + h, hovered ? DROP_HOVER_BACKGROUND : DROP_ZONE_BACKGROUND);
-		graphics.outline(x, y, w, h, hovered ? DROP_HOVER_BORDER : dragging ? DROP_IDLE_BORDER : DROP_ZONE_BORDER);
-		if (groupCount == 0) {
+		graphics.outline(x, y, w, h, hovered ? DROP_HOVER_BORDER : DROP_IDLE_BORDER);
+		if (this.viewGroupCount == 0) {
 			this.renderCenteredMessage(graphics, GROUPS_NONE_TITLE, GROUPS_NONE_BODY, x, y, w, h);
 		} else {
-			graphics.text(this.font, this.groupsHintFit.fit(this.font, GROUP_NEW, w - 12), x + 6, y + (h - 8) / 2, TEXT_SECONDARY, false);
+			graphics.text(this.font, this.newGroupFit.fit(this.font, GROUP_NEW, w - 8), x + 4, y + 3, TEXT_SECONDARY, false);
 		}
-		this.addDropHit(DropKind.NEW_GROUP, groupCount, x, y, w, h);
+		this.addDropHit(DropKind.NEW_GROUP, this.viewGroupCount, x, y, w, h);
 	}
 
-	private void renderRosterPane(GuiGraphicsExtractor graphics, ClientTacticsDataStore.WorldContext worldContext, int mouseX, int mouseY) {
-		int paneRight = this.rightPaneX + this.rightPaneW;
-		graphics.fill(this.rightPaneX, this.rightPaneY, paneRight, this.rightPaneY + this.rightPaneH, PANE_BACKGROUND);
-		graphics.outline(this.rightPaneX, this.rightPaneY, this.rightPaneW, this.rightPaneH, ROW_BORDER);
-
-		// Header: title on the left, sort + filter toggles on the right.
-		this.filterButton.place(paneRight - 3 - this.filterButton.w, this.rightPaneY + 2, 11);
-		this.sortButton.place(this.filterButton.x - 2 - this.sortButton.w, this.rightPaneY + 2, 11);
-		boolean showControls = this.sortButton.x > this.rightPaneX + 40;
-		this.sortButton.visible = showControls;
-		this.filterButton.visible = showControls;
-		this.drawButton(graphics, this.sortButton, mouseX, mouseY, BUTTON_FILL, BUTTON_HOVER_FILL, PANEL_BORDER);
-		this.drawButton(graphics, this.filterButton, mouseX, mouseY, this.filterUnassigned ? BUTTON_HOVER_FILL : BUTTON_FILL, BUTTON_HOVER_FILL, this.filterUnassigned ? ACCENT_GROUPS : PANEL_BORDER);
-		int headerMax = (showControls ? this.sortButton.x : paneRight) - 4 - (this.rightPaneX + 6);
-		graphics.text(this.font, this.guardsHeaderFit.fit(this.font, this.guardsHeader, headerMax), this.rightPaneX + 6, this.rightPaneY + 4, ACCENT_GROUPS, false);
-
-		// Unassign drop zone
-		int dropX = this.rightPaneX + 4;
-		int dropY = this.rightPaneY + PANE_HEADER_HEIGHT;
-		int dropW = this.rightPaneW - 8;
+	private void renderTray(GuiGraphicsExtractor graphics, int x, int y, int w, int mouseX, int mouseY) {
+		int n = this.unassignedList.size();
+		if (n != this.trayLabelCount) {
+			this.trayLabelCount = n;
+			this.trayLabel = Component.translatable(KEY + "tray.header", n).getString();
+		}
+		graphics.text(this.font, this.trayLabel, x + 2, y + 1, TEXT_MUTED, false);
+		int trayY = y + 11;
+		int trayH = this.trayHeight(w);
 		boolean dragging = this.dragHandler.isActive();
-		boolean dropHovered = dragging && this.dragTarget != null && this.dragTarget.kind == DropKind.UNASSIGN;
-		graphics.fill(dropX, dropY, dropX + dropW, dropY + UNASSIGN_DROP_HEIGHT, dropHovered ? DROP_HOVER_BACKGROUND : DROP_ZONE_BACKGROUND);
-		graphics.outline(dropX, dropY, dropW, UNASSIGN_DROP_HEIGHT, dropHovered ? DROP_HOVER_BORDER : dragging ? DROP_IDLE_BORDER : DROP_ZONE_BORDER);
-		graphics.text(this.font, this.unassignFit.fit(this.font, UNASSIGN_TARGET, dropW - 12), dropX + 6, dropY + 5, TEXT_SECONDARY, false);
-		this.addDropHit(DropKind.UNASSIGN, -1, dropX, dropY, dropW, UNASSIGN_DROP_HEIGHT);
+		boolean hovered = dragging && this.dragTarget != null && this.dragTarget.kind == DropKind.UNASSIGN;
+		graphics.fill(x, trayY, x + w, trayY + trayH, hovered ? DROP_HOVER_BACKGROUND : DROP_ZONE_BACKGROUND);
+		this.drawDashedOutline(graphics, x, trayY, w, trayH, hovered ? DROP_HOVER_BORDER : dragging ? KEY_COLOR : DROP_IDLE_BORDER);
+		this.addDropHit(DropKind.UNASSIGN, -1, x, trayY, w, trayH);
 
-		this.rightListTop = dropY + UNASSIGN_DROP_HEIGHT + 3;
-		this.rightListBottom = this.rightPaneY + this.rightPaneH - 2;
-		int listH = this.rightListBottom - this.rightListTop;
-		int cardX = this.rightPaneX + 4;
-		int cardW = this.rightPaneW - 8 - SCROLLBAR_SPACE;
-
-		List<ClientGuardRosterStore.GuardRosterEntry> list = this.rosterList;
-		int total = list.size() * (ROSTER_CARD_HEIGHT + ROSTER_CARD_GAP);
-		this.rightPaneMaxScroll = Math.max(0, total - listH);
-		this.autoScrollWhileDragging(false, mouseX, mouseY);
-		this.rightPaneScrollTarget = Mth.clamp(this.rightPaneScrollTarget, 0, this.rightPaneMaxScroll);
-		this.rightPaneScrollAnimated = lerpPaneScroll(this.rightPaneScrollAnimated, this.rightPaneScrollTarget);
-		int scroll = Mth.clamp((int) Math.round(this.rightPaneScrollAnimated), 0, this.rightPaneMaxScroll);
-
-		if (list.isEmpty()) {
-			Component title;
-			Component body;
+		if (n == 0) {
+			Component message;
 			if (!this.viewRosterLoaded) {
-				title = GUARDS_SYNCING;
-				body = GUARDS_SYNCING_BODY;
+				message = GUARDS_SYNCING;
 			} else if (this.viewRosterSize == 0) {
-				title = GUARDS_EMPTY_TITLE;
-				body = GUARDS_EMPTY_BODY;
+				message = null;
 			} else {
-				title = GUARDS_FILTERED_EMPTY;
-				body = null;
+				message = TRAY_EMPTY;
 			}
-			this.renderCenteredMessage(graphics, title, body, this.rightPaneX + 2, this.rightListTop, this.rightPaneW - 4, Math.min(listH, 60));
+			if (message != null) {
+				graphics.text(this.font, this.trayFit.fit(this.font, message, w - 8), x + 4, trayY + 5, TEXT_MUTED, false);
+			} else {
+				// No guards at all: point at the shop instead of an empty tray.
+				graphics.text(this.font, this.trayFit.fit(this.font, GUARDS_EMPTY_BODY, w - 8), x + 4, trayY + 5, TEXT_SECONDARY, false);
+			}
 			return;
 		}
-
-		graphics.enableScissor(this.rightPaneX + 1, this.rightListTop, paneRight - 1, this.rightListBottom);
-		int first = Math.max(0, scroll / (ROSTER_CARD_HEIGHT + ROSTER_CARD_GAP));
-		for (int i = first; i < list.size(); i++) {
-			int cardY = this.rightListTop + i * (ROSTER_CARD_HEIGHT + ROSTER_CARD_GAP) - scroll;
-			if (cardY > this.rightListBottom) {
-				break;
-			}
-			ClientGuardRosterStore.GuardRosterEntry guard = list.get(i);
-			int group = this.displayGroup(guard);
-			this.renderRosterCard(graphics, worldContext, guard, group, cardX, cardY, cardW, mouseX, mouseY);
-			this.addCardHit(guard, cardX, cardY, cardW, ROSTER_CARD_HEIGHT, group, this.rightListTop, this.rightListBottom);
-		}
-		graphics.disableScissor();
-
-		if (this.rightPaneMaxScroll > 0) {
-			this.renderScrollbar(graphics, paneRight - 4, this.rightListTop, 3, listH, scroll, this.rightPaneMaxScroll, total);
-			if (scroll < this.rightPaneMaxScroll) {
-				graphics.fillGradient(this.rightPaneX + 1, this.rightListBottom - 12, paneRight - SCROLLBAR_SPACE, this.rightListBottom, 0x00131B25, 0x99131B25);
-			}
+		int perRow = this.trayPerRow(w);
+		for (int i = 0; i < n; i++) {
+			int cx = x + 2 + (i % perRow) * (TRAY_CHIP_WIDTH + CHIP_GAP);
+			int cyy = trayY + 2 + (i / perRow) * (TRAY_CHIP_HEIGHT + CHIP_GAP);
+			ClientGuardRosterStore.GuardRosterEntry guard = this.unassignedList.get(i);
+			this.renderTrayChip(graphics, guard, cx, cyy, mouseX, mouseY);
+			this.addCardHit(guard, cx, cyy, TRAY_CHIP_WIDTH, TRAY_CHIP_HEIGHT, -1);
 		}
 	}
 
-	private final FitText unassignFit = new FitText();
+	private void renderMemberRow(GuiGraphicsExtractor graphics, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int w, int mouseX, int mouseY) {
+		boolean hovered = this.cardHovered(x, y, w, MEMBER_ROW_HEIGHT, mouseX, mouseY);
+		graphics.fill(x, y, x + w, y + MEMBER_ROW_HEIGHT, hovered ? CARD_HOVER_BACKGROUND : CARD_BACKGROUND);
+		graphics.outline(x, y, w, MEMBER_ROW_HEIGHT, hovered ? CARD_HOVER_BORDER : ROW_BORDER);
+		this.drawPendingMarker(graphics, guard, x, y, MEMBER_ROW_HEIGHT);
+		this.drawSmallItem(graphics, GUARD_HEAD_ICON, x + 2, y + 3);
+		this.drawSmallItem(graphics, roleIcon(guard), x + 12, y + 3);
 
-	private void renderGroupsBar(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
-		graphics.fill(this.contentX, this.barY, this.contentX + this.contentWidth, this.barY + BOTTOM_BAR_HEIGHT, BAR_BACKGROUND);
-		int buttonY = this.barY + 2;
-
-		boolean canCreate = this.viewGroupCount < ClientTacticsDataStore.MAX_GROUPS;
-		this.addGroupButton.place(this.contentX + 2, buttonY, CONTROL_HEIGHT);
-		this.addGroupButton.enabled = canCreate;
-		this.addGroupButton.tooltip = canCreate
-			? TOOLTIP_ADD_GROUP
-			: this.groupLimitTooltip();
-		this.drawButton(graphics, this.addGroupButton, mouseX, mouseY, BUTTON_FILL, BUTTON_HOVER_FILL, BUTTON_BORDER);
-
-		int pendingCount = this.pendingAssignments.size();
-		boolean awaiting = !this.awaitingConfirmation.isEmpty();
-		int labelKey = pendingCount > 0 ? pendingCount : awaiting ? -2 : -1;
-		if (labelKey != this.saveLabelCount) {
-			this.saveLabelCount = labelKey;
-			this.saveLabel = pendingCount > 0 ? Component.translatable(KEY + "save", pendingCount) : awaiting ? SAVING : SAVED;
-			this.unsavedLabel = pendingCount > 0 ? Component.translatable(KEY + "unsaved", pendingCount) : Component.empty();
-			this.saveButton.setLabel(this.font, this.saveLabel, 12);
+		CardText text = this.cardText(guard);
+		boolean showDistance = w >= 130 && !text.distance.isEmpty();
+		int barW = w >= 130 ? 30 : 16;
+		int right = x + w - 3;
+		if (showDistance) {
+			graphics.text(this.font, text.distance, right - text.distanceWidth, y + 3, TEXT_MUTED, false);
+			right -= text.distanceWidth + 3;
 		}
-		int right = this.contentX + this.contentWidth - 2;
-		this.saveButton.place(right - this.saveButton.w, buttonY, CONTROL_HEIGHT);
-		this.saveButton.enabled = pendingCount > 0;
-		this.saveButton.tooltip = TOOLTIP_SAVE;
-		this.drawButton(graphics, this.saveButton, mouseX, mouseY, SAVE_FILL, SAVE_HOVER_FILL, SAVE_BORDER);
-		right = this.saveButton.x - 4;
+		this.drawHealthBar(graphics, guard, right - barW, y + 6, barW, 2);
+		right -= barW + 3;
+		String level = levelText(guard.level());
+		int levelWidth = this.font.width(level);
+		graphics.text(this.font, level, right - levelWidth, y + 3, TEXT_SECONDARY, false);
+		right -= levelWidth + 3;
+		graphics.text(this.font, text.rowName(this.font, right - (x + 22)), x + 22, y + 3, TEXT_PRIMARY, false);
+		this.dimIfDragSource(graphics, guard, x, y, w, MEMBER_ROW_HEIGHT);
+	}
 
-		this.revertButton.visible = pendingCount > 0;
-		if (this.revertButton.visible) {
-			this.revertButton.place(right - this.revertButton.w, buttonY, CONTROL_HEIGHT);
-			this.drawButton(graphics, this.revertButton, mouseX, mouseY, BUTTON_FILL, BUTTON_HOVER_FILL, PANEL_BORDER);
-			right = this.revertButton.x - 6;
-			int unsavedWidth = this.font.width(this.unsavedLabel);
-			if (right - unsavedWidth - 8 > this.addGroupButton.x + this.addGroupButton.w + 40) {
-				graphics.fill(right - unsavedWidth - 8, this.barY + 7, right - unsavedWidth - 4, this.barY + 11, PENDING_MARKER);
-				graphics.text(this.font, this.unsavedLabel, right - unsavedWidth, this.barY + 5, PENDING_MARKER, false);
-				right -= unsavedWidth + 14;
-			}
+	private void renderChip(GuiGraphicsExtractor graphics, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int mouseX, int mouseY) {
+		boolean hovered = this.cardHovered(x, y, CHIP_WIDTH, CHIP_HEIGHT, mouseX, mouseY);
+		graphics.fill(x, y, x + CHIP_WIDTH, y + CHIP_HEIGHT, hovered ? CARD_HOVER_BACKGROUND : CARD_BACKGROUND);
+		graphics.outline(x, y, CHIP_WIDTH, CHIP_HEIGHT, hovered ? CARD_HOVER_BORDER : ROW_BORDER);
+		this.drawPendingMarker(graphics, guard, x, y, CHIP_HEIGHT);
+		this.drawSmallItem(graphics, roleIcon(guard), x + 2, y + 2);
+		graphics.text(this.font, this.cardText(guard).levelNumber, x + 12, y + 2, TEXT_PRIMARY, false);
+		this.drawHealthBar(graphics, guard, x + 24, y + 5, 10, 2);
+		this.dimIfDragSource(graphics, guard, x, y, CHIP_WIDTH, CHIP_HEIGHT);
+	}
+
+	private void renderTrayChip(GuiGraphicsExtractor graphics, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int mouseX, int mouseY) {
+		boolean hovered = this.cardHovered(x, y, TRAY_CHIP_WIDTH, TRAY_CHIP_HEIGHT, mouseX, mouseY);
+		graphics.fill(x, y, x + TRAY_CHIP_WIDTH, y + TRAY_CHIP_HEIGHT, hovered ? CARD_HOVER_BACKGROUND : CARD_BACKGROUND);
+		graphics.outline(x, y, TRAY_CHIP_WIDTH, TRAY_CHIP_HEIGHT, hovered ? CARD_HOVER_BORDER : ROW_BORDER);
+		this.drawPendingMarker(graphics, guard, x, y, TRAY_CHIP_HEIGHT);
+		this.drawSmallItem(graphics, GUARD_HEAD_ICON, x + 2, y + 2);
+		CardText text = this.cardText(guard);
+		int levelWidth = this.font.width(text.levelNumber);
+		graphics.text(this.font, text.levelNumber, x + TRAY_CHIP_WIDTH - 3 - levelWidth, y + 3, TEXT_SECONDARY, false);
+		graphics.text(this.font, text.miniName(this.font, TRAY_CHIP_WIDTH - 17 - levelWidth), x + 12, y + 3, TEXT_PRIMARY, false);
+		this.drawHealthBar(graphics, guard, x + 12, y + TRAY_CHIP_HEIGHT - 2, TRAY_CHIP_WIDTH - 14, 1);
+		this.dimIfDragSource(graphics, guard, x, y, TRAY_CHIP_WIDTH, TRAY_CHIP_HEIGHT);
+	}
+
+	private boolean cardHovered(int x, int y, int w, int h, int mouseX, int mouseY) {
+		return !this.dragHandler.isActive() && this.inList(mouseY) && this.contains(x, y, w, h, mouseX, mouseY);
+	}
+
+	private void drawPendingMarker(GuiGraphicsExtractor graphics, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int h) {
+		if (this.pendingAssignments.containsKey(guard.guardUuid())) {
+			graphics.fill(x + 1, y + 1, x + 2, y + h - 1, PENDING_MARKER);
 		}
+	}
 
-		int hintX = this.addGroupButton.x + this.addGroupButton.w + 8;
-		int hintWidth = right - hintX;
-		if (this.hasStatus()) {
-			graphics.text(this.font, this.statusFit.fit(this.font, this.statusText, hintWidth), hintX, this.barY + 5, this.statusColor, false);
+	private void dimIfDragSource(GuiGraphicsExtractor graphics, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int w, int h) {
+		if (this.dragHandler.isActive() && this.dragHandler.draggedGuard() == guard) {
+			graphics.fill(x, y, x + w, y + h, 0xAA0E141B);
+		}
+	}
+
+	/**
+	 * Role icon for a roster entry. The roster payload has no role yet, so every guard shows a sword; once
+	 * GuardRosterSyncPayload.GuardSummary carries the role, map it in ClientGuardRosterStore.toEntry and return
+	 * BOW_ICON for bowmen here.
+	 */
+	private static ItemStack roleIcon(ClientGuardRosterStore.GuardRosterEntry guard) {
+		return SWORD_ICON;
+	}
+
+	private void drawSmallItem(GuiGraphicsExtractor graphics, ItemStack stack, int x, int y) {
+		graphics.pose().pushMatrix();
+		graphics.pose().translate((float) x, (float) y);
+		graphics.pose().scale(0.5F, 0.5F);
+		graphics.item(stack, 0, 0);
+		graphics.pose().popMatrix();
+	}
+
+	private void drawHealthBar(GuiGraphicsExtractor graphics, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int w, int h) {
+		if (guard.maxHealth() <= 0.0F || w <= 0) {
+			return;
+		}
+		float ratio = Mth.clamp(guard.health() / guard.maxHealth(), 0.0F, 1.0F);
+		int color = ratio > 0.6F ? 0xFF4CC26A : ratio > 0.3F ? 0xFFE0B341 : 0xFFE05252;
+		graphics.fill(x, y, x + w, y + h, 0xFF3A0D0D);
+		graphics.fill(x, y, x + Math.max(1, Math.round(w * ratio)), y + h, color);
+	}
+
+	private void drawSmallButton(GuiGraphicsExtractor graphics, Component label, int x, int y, int w, boolean hovered) {
+		graphics.fill(x, y, x + w, y + SMALL_BUTTON_HEIGHT, hovered ? STYLE_DARK[1] : STYLE_DARK[0]);
+		graphics.outline(x, y, w, SMALL_BUTTON_HEIGHT, hovered ? TEXT_PRIMARY : STYLE_DARK[2]);
+		graphics.text(this.font, label, x + 3, y + 2, TEXT_PRIMARY, false);
+	}
+
+	private void drawArrow(GuiGraphicsExtractor graphics, int x, int y, boolean down, int color) {
+		if (down) {
+			graphics.fill(x - 2, y, x + 3, y + 1, color);
+			graphics.fill(x - 1, y + 1, x + 2, y + 2, color);
+			graphics.fill(x, y + 2, x + 1, y + 3, color);
 		} else {
-			Component hint = this.dragHandler.isActive() ? HINT_DRAGGING : this.viewRosterLoaded ? HINT_GROUPS : HINT_SYNCING;
-			graphics.text(this.font, this.hintFit.fit(this.font, hint, hintWidth), hintX, this.barY + 5, TEXT_SECONDARY, false);
+			graphics.fill(x - 1, y - 1, x, y + 4, color);
+			graphics.fill(x, y, x + 1, y + 3, color);
+			graphics.fill(x + 1, y + 1, x + 2, y + 2, color);
 		}
 	}
 
-	private List<Component> groupLimitTooltipCache;
-
-	private List<Component> groupLimitTooltip() {
-		if (this.groupLimitTooltipCache == null) {
-			this.groupLimitTooltipCache = List.of(Component.translatable(KEY + "add_group.limit", ClientTacticsDataStore.MAX_GROUPS));
+	private void drawDashedOutline(GuiGraphicsExtractor graphics, int x, int y, int w, int h, int color) {
+		for (int i = 0; i < w; i += 4) {
+			int end = Math.min(x + i + 2, x + w);
+			graphics.fill(x + i, y, end, y + 1, color);
+			graphics.fill(x + i, y + h - 1, end, y + h, color);
 		}
-		return this.groupLimitTooltipCache;
+		for (int i = 0; i < h; i += 4) {
+			int end = Math.min(y + i + 2, y + h);
+			graphics.fill(x, y + i, x + 1, end, color);
+			graphics.fill(x + w - 1, y + i, x + w, end, color);
+		}
 	}
 
-	private void renderGroupsTooltip(GuiGraphicsExtractor graphics, ClientTacticsDataStore.WorldContext worldContext, int mouseX, int mouseY) {
-		for (UiButton button : this.buttons) {
-			if (button.contains(mouseX, mouseY)) {
-				return;
-			}
-		}
-		for (int i = 0; i < this.rowHitCount; i++) {
-			RowHit hit = this.rowHits.get(i);
-			if (hit.containsSwatch(mouseX, mouseY)) {
-				RegionColor color = this.dataStore.getGroupColor(worldContext, hit.row);
-				if (hit.row != this.tooltipSwatchRow || color != this.tooltipSwatchColor) {
-					this.tooltipSwatchRow = hit.row;
-					this.tooltipSwatchColor = color;
-					this.groupSwatchTooltip = List.of(
-						color == RegionColor.NONE ? tr("group.swatch.none") : Component.translatable(KEY + "group.swatch", color.labelText()),
-						tr("group.swatch.body").copy().withStyle(net.minecraft.ChatFormatting.GRAY),
-						tr("group.swatch.link").copy().withStyle(net.minecraft.ChatFormatting.DARK_GRAY)
-					);
-				}
-				graphics.setComponentTooltipForNextFrame(this.font, this.groupSwatchTooltip, mouseX, mouseY);
-				return;
-			}
-		}
-		CardHit card = this.findCardHit(mouseX, mouseY);
-		if (card != null) {
-			this.renderGuardTooltip(graphics, card.guard, card.group, mouseX, mouseY);
+	private void handleSidebarClick(double mouseX, double mouseY, int button, boolean shiftDown, boolean doubleClick) {
+		ClientTacticsDataStore.WorldContext worldContext = this.worldContext();
+		if (worldContext == null || !this.inList(mouseY)) {
 			return;
 		}
-		for (int i = 0; i < this.rowHitCount; i++) {
-			RowHit hit = this.rowHits.get(i);
-			if (hit.containsHeader(mouseX, mouseY) && this.editingRow != hit.row) {
-				graphics.setComponentTooltipForNextFrame(this.font, TOOLTIP_RENAME, mouseX, mouseY);
-				return;
-			}
-		}
-	}
-
-	private boolean handleGroupsClick(double mouseX, double mouseY, int button, boolean shiftDown, boolean doubleClick) {
-		ClientTacticsDataStore.WorldContext worldContext = this.worldContext();
-		if (button == 0 && this.addGroupButton.enabled && this.addGroupButton.contains(mouseX, mouseY)) {
-			this.addGroup(worldContext);
-			return true;
-		}
-		if (button == 0 && this.saveButton.enabled && this.saveButton.contains(mouseX, mouseY)) {
-			this.saveAssignments();
-			return true;
-		}
-		if (button == 0 && this.revertButton.contains(mouseX, mouseY)) {
-			this.revertAssignments();
-			return true;
-		}
-		if (button == 0 && this.sortButton.contains(mouseX, mouseY)) {
-			this.sortMode = this.sortMode.next();
-			return true;
-		}
-		if (button == 0 && this.filterButton.contains(mouseX, mouseY)) {
-			this.filterUnassigned = !this.filterUnassigned;
-			this.rightPaneScrollTarget = 0;
-			return true;
-		}
-		if (worldContext == null) {
-			return false;
-		}
-
 		for (int i = 0; i < this.rowHitCount; i++) {
 			RowHit row = this.rowHits.get(i);
-			if (row.containsSwatch(mouseX, mouseY)) {
+			if (!row.containsHeader(mouseX, mouseY)) {
+				continue;
+			}
+			if (row.containsFollow(mouseX, mouseY)) {
+				if (button == 0) {
+					this.orderGroupRow = row.row;
+					this.orderGroup(row.row, true);
+				}
+				return;
+			}
+			if (row.containsStay(mouseX, mouseY)) {
+				if (button == 0) {
+					this.orderGroup(row.row, false);
+				}
+				return;
+			}
+			if (row.containsStripe(mouseX, mouseY)) {
 				RegionColor current = this.dataStore.getGroupColor(worldContext, row.row);
 				RegionColor next;
 				if (button == 1) {
@@ -1582,22 +1737,28 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 					next = shiftDown ? current.previousPaletteColor() : current.nextPaletteColor();
 				}
 				this.dataStore.setGroupColor(worldContext, row.row, next);
-				return true;
+				return;
 			}
-			if (row.containsHeader(mouseX, mouseY) && ((button == 1 && shiftDown) || (button == 0 && doubleClick))) {
+			if ((button == 1 && shiftDown) || (button == 0 && doubleClick)) {
+				if (doubleClick) {
+					// The first click of the double-click already toggled; undo it so renaming keeps the layout.
+					this.collapsedRows.flip(row.row);
+				}
 				this.startGroupRename(row.row, this.groupNames.get(row.row));
-				return true;
+				return;
 			}
+			if (button == 0) {
+				this.collapsedRows.flip(row.row);
+			}
+			return;
 		}
 
 		if (button == 0) {
 			CardHit card = this.findCardHit(mouseX, mouseY);
 			if (card != null) {
 				this.dragHandler.arm(card.guard, card.group, card.group < 0, mouseX, mouseY);
-				return true;
 			}
 		}
-		return false;
 	}
 
 	private void addGroup(ClientTacticsDataStore.WorldContext worldContext) {
@@ -1610,6 +1771,214 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			this.localRevision++;
 			this.setStatus(Component.translatable(KEY + "status.group_added", nextRow + 1), STATUS_SUCCESS);
 		}
+	}
+
+	private List<Component> groupLimitTooltip() {
+		if (this.groupLimitTooltipCache == null) {
+			this.groupLimitTooltipCache = List.of(Component.translatable(KEY + "add_group.limit", ClientTacticsDataStore.MAX_GROUPS));
+		}
+		return this.groupLimitTooltipCache;
+	}
+
+	// ---------------------------------------------------------------- tooltips
+
+	private void renderTooltips(GuiGraphicsExtractor graphics, ClientTacticsDataStore.WorldContext worldContext, int mouseX, int mouseY, boolean popupOpen) {
+		if (popupOpen) {
+			return;
+		}
+		for (UiButton button : this.buttons) {
+			if (button.contains(mouseX, mouseY) && !button.tooltip.isEmpty()) {
+				graphics.setComponentTooltipForNextFrame(this.font, button.tooltip, mouseX, mouseY);
+				return;
+			}
+		}
+		RegionColor swatch = this.barSwatchAt(mouseX, mouseY);
+		if (swatch != null) {
+			this.renderSwatchTooltip(graphics, worldContext, swatch, mouseX, mouseY);
+			return;
+		}
+		if (worldContext == null) {
+			return;
+		}
+		if (this.contains(this.sideX, this.sideY, this.sideW, this.sideH, mouseX, mouseY)) {
+			this.renderSidebarTooltip(graphics, worldContext, mouseX, mouseY);
+			return;
+		}
+		this.renderChunkTooltip(graphics, worldContext, mouseX, mouseY);
+	}
+
+	private void renderSwatchTooltip(GuiGraphicsExtractor graphics, ClientTacticsDataStore.WorldContext worldContext, RegionColor swatch, int mouseX, int mouseY) {
+		int row = this.rowForColor(worldContext, swatch);
+		if (this.tooltipSwatch != swatch || this.swatchTooltip.isEmpty()) {
+			this.tooltipSwatch = swatch;
+			List<Component> lines = new ArrayList<>(3);
+			lines.add(Component.translatable(KEY + "palette.tooltip", swatch.labelText(), swatch.hotkeyLabel()));
+			lines.add(row >= 0
+				? Component.translatable(KEY + "palette.tooltip.group", this.groupNames.get(row)).withStyle(ChatFormatting.GRAY)
+				: tr("palette.tooltip.unbound").withStyle(ChatFormatting.DARK_GRAY));
+			lines.add(tr("palette.tooltip.body").withStyle(ChatFormatting.GRAY));
+			this.swatchTooltip = lines;
+		}
+		graphics.setComponentTooltipForNextFrame(this.font, this.swatchTooltip, mouseX, mouseY);
+	}
+
+	private void renderSidebarTooltip(GuiGraphicsExtractor graphics, ClientTacticsDataStore.WorldContext worldContext, int mouseX, int mouseY) {
+		if (!this.inList(mouseY)) {
+			return;
+		}
+		for (int i = 0; i < this.rowHitCount; i++) {
+			RowHit hit = this.rowHits.get(i);
+			if (!hit.containsHeader(mouseX, mouseY) || this.editingRow == hit.row) {
+				continue;
+			}
+			int part = hit.containsFollow(mouseX, mouseY) ? 1 : hit.containsStay(mouseX, mouseY) ? 2 : hit.containsStripe(mouseX, mouseY) ? 3 : 0;
+			RegionColor color = this.dataStore.getGroupColor(worldContext, hit.row);
+			if (hit.row != this.tooltipRow || part != this.tooltipRowPart || color != this.tooltipRowColor) {
+				this.tooltipRow = hit.row;
+				this.tooltipRowPart = part;
+				this.tooltipRowColor = color;
+				String name = this.groupNames.get(hit.row);
+				this.rowTooltip = switch (part) {
+					case 1 -> List.of(Component.translatable(KEY + "group.follow.tooltip", name));
+					case 2 -> List.of(Component.translatable(KEY + "group.stay.tooltip", name));
+					case 3 -> List.of(
+						color == RegionColor.NONE ? tr("group.swatch.none") : Component.translatable(KEY + "group.swatch", color.labelText()),
+						tr("group.swatch.body").withStyle(ChatFormatting.GRAY),
+						tr("group.swatch.link").withStyle(ChatFormatting.DARK_GRAY)
+					);
+					default -> List.of(Component.literal(name), tr("group.name.tooltip").withStyle(ChatFormatting.GRAY));
+				};
+			}
+			graphics.setComponentTooltipForNextFrame(this.font, this.rowTooltip, mouseX, mouseY);
+			return;
+		}
+		CardHit card = this.findCardHit(mouseX, mouseY);
+		if (card != null) {
+			this.renderGuardTooltip(graphics, card.guard, card.group, mouseX, mouseY);
+		}
+	}
+
+	private void renderGuardTooltip(GuiGraphicsExtractor graphics, ClientGuardRosterStore.GuardRosterEntry guard, int group, int mouseX, int mouseY) {
+		if (guard != this.tooltipGuard || group != this.tooltipGuardGroup) {
+			this.tooltipGuard = guard;
+			this.tooltipGuardGroup = group;
+			this.guardTooltip = this.buildGuardTooltip(guard, group);
+		}
+		graphics.setComponentTooltipForNextFrame(this.font, this.guardTooltip, mouseX, mouseY);
+	}
+
+	private List<Component> buildGuardTooltip(ClientGuardRosterStore.GuardRosterEntry guard, int group) {
+		List<Component> tooltip = new ArrayList<>(8);
+		tooltip.add(Component.literal(guard.displayName()));
+		if (guard.maxHealth() > 0.0F) {
+			tooltip.add(Component.translatable(KEY + "guard.health", Mth.ceil(guard.health()), Mth.ceil(guard.maxHealth())).withStyle(ChatFormatting.GRAY));
+		}
+		if (guard.experience() >= 0) {
+			tooltip.add(guard.level() >= 10
+				? Component.translatable(KEY + "guard.level_max", guard.level()).withStyle(ChatFormatting.GRAY)
+				: Component.translatable(KEY + "guard.level", guard.level(), guard.experience(), guard.level() * 120).withStyle(ChatFormatting.GRAY));
+		} else {
+			tooltip.add(Component.literal(levelText(guard.level())).withStyle(ChatFormatting.GRAY));
+		}
+		ItemStack weapon = guard.mainHand();
+		Component weaponName = weapon == null || weapon.isEmpty() ? tr("guard.none") : weapon.getHoverName();
+		tooltip.add(Component.translatable(KEY + "guard.weapon", weaponName, weaponDamage(weapon)).withStyle(ChatFormatting.GRAY));
+		int totalArmor = armorPoints(guard.helmet()) + armorPoints(guard.chest()) + armorPoints(guard.legs()) + armorPoints(guard.boots());
+		tooltip.add(Component.translatable(KEY + "guard.armor", totalArmor).withStyle(ChatFormatting.GRAY));
+		tooltip.add(guard.distance() >= 0.0D
+			? Component.translatable(KEY + "guard.distance", String.format(Locale.ROOT, "%.1f", guard.distance())).withStyle(ChatFormatting.GRAY)
+			: tr("guard.distance_unknown").withStyle(ChatFormatting.GRAY));
+		String groupName = group < 0 ? UNASSIGNED.getString() : (group < this.groupNames.size() ? this.groupNames.get(group) : guard.groupName());
+		boolean pending = this.pendingAssignments.containsKey(guard.guardUuid());
+		tooltip.add(Component.translatable(KEY + (pending ? "guard.group_pending" : "guard.group"), groupName)
+			.withStyle(pending ? ChatFormatting.YELLOW : ChatFormatting.GRAY));
+		tooltip.add(GUARD_DRAG_HINT);
+		return tooltip;
+	}
+
+	// ---------------------------------------------------------------- help
+
+	private boolean helpFitsTwoColumns() {
+		return this.helpColumnWidth(HELP_MAP) + this.helpColumnWidth(HELP_GROUPS) + 30 <= this.panelWidth - 16;
+	}
+
+	private int helpColumnWidth(Component[][] rows) {
+		int keyWidth = 0;
+		int descWidth = 0;
+		for (Component[] row : rows) {
+			keyWidth = Math.max(keyWidth, this.font.width(row[0]));
+			descWidth = Math.max(descWidth, this.font.width(row[1]));
+		}
+		return keyWidth + descWidth + 12;
+	}
+
+	private void renderHelp(GuiGraphicsExtractor graphics) {
+		int areaX = this.panelX + 4;
+		int areaY = this.panelY + HEADER_HEIGHT;
+		int areaW = this.panelWidth - 8;
+		int areaH = this.panelHeight - HEADER_HEIGHT - 4;
+		graphics.fill(areaX, areaY, areaX + areaW, areaY + areaH, 0x99000000);
+
+		boolean twoColumns = this.helpFitsTwoColumns();
+		int lineHeight = 10;
+		int rows = twoColumns ? Math.max(HELP_MAP.length, HELP_GROUPS.length) : (this.helpPage == 0 ? HELP_MAP.length : HELP_GROUPS.length);
+		int maxRows = Math.max(1, (areaH - 56) / lineHeight);
+		int visibleRows = Math.min(rows, maxRows);
+		int width = twoColumns
+			? Math.min(areaW - 8, this.helpColumnWidth(HELP_MAP) + this.helpColumnWidth(HELP_GROUPS) + 30)
+			: Math.min(areaW - 8, this.helpColumnWidth(this.helpPage == 0 ? HELP_MAP : HELP_GROUPS) + 16);
+		int height = 22 + visibleRows * lineHeight + 26;
+		int x = areaX + (areaW - width) / 2;
+		int y = areaY + Math.max(2, (areaH - height) / 2);
+		graphics.fill(x, y, x + width, y + height, 0xF60F151D);
+		graphics.outline(x, y, width, height, ACCENT_ZONES);
+
+		Component note;
+		if (twoColumns) {
+			int columnW = (width - 24) / 2;
+			this.renderHelpColumn(graphics, HELP_TITLE_MAP, HELP_MAP, x + 8, y + 7, columnW, visibleRows, ACCENT_ZONES);
+			this.renderHelpColumn(graphics, HELP_TITLE_GROUPS, HELP_GROUPS, x + 16 + columnW, y + 7, columnW, visibleRows, ACCENT_GROUPS);
+			note = HELP_NOTE_GROUPS;
+			graphics.text(this.font, ellipsize(this.font, HELP_NOTE_MAP.getString(), width - 16), x + 8, y + height - 32, TEXT_MUTED, false);
+		} else {
+			boolean map = this.helpPage == 0;
+			this.renderHelpColumn(graphics, map ? HELP_TITLE_MAP : HELP_TITLE_GROUPS, map ? HELP_MAP : HELP_GROUPS, x + 8, y + 7, width - 16, visibleRows, map ? ACCENT_ZONES : ACCENT_GROUPS);
+			note = map ? HELP_NOTE_MAP : HELP_NOTE_GROUPS;
+		}
+		graphics.text(this.font, ellipsize(this.font, note.getString(), width - 16), x + 8, y + height - 22, TEXT_MUTED, false);
+		Component footer = !twoColumns && this.helpPage == 0 ? HELP_NEXT : HELP_DISMISS;
+		graphics.text(this.font, ellipsize(this.font, footer.getString(), width - 16), x + 8, y + height - 12, KEY_COLOR, false);
+	}
+
+	// The legend is a rare overlay, not a hot path, so its strings are trimmed per frame.
+	private void renderHelpColumn(GuiGraphicsExtractor graphics, Component title, Component[][] rows, int x, int y, int width, int visibleRows, int accent) {
+		graphics.text(this.font, title, x, y, accent, false);
+		int keyWidth = 0;
+		for (Component[] row : rows) {
+			keyWidth = Math.max(keyWidth, this.font.width(row[0]));
+		}
+		keyWidth = Math.min(keyWidth, width / 2);
+		int rowY = y + 15;
+		for (int i = 0; i < Math.min(visibleRows, rows.length); i++) {
+			graphics.text(this.font, ellipsize(this.font, rows[i][0].getString(), keyWidth), x, rowY, KEY_COLOR, false);
+			graphics.text(this.font, ellipsize(this.font, rows[i][1].getString(), width - keyWidth - 8), x + keyWidth + 8, rowY, TEXT_SECONDARY, false);
+			rowY += 10;
+		}
+	}
+
+	// ---------------------------------------------------------------- status
+
+	private void setStatus(Component text, int color) {
+		this.statusText = text;
+		this.statusColor = color;
+		this.statusUntil = System.currentTimeMillis() + STATUS_DURATION_MILLIS;
+	}
+
+	private boolean hasStatus() {
+		if (this.statusText != null && System.currentTimeMillis() > this.statusUntil) {
+			this.statusText = null;
+		}
+		return this.statusText != null;
 	}
 
 	// ---------------------------------------------------------------- drag and drop
@@ -1647,32 +2016,18 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		}
 	}
 
-	private final DropHit dragTargetScratch = new DropHit();
-
-	private void autoScrollWhileDragging(boolean leftPane, int mouseX, int mouseY) {
-		if (!this.dragHandler.isActive()) {
-			return;
-		}
-		int paneX = leftPane ? this.leftPaneX : this.rightPaneX;
-		int paneW = leftPane ? this.leftPaneW : this.rightPaneW;
-		int top = leftPane ? this.leftListTop : this.rightListTop;
-		int bottom = leftPane ? this.leftListBottom : this.rightListBottom;
-		if (mouseX < paneX || mouseX >= paneX + paneW) {
+	private void autoScrollWhileDragging(int mouseX, int mouseY) {
+		if (!this.dragHandler.isActive() || mouseX < this.sideX || mouseX >= this.sideX + this.sideW) {
 			return;
 		}
 		int delta = 0;
-		if (mouseY >= top - 4 && mouseY < top + DRAG_AUTOSCROLL_EDGE) {
+		if (mouseY >= this.listTop - 4 && mouseY < this.listTop + DRAG_AUTOSCROLL_EDGE) {
 			delta = -DRAG_AUTOSCROLL_SPEED;
-		} else if (mouseY > bottom - DRAG_AUTOSCROLL_EDGE && mouseY <= bottom + 4) {
+		} else if (mouseY > this.listBottom - DRAG_AUTOSCROLL_EDGE && mouseY <= this.listBottom + 4) {
 			delta = DRAG_AUTOSCROLL_SPEED;
 		}
-		if (delta == 0) {
-			return;
-		}
-		if (leftPane) {
-			this.leftPaneScrollTarget = Mth.clamp(this.leftPaneScrollTarget + delta, 0, this.leftPaneMaxScroll);
-		} else {
-			this.rightPaneScrollTarget = Mth.clamp(this.rightPaneScrollTarget + delta, 0, this.rightPaneMaxScroll);
+		if (delta != 0) {
+			this.listScrollTarget = Mth.clamp(this.listScrollTarget + delta, 0, this.listMaxScroll);
 		}
 	}
 
@@ -1891,105 +2246,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		return this.contains(field.getX(), field.getY(), field.getWidth(), field.getHeight(), mouseX, mouseY);
 	}
 
-	// ---------------------------------------------------------------- cards
-
-	private void renderGuardMiniCard(GuiGraphicsExtractor graphics, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int w, int mouseX, int mouseY) {
-		boolean isSource = this.dragHandler.isActive() && this.dragHandler.draggedGuard() == guard;
-		boolean hovered = !this.dragHandler.isActive() && this.inLeftList(mouseX, mouseY) && this.contains(x, y, w, MINI_CARD_HEIGHT, mouseX, mouseY);
-		graphics.fill(x, y, x + w, y + MINI_CARD_HEIGHT, hovered ? CARD_HOVER_BACKGROUND : CARD_BACKGROUND);
-		graphics.outline(x, y, w, MINI_CARD_HEIGHT, hovered ? CARD_HOVER_BORDER : CARD_BORDER);
-		if (this.pendingAssignments.containsKey(guard.guardUuid())) {
-			graphics.fill(x + 1, y + 1, x + 3, y + MINI_CARD_HEIGHT - 1, PENDING_MARKER);
-		}
-		graphics.item(GUARD_HEAD_ICON, x + 3, y + 2);
-		CardText text = this.cardText(guard);
-		graphics.text(this.font, text.miniName(this.font, w - 22), x + 20, y + 3, TEXT_PRIMARY, false);
-		graphics.text(this.font, levelText(guard.level()), x + 20, y + 12, TEXT_SECONDARY, false);
-		if (!text.distance.isEmpty() && w >= 70) {
-			graphics.text(this.font, text.distance, x + w - text.distanceWidth - 3, y + 12, TEXT_MUTED, false);
-		}
-		int armorY = y + 21;
-		this.drawMiniArmorIcon(graphics, guard.helmet(), x + 3, armorY);
-		this.drawMiniArmorIcon(graphics, guard.chest(), x + 20, armorY);
-		this.drawMiniArmorIcon(graphics, guard.legs(), x + 37, armorY);
-		this.drawMiniArmorIcon(graphics, guard.boots(), x + 54, armorY);
-		this.drawHealthBar(graphics, guard, x + 2, y + MINI_CARD_HEIGHT - 3, w - 4, 2);
-		if (isSource) {
-			graphics.fill(x, y, x + w, y + MINI_CARD_HEIGHT, 0xAA0E141B);
-		}
-	}
-
-	private void drawMiniArmorIcon(GuiGraphicsExtractor graphics, ItemStack stack, int x, int y) {
-		if (stack == null || stack.isEmpty()) {
-			graphics.fill(x + 2, y + 2, x + 12, y + 12, 0x444D5F72);
-			return;
-		}
-		graphics.pose().pushMatrix();
-		graphics.pose().translate((float) x, (float) y);
-		graphics.pose().scale(0.875F, 0.875F);
-		graphics.item(stack, 0, 0);
-		graphics.pose().popMatrix();
-	}
-
-	private void renderRosterCard(
-		GuiGraphicsExtractor graphics,
-		ClientTacticsDataStore.WorldContext worldContext,
-		ClientGuardRosterStore.GuardRosterEntry guard,
-		int group,
-		int x,
-		int y,
-		int w,
-		int mouseX,
-		int mouseY
-	) {
-		boolean isSource = this.dragHandler.isActive() && this.dragHandler.draggedGuard() == guard;
-		boolean hovered = !this.dragHandler.isActive()
-			&& mouseY >= this.rightListTop && mouseY < this.rightListBottom
-			&& this.contains(x, y, w, ROSTER_CARD_HEIGHT, mouseX, mouseY);
-		graphics.fill(x, y, x + w, y + ROSTER_CARD_HEIGHT, hovered ? CARD_HOVER_BACKGROUND : CARD_BACKGROUND);
-		graphics.outline(x, y, w, ROSTER_CARD_HEIGHT, hovered ? CARD_HOVER_BORDER : CARD_BORDER);
-		if (this.pendingAssignments.containsKey(guard.guardUuid())) {
-			graphics.fill(x + 1, y + 1, x + 3, y + ROSTER_CARD_HEIGHT - 1, PENDING_MARKER);
-		}
-		graphics.item(GUARD_HEAD_ICON, x + 3, y + 5);
-
-		CardText text = this.cardText(guard);
-		String level = levelText(guard.level());
-		int levelWidth = this.font.width(level);
-		graphics.text(this.font, level, x + w - levelWidth - 4, y + 4, TEXT_SECONDARY, false);
-		graphics.text(this.font, text.rowName(this.font, w - 22 - levelWidth - 8), x + 22, y + 4, TEXT_PRIMARY, false);
-
-		// Second line: health bar, group chip, distance.
-		int lineY = y + 15;
-		int barW = Mth.clamp(w / 5, 16, 36);
-		this.drawHealthBar(graphics, guard, x + 22, lineY + 2, barW, 4);
-		int distanceX = x + w - 4;
-		if (!text.distance.isEmpty()) {
-			distanceX -= text.distanceWidth;
-			graphics.text(this.font, text.distance, distanceX, lineY, TEXT_MUTED, false);
-		}
-		int chipX = x + 22 + barW + 5;
-		int chipMax = distanceX - 4 - (chipX + 8);
-		if (chipMax > 12) {
-			RegionColor groupColor = group >= 0 ? this.dataStore.getGroupColor(worldContext, group) : RegionColor.NONE;
-			graphics.fill(chipX, lineY + 1, chipX + 6, lineY + 7, group < 0 ? 0xFF3A4654 : groupColor == RegionColor.NONE ? 0xFF6A7A8D : groupColor.swatchArgb());
-			String groupName = group < 0 ? text.unassigned(this.font, chipMax) : this.fitGroupName(group, chipMax);
-			graphics.text(this.font, groupName, chipX + 8, lineY, group < 0 ? TEXT_MUTED : TEXT_SECONDARY, false);
-		}
-		if (isSource) {
-			graphics.fill(x, y, x + w, y + ROSTER_CARD_HEIGHT, 0xAA0E141B);
-		}
-	}
-
-	private void drawHealthBar(GuiGraphicsExtractor graphics, ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int w, int h) {
-		if (guard.maxHealth() <= 0.0F || w <= 0) {
-			return;
-		}
-		float ratio = Mth.clamp(guard.health() / guard.maxHealth(), 0.0F, 1.0F);
-		int color = ratio > 0.6F ? 0xFF4CC26A : ratio > 0.3F ? 0xFFE0B341 : 0xFFE05252;
-		graphics.fill(x, y, x + w, y + h, 0xFF0E141B);
-		graphics.fill(x, y, x + Math.max(1, Math.round(w * ratio)), y + h, color);
-	}
+	// ---------------------------------------------------------------- roster helpers
 
 	private CardText cardText(ClientGuardRosterStore.GuardRosterEntry guard) {
 		CardText text = this.cardTexts.get(guard.guardUuid());
@@ -2001,7 +2258,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	}
 
 	private String countText(int count) {
-		return this.countCache.get(count, this.font);
+		return this.countCache.get(count);
 	}
 
 	private final CountCache countCache = new CountCache();
@@ -2014,44 +2271,6 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	}
 
 	private final GroupNameFits groupNameFits = new GroupNameFits();
-
-	private void renderGuardTooltip(GuiGraphicsExtractor graphics, ClientGuardRosterStore.GuardRosterEntry guard, int group, int mouseX, int mouseY) {
-		if (guard != this.tooltipGuard || group != this.tooltipGuardGroup) {
-			this.tooltipGuard = guard;
-			this.tooltipGuardGroup = group;
-			this.guardTooltip = this.buildGuardTooltip(guard, group);
-		}
-		graphics.setComponentTooltipForNextFrame(this.font, this.guardTooltip, mouseX, mouseY);
-	}
-
-	private List<Component> buildGuardTooltip(ClientGuardRosterStore.GuardRosterEntry guard, int group) {
-		List<Component> tooltip = new ArrayList<>(8);
-		tooltip.add(Component.literal(guard.displayName()));
-		if (guard.maxHealth() > 0.0F) {
-			tooltip.add(Component.translatable(KEY + "guard.health", Mth.ceil(guard.health()), Mth.ceil(guard.maxHealth())).withStyle(net.minecraft.ChatFormatting.GRAY));
-		}
-		if (guard.experience() >= 0) {
-			tooltip.add(guard.level() >= 10
-				? Component.translatable(KEY + "guard.level_max", guard.level()).withStyle(net.minecraft.ChatFormatting.GRAY)
-				: Component.translatable(KEY + "guard.level", guard.level(), guard.experience(), guard.level() * 120).withStyle(net.minecraft.ChatFormatting.GRAY));
-		} else {
-			tooltip.add(Component.literal(levelText(guard.level())).withStyle(net.minecraft.ChatFormatting.GRAY));
-		}
-		ItemStack weapon = guard.mainHand();
-		Component weaponName = weapon == null || weapon.isEmpty() ? tr("guard.none") : weapon.getHoverName();
-		tooltip.add(Component.translatable(KEY + "guard.weapon", weaponName, weaponDamage(weapon)).withStyle(net.minecraft.ChatFormatting.GRAY));
-		int totalArmor = armorPoints(guard.helmet()) + armorPoints(guard.chest()) + armorPoints(guard.legs()) + armorPoints(guard.boots());
-		tooltip.add(Component.translatable(KEY + "guard.armor", totalArmor).withStyle(net.minecraft.ChatFormatting.GRAY));
-		tooltip.add(guard.distance() >= 0.0D
-			? Component.translatable(KEY + "guard.distance", String.format(Locale.ROOT, "%.1f", guard.distance())).withStyle(net.minecraft.ChatFormatting.GRAY)
-			: tr("guard.distance_unknown").copy().withStyle(net.minecraft.ChatFormatting.GRAY));
-		String groupName = group < 0 ? UNASSIGNED.getString() : (group < this.groupNames.size() ? this.groupNames.get(group) : guard.groupName());
-		boolean pending = this.pendingAssignments.containsKey(guard.guardUuid());
-		tooltip.add(Component.translatable(KEY + (pending ? "guard.group_pending" : "guard.group"), groupName)
-			.withStyle(pending ? net.minecraft.ChatFormatting.YELLOW : net.minecraft.ChatFormatting.GRAY));
-		tooltip.add(GUARD_DRAG_HINT);
-		return tooltip;
-	}
 
 	private static int armorPoints(ItemStack stack) {
 		if (stack == null || stack.isEmpty()) {
@@ -2160,15 +2379,15 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 		int buttonW = (dw - 40) / 3;
 		int buttonY = dy + DIALOG_HEIGHT - DIALOG_BUTTON_HEIGHT - 10;
-		this.drawDialogButton(graphics, DIALOG_SAVE, dx + 10, buttonY, buttonW, mouseX, mouseY, SAVE_FILL, SAVE_HOVER_FILL, SAVE_BORDER);
-		this.drawDialogButton(graphics, DIALOG_DISCARD, dx + 20 + buttonW, buttonY, buttonW, mouseX, mouseY, 0xFF3A1A1A, 0xFF5A2A2A, 0xFFAA4444);
-		this.drawDialogButton(graphics, DIALOG_CANCEL, dx + 30 + buttonW * 2, buttonY, buttonW, mouseX, mouseY, BUTTON_FILL, BUTTON_HOVER_FILL, PANEL_BORDER);
+		this.drawDialogButton(graphics, DIALOG_SAVE, dx + 10, buttonY, buttonW, mouseX, mouseY, STYLE_ON);
+		this.drawDialogButton(graphics, DIALOG_DISCARD, dx + 20 + buttonW, buttonY, buttonW, mouseX, mouseY, new int[] {0xFF3A1A1A, 0xFF5A2A2A, 0xFFAA4444});
+		this.drawDialogButton(graphics, DIALOG_CANCEL, dx + 30 + buttonW * 2, buttonY, buttonW, mouseX, mouseY, STYLE_DARK);
 	}
 
-	private void drawDialogButton(GuiGraphicsExtractor graphics, Component label, int x, int y, int w, int mouseX, int mouseY, int fill, int hoverFill, int border) {
+	private void drawDialogButton(GuiGraphicsExtractor graphics, Component label, int x, int y, int w, int mouseX, int mouseY, int[] style) {
 		boolean hovered = this.contains(x, y, w, DIALOG_BUTTON_HEIGHT, mouseX, mouseY);
-		graphics.fill(x, y, x + w, y + DIALOG_BUTTON_HEIGHT, hovered ? hoverFill : fill);
-		graphics.outline(x, y, w, DIALOG_BUTTON_HEIGHT, hovered ? TEXT_PRIMARY : border);
+		graphics.fill(x, y, x + w, y + DIALOG_BUTTON_HEIGHT, hovered ? style[1] : style[0]);
+		graphics.outline(x, y, w, DIALOG_BUTTON_HEIGHT, hovered ? TEXT_PRIMARY : style[2]);
 		String text = ellipsize(this.font, label.getString(), w - 6);
 		graphics.text(this.font, text, x + (w - this.font.width(text)) / 2, y + 4, TEXT_PRIMARY, false);
 	}
@@ -2214,6 +2433,8 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	public void onClose() {
 		if (!this.pendingAssignments.isEmpty() && !this.showUnsavedDialog) {
 			this.dragHandler.cancel();
+			this.paletteOpen = false;
+			this.followMenuOpen = false;
 			this.pendingAction = this::onClose;
 			this.showUnsavedDialog = true;
 			return;
@@ -2258,8 +2479,25 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		if (this.minecraft.level != this.contextLevel || this.cachedContext == null) {
 			this.contextLevel = this.minecraft.level;
 			this.cachedContext = ClientTacticsDataStore.resolveContext(this.minecraft, this.minecraft.level);
+			this.dimensionName = prettyDimension(this.minecraft.level.dimension().identifier().getPath());
 		}
 		return this.cachedContext;
+	}
+
+	// "the_nether" -> "The Nether"; modded dimensions read fine without a lang entry.
+	private static String prettyDimension(String path) {
+		StringBuilder builder = new StringBuilder(path.length());
+		boolean upper = true;
+		for (char c : path.toCharArray()) {
+			if (c == '_' || c == '/') {
+				builder.append(' ');
+				upper = true;
+			} else {
+				builder.append(upper ? Character.toUpperCase(c) : c);
+				upper = false;
+			}
+		}
+		return builder.toString();
 	}
 
 	private void renderCenteredMessage(GuiGraphicsExtractor graphics, Component title, Component body, int x, int y, int w, int h) {
@@ -2283,6 +2521,23 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		graphics.fill(x, thumbY, x + width, thumbY + thumbH, 0xFF5A6E86);
 	}
 
+	private void drawButton(GuiGraphicsExtractor graphics, UiButton button, int mouseX, int mouseY, int[] style) {
+		if (!button.visible || button.label == null) {
+			return;
+		}
+		boolean hovered = button.enabled && button.contains(mouseX, mouseY);
+		graphics.fill(button.x, button.y, button.x + button.w, button.y + button.h, button.enabled ? (hovered ? style[1] : style[0]) : DISABLED_FILL);
+		graphics.outline(button.x, button.y, button.w, button.h, button.enabled ? (hovered ? TEXT_PRIMARY : style[2]) : DISABLED_BORDER);
+		graphics.text(
+			this.font,
+			button.label,
+			button.x + button.w - button.labelWidth - (button.w - button.labelWidth) / 2,
+			button.y + (button.h - 8) / 2,
+			button.enabled ? TEXT_PRIMARY : TEXT_MUTED,
+			false
+		);
+	}
+
 	private static double lerpPaneScroll(double current, int target) {
 		if (Math.abs(target - current) <= 0.5D) {
 			return target;
@@ -2290,57 +2545,48 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		return current + ((target - current) * PANE_SCROLL_LERP_FACTOR);
 	}
 
-	private boolean inLeftList(double mouseX, double mouseY) {
-		return mouseY >= this.leftListTop && mouseY < this.leftListBottom;
+	private boolean inList(double mouseY) {
+		return mouseY >= this.listTop && mouseY < this.listBottom;
 	}
 
 	private boolean contains(int x, int y, int width, int height, double mouseX, double mouseY) {
 		return mouseX >= x && mouseY >= y && mouseX < x + width && mouseY < y + height;
 	}
 
-	private int titleAreaRight() {
-		return this.mode == ViewMode.TACTICS && this.paletteClipWidth > 0 ? this.paletteClipX - 10 : this.helpButton.x - 6;
-	}
-
 	private void computeLayout() {
-		// Tighter margins on tiny GUIs (e.g. 320x240 scaled) so the map and panes keep usable space.
-		int margin = this.width < 420 || this.height < 280 ? 4 : 10;
+		// Tighter margins on tiny GUIs (e.g. 320x240 scaled) so the map and sidebar keep usable space.
+		int margin = this.width < 420 || this.height < 280 ? 2 : 6;
 		this.panelX = margin;
 		this.panelY = margin;
 		this.panelWidth = this.width - margin * 2;
 		this.panelHeight = this.height - margin * 2;
-		this.contentX = this.panelX + 6;
-		this.contentY = this.panelY + HEADER_HEIGHT + 2;
-		this.contentWidth = this.panelWidth - 12;
-		this.contentHeight = this.panelHeight - HEADER_HEIGHT - 6;
-		this.barY = this.contentY + this.contentHeight - BOTTOM_BAR_HEIGHT;
+		int innerX = this.panelX + 4;
+		int innerW = this.panelWidth - 8;
+		int bodyTop = this.panelY + HEADER_HEIGHT + 2;
 
-		boolean groups = this.mode == ViewMode.GROUPS;
-		this.addGroupButton.visible = groups;
-		this.saveButton.visible = groups;
-		this.sortButton.visible = groups;
-		this.filterButton.visible = groups;
-		this.revertButton.visible = groups && !this.pendingAssignments.isEmpty();
+		this.barX = innerX;
+		this.barW = innerW;
+		this.barY = this.panelY + this.panelHeight - 3 - BAR_HEIGHT;
+		int bodyBottom = this.barY - 3;
 
-		int controlY = this.panelY + 7;
-		int right = this.panelX + this.panelWidth - 8;
-		this.groupsTab.place(right - this.groupsTab.w, controlY, CONTROL_HEIGHT);
-		this.zonesTab.place(this.groupsTab.x - this.zonesTab.w, controlY, CONTROL_HEIGHT);
-		this.helpButton.place(this.zonesTab.x - 6 - this.helpButton.w, controlY, CONTROL_HEIGHT);
-
-		if (this.mode == ViewMode.TACTICS) {
-			int paletteRight = this.helpButton.x - 12;
-			int titleRight = this.panelX + 10 + Math.min(this.font == null ? 60 : this.font.width(this.title), 90) + 14;
-			int available = paletteRight - titleRight;
-			int stride = SWATCH_SIZE + SWATCH_GAP;
-			this.visibleSwatches = Mth.clamp((available + SWATCH_GAP) / stride, 1, RegionColor.paletteCount());
-			this.paletteClipWidth = this.visibleSwatches * stride - SWATCH_GAP;
-			this.paletteClipX = paletteRight - this.paletteClipWidth;
-			this.paletteClipY = controlY;
-			this.paletteClipHeight = SWATCH_SIZE;
-		} else {
-			this.paletteClipWidth = 0;
+		this.sideW = Mth.clamp(innerW * 38 / 100, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+		if (innerW - this.sideW - 4 < MAP_MIN_WIDTH) {
+			this.sideW = Math.max(80, innerW - 4 - MAP_MIN_WIDTH);
 		}
+		this.mapX = innerX + 1;
+		this.mapY = bodyTop + 1;
+		this.mapW = innerW - this.sideW - 6;
+		this.mapH = bodyBottom - bodyTop - 2;
+		this.sideX = innerX + innerW - this.sideW;
+		this.sideY = bodyTop;
+		this.sideH = bodyBottom - bodyTop;
+
+		this.layoutHeaderButtons();
+		this.updateFollowGroupLabel();
+		// One control row (zone tools left, orders right) when it fits; otherwise orders move to the second row.
+		int zoneWidth = this.font.width(ZONE_LABEL) + 5 + 4 * SWATCH_STRIDE
+			+ this.paletteMoreButton.w + this.eraseButton.w + this.clearButton.w + 9;
+		this.barWide = zoneWidth + 16 + this.ordersWidth(true) <= this.barW - 8;
 	}
 
 	private void resetHits() {
@@ -2349,10 +2595,10 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		this.dropHitCount = 0;
 	}
 
-	// Hitboxes are clipped to their scroll viewport so cards scrolled out of view cannot be grabbed.
-	private void addCardHit(ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int w, int h, int group, int clipTop, int clipBottom) {
-		int top = Math.max(y, clipTop);
-		int bottom = Math.min(y + h, clipBottom);
+	// Hitboxes are clipped to the scrolling list so rows scrolled out of view cannot be grabbed.
+	private void addCardHit(ClientGuardRosterStore.GuardRosterEntry guard, int x, int y, int w, int h, int group) {
+		int top = Math.max(y, this.listTop);
+		int bottom = Math.min(y + h, this.listBottom);
 		if (bottom <= top) {
 			return;
 		}
@@ -2368,9 +2614,9 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		hit.group = group;
 	}
 
-	private void addRowHit(int row, int swatchX, int swatchY, int x, int y, int w, int h) {
-		int top = Math.max(y, this.leftListTop);
-		int bottom = Math.min(y + h, this.leftListBottom);
+	private void addRowHit(int row, int x, int y, int w, int h, int followX, int followW, int stayX, int stayW) {
+		int top = Math.max(y, this.listTop);
+		int bottom = Math.min(y + h, this.listBottom);
 		if (bottom <= top) {
 			return;
 		}
@@ -2379,21 +2625,19 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		}
 		RowHit hit = this.rowHits.get(this.rowHitCount++);
 		hit.row = row;
-		hit.swatchX = swatchX;
-		hit.swatchY = swatchY;
 		hit.x = x;
 		hit.y = top;
 		hit.w = w;
 		hit.h = bottom - top;
+		hit.followX = followX;
+		hit.followW = followW;
+		hit.stayX = stayX;
+		hit.stayW = stayW;
 	}
 
 	private void addDropHit(DropKind kind, int group, int x, int y, int w, int h) {
-		int top = y;
-		int bottom = y + h;
-		if (kind != DropKind.UNASSIGN) {
-			top = Math.max(top, this.leftListTop);
-			bottom = Math.min(bottom, this.leftListBottom);
-		}
+		int top = Math.max(y, this.listTop);
+		int bottom = Math.min(y + h, this.listBottom);
 		if (bottom <= top) {
 			return;
 		}
@@ -2431,11 +2675,6 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 	// ---------------------------------------------------------------- small types
 
-	private enum ViewMode {
-		TACTICS,
-		GROUPS
-	}
-
 	private enum DropKind {
 		GROUP,
 		NEW_GROUP,
@@ -2451,9 +2690,6 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		DISTANCE("distance", Comparator.comparingDouble(SortMode::sortableDistance)),
 		NAME("name", (a, b) -> 0);
 
-		private static final Component FILTER_ALL = tr("filter.all");
-		private static final Component FILTER_UNASSIGNED = tr("filter.unassigned");
-
 		private final Component label;
 		private final List<Component> tooltip;
 		private final Comparator<ClientGuardRosterStore.GuardRosterEntry> comparator;
@@ -2462,7 +2698,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			this.label = tr("sort." + id);
 			this.tooltip = List.of(
 				Component.translatable(KEY + "sort.tooltip", tr("sort." + id)),
-				tr("sort.tooltip.body").copy().withStyle(net.minecraft.ChatFormatting.GRAY)
+				tr("sort.tooltip.body").withStyle(ChatFormatting.GRAY)
 			);
 			// Name, then UUID, as tie-breakers keep the order stable between roster syncs.
 			this.comparator = primary
@@ -2495,10 +2731,11 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		private boolean enabled = true;
 		private List<Component> tooltip = List.of();
 
-		private void setLabel(Font font, Component label, int padding) {
+		private void setLabel(Font font, Component label, int padding, List<Component> tooltip) {
 			this.label = label;
 			this.labelWidth = font.width(label);
 			this.w = this.labelWidth + padding;
+			this.tooltip = tooltip;
 		}
 
 		private void place(int x, int y, int h) {
@@ -2509,6 +2746,10 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 		private boolean contains(double mouseX, double mouseY) {
 			return this.visible && this.label != null && mouseX >= this.x && mouseY >= this.y && mouseX < this.x + this.w && mouseY < this.y + this.h;
+		}
+
+		private boolean isClickable(double mouseX, double mouseY) {
+			return this.enabled && this.contains(mouseX, mouseY);
 		}
 	}
 
@@ -2523,20 +2764,30 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 	private static final class RowHit {
 		private int row;
-		private int swatchX;
-		private int swatchY;
 		private int x;
 		private int y;
 		private int w;
 		private int h;
-
-		private boolean containsSwatch(double mouseX, double mouseY) {
-			return mouseX >= this.swatchX && mouseY >= Math.max(this.swatchY, this.y)
-				&& mouseX < this.swatchX + 12 && mouseY < Math.min(this.swatchY + 12, this.y + this.h);
-		}
+		private int followX;
+		private int followW;
+		private int stayX;
+		private int stayW;
 
 		private boolean containsHeader(double mouseX, double mouseY) {
 			return mouseX >= this.x && mouseY >= this.y && mouseX < this.x + this.w && mouseY < this.y + this.h;
+		}
+
+		// The colour stripe is 3px wide; the click target is widened to 6px so it is usable.
+		private boolean containsStripe(double mouseX, double mouseY) {
+			return this.containsHeader(mouseX, mouseY) && mouseX < this.x + 6;
+		}
+
+		private boolean containsFollow(double mouseX, double mouseY) {
+			return this.containsHeader(mouseX, mouseY) && mouseX >= this.followX && mouseX < this.followX + this.followW;
+		}
+
+		private boolean containsStay(double mouseX, double mouseY) {
+			return this.containsHeader(mouseX, mouseY) && mouseX >= this.stayX && mouseX < this.stayX + this.stayW;
 		}
 	}
 
@@ -2580,12 +2831,11 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		private final String name;
 		private final String distance;
 		private final int distanceWidth;
+		private final String levelNumber;
 		private int miniWidth = Integer.MIN_VALUE;
 		private String miniName = "";
 		private int rowWidth = Integer.MIN_VALUE;
 		private String rowName = "";
-		private int unassignedWidth = Integer.MIN_VALUE;
-		private String unassigned = "";
 
 		private CardText(ClientGuardRosterStore.GuardRosterEntry guard, Font font) {
 			this.name = guard.displayName();
@@ -2593,6 +2843,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 				? Component.translatable(KEY + "distance", (int) Math.round(guard.distance())).getString()
 				: "";
 			this.distanceWidth = font.width(this.distance);
+			this.levelNumber = Integer.toString(guard.level());
 		}
 
 		private String miniName(Font font, int width) {
@@ -2610,24 +2861,16 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			}
 			return this.rowName;
 		}
-
-		private String unassigned(Font font, int width) {
-			if (width != this.unassignedWidth) {
-				this.unassignedWidth = width;
-				this.unassigned = ellipsize(font, UNASSIGNED.getString(), width);
-			}
-			return this.unassigned;
-		}
 	}
 
-	/** "N guards" strings by count. */
+	/** Member-count strings by count. */
 	private static final class CountCache {
 		private final Int2ObjectOpenHashMap<String> values = new Int2ObjectOpenHashMap<>();
 
-		private String get(int count, Font font) {
+		private String get(int count) {
 			String value = this.values.get(count);
 			if (value == null) {
-				value = (count == 1 ? tr("group.count.one") : Component.translatable(KEY + "group.count", count)).getString();
+				value = Integer.toString(count);
 				this.values.put(count, value);
 			}
 			return value;
