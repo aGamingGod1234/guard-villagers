@@ -186,7 +186,8 @@ final class SpeechCaptureEngine implements AutoCloseable {
 				return;
 			}
 			utterance.state.inFlight = request;
-			deadline = scheduler.schedule(() -> request.cancel(true), transcriptionDeadlineMillis, TimeUnit.MILLISECONDS);
+			Runnable expire = () -> request.cancel(true);
+			deadline = scheduler.schedule(expire, transcriptionDeadlineMillis, TimeUnit.MILLISECONDS);
 		}
 		request.whenComplete((ignored, failure) -> {
 			deadline.cancel(false);
