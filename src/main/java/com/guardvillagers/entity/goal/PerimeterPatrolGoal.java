@@ -37,6 +37,8 @@ public final class PerimeterPatrolGoal extends Goal {
 	private static final int GROUND_MAX_DOWN = 6;
 	private static final int MAX_WAYPOINT_ATTEMPTS = 3;
 	private static final int WAYPOINT_TIMEOUT_TICKS = 400;
+	/** After every candidate waypoint failed, wait this long before spending more A* searches. */
+	private static final int NO_WAYPOINT_BACKOFF_TICKS = 40;
 
 	private final GuardEntity guard;
 	private final double speed;
@@ -51,6 +53,7 @@ public final class PerimeterPatrolGoal extends Goal {
 	private int modeSwitchTicks;
 	private BlockPos currentWaypoint;
 	private long waypointDeadline;
+	private long nextWaypointSearch;
 
 	public PerimeterPatrolGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
@@ -87,6 +90,7 @@ public final class PerimeterPatrolGoal extends Goal {
 	@Override
 	public void stop() {
 		this.currentWaypoint = null;
+		this.nextWaypointSearch = 0L;
 		this.guard.getNavigation().stop();
 	}
 
@@ -126,6 +130,9 @@ public final class PerimeterPatrolGoal extends Goal {
 	}
 
 	private void chooseNextWaypoint(long now) {
+		if (now < this.nextWaypointSearch) {
+			return;
+		}
 		List<BlockPos> points = this.activePoints();
 		if (points.isEmpty()) {
 			this.patrollingInterior = !this.patrollingInterior;
@@ -153,6 +160,10 @@ public final class PerimeterPatrolGoal extends Goal {
 			this.waypointDeadline = now + WAYPOINT_TIMEOUT_TICKS;
 			return;
 		}
+		// Nothing reachable right now (fenced in, village edge across water): up to three path
+		// searches per goal tick until it changes was pure waste.
+		this.guard.getNavigation().stop();
+		this.nextWaypointSearch = now + NO_WAYPOINT_BACKOFF_TICKS;
 	}
 
 	private void advancePoint(List<BlockPos> points) {
