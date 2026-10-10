@@ -67,6 +67,10 @@ public final class CommanderCallouts {
 
 	/** Sends an acknowledgement, status or succession line now. */
 	public static void say(MinecraftServer server, UUID owner, String line, Kind kind) {
+		// Late LLM or STT callbacks can arrive after the owner left; keeping a log for them would only grow the map.
+		if (server.getPlayerList().getPlayer(owner) == null) {
+			return;
+		}
 		deliver(server, owner, line, kind, log(owner), server.getTickCount());
 	}
 
@@ -75,6 +79,9 @@ public final class CommanderCallouts {
 	 * otherwise it waits for {@link #flush}, unless a more important line is already waiting.
 	 */
 	public static void announce(MinecraftServer server, UUID owner, String line, int priority) {
+		if (server.getPlayerList().getPlayer(owner) == null) {
+			return;
+		}
 		OwnerLog log = log(owner);
 		long now = server.getTickCount();
 		Long last = log.lastSaid.get(line);

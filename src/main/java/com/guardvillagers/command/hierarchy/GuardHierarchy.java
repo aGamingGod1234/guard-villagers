@@ -123,7 +123,10 @@ public final class GuardHierarchy {
 	public static void elect(MinecraftServer server, UUID owner) {
 		List<GuardEntity> guards = livingGuards(server, owner);
 		if (guards.isEmpty()) {
-			// Keep the stored UUIDs; the next load re-validates them.
+			// Keep the stored UUIDs; the next load re-validates them. The loss being reported is over: a later
+			// election must not announce it as news.
+			LOST_COMMANDERS.remove(owner);
+			FORCED_KINDS.remove(owner);
 			return;
 		}
 		GuardCommandState state = state(server);
@@ -217,10 +220,39 @@ public final class GuardHierarchy {
 			}
 		}
 		command.unpin(guard.getUUID());
-		command.pinCaptain(guard.getUUID());
+		if (!command.pinCaptain(guard.getUUID())) {
+			// Full of pins, which means some belong to guards that are not loaded (loaded pins are one per group).
+			// Those go first so the appointment the player just made always takes.
+			Set<UUID> loaded = new java.util.HashSet<>();
+			for (GuardEntity other : livingGuards(server, owner)) {
+				loaded.add(other.getUUID());
+			}
+			for (UUID pinned : List.copyOf(command.pinnedCaptains())) {
+				if (!loaded.contains(pinned)) {
+					command.unpin(pinned);
+				}
+			}
+			command.pinCaptain(guard.getUUID());
+		}
 		state.setDirty();
 		elect(server, owner);
 		return AppointResult.APPOINTED;
+	}
+
+	/**
+	 * Drops {@code guard}'s appointments from {@code formerOwner}'s chain of command. For a guard that stops serving
+	 * that owner other than by dying (dismissed, discarded, given to another player); deaths already unpin.
+	 */
+	public static void onGuardLeftOwner(MinecraftServer server, UUID formerOwner, UUID guard) {
+		if (formerOwner == null || guard == null) {
+			return;
+		}
+		GuardCommandState.OwnerCommand command = peek(server, formerOwner);
+		if (command != null && (guard.equals(command.pinnedCommander()) || command.pinnedCaptains().contains(guard))) {
+			command.unpin(guard);
+			state(server).setDirty();
+		}
+		requestElection(formerOwner);
 	}
 
 	/** Drops every appointment; ranks go back to pure seniority on the spot. */
@@ -250,9 +282,17 @@ public final class GuardHierarchy {
 			return pinned;
 		}
 		Set<UUID> pinnedCaptains = command.pinnedCaptains();
+		// Pinned captains are skipped only while someone unpinned is left; count the loaded ones, since pins for
+		// unloaded guards would otherwise make that test fail and hand command to a pinned captain.
+		int loadedPinned = 0;
+		for (GuardEntity guard : guards) {
+			if (pinnedCaptains.contains(guard.getUUID())) {
+				loadedPinned++;
+			}
+		}
 		GuardEntity mostSenior = null;
 		for (GuardEntity guard : guards) {
-			if (pinnedCaptains.contains(guard.getUUID()) && guards.size() > pinnedCaptains.size()) {
+			if (pinnedCaptains.contains(guard.getUUID()) && guards.size() > loadedPinned) {
 				continue;
 			}
 			if (mostSenior == null || GuardSeniority.ORDER.compare(guard, mostSenior) > 0) {

@@ -161,6 +161,39 @@ public class GuardCommanderGameTest {
 		});
 	}
 
+	/** Pins for guards that are not loaded neither put a pinned captain in command nor block a new appointment. */
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 60)
+	public void stalePinsDoNotBlockAppointments(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		GuardEntity veteran = owned(helper, owner, CENTER - 3.5, CENTER + 0.5, GuardRole.SWORDSMAN, 900);
+		GuardEntity sergeant = owned(helper, owner, CENTER + 3.5, CENTER + 0.5, GuardRole.SWORDSMAN, 300);
+		GuardEntity rookie = owned(helper, owner, CENTER + 0.5, CENTER + 3.5, GuardRole.SWORDSMAN, 0);
+		group(veteran, 0, "Alpha");
+		group(rookie, 0, "Alpha");
+		var server = helper.getLevel().getServer();
+		// Before the first election: the veteran is a pinned captain, and three pins belong to guards not loaded.
+		var command = GuardHierarchy.state(server).getOrCreate(owner.getUUID());
+		command.pinCaptain(veteran.getUUID());
+		for (int i = 0; i < 3; i++) {
+			command.pinCaptain(UUID.randomUUID());
+		}
+		helper.runAfterDelay(5, () -> {
+			helper.assertTrue(sergeant.getRank() == GuardRank.COMMANDER, "an unpinned guard should command, sergeant is "
+					+ sergeant.getRank() + ", pinned veteran is " + veteran.getRank());
+			helper.assertTrue(veteran.getRank() == GuardRank.CAPTAIN, "pinned captain is " + veteran.getRank());
+			for (int i = 0; i < 64; i++) {
+				command.pinCaptain(UUID.randomUUID());
+			}
+			helper.assertTrue(command.pinnedCaptains().size() == 64, "setup: pins not full");
+			helper.assertTrue(GuardHierarchy.appointCaptain(server, owner.getUUID(), rookie) == GuardHierarchy.AppointResult.APPOINTED,
+					"appointment refused");
+			helper.assertTrue(GuardHierarchy.isPinned(server, owner.getUUID(), rookie.getUUID()),
+					"appointment reported but not pinned when the pin list was full");
+			helper.succeed();
+		});
+	}
+
 	// ---- text orders ----
 
 	private record Squad(ServerPlayer owner, List<GuardEntity> guards, GuardEntity stranger) {

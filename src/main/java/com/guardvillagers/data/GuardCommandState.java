@@ -225,10 +225,16 @@ public final class GuardCommandState extends SavedData {
 			return Collections.unmodifiableSet(this.pinnedCaptains);
 		}
 
-		public void pinCaptain(UUID guard) {
-			if (this.pinnedCaptains.size() < MAX_CAPTAINS) {
-				this.pinnedCaptains.add(guard);
+		/** @return false when the pin did not fit ({@link #MAX_CAPTAINS} pins already) */
+		public boolean pinCaptain(UUID guard) {
+			if (this.pinnedCaptains.contains(guard)) {
+				return true;
 			}
+			if (this.pinnedCaptains.size() >= MAX_CAPTAINS) {
+				return false;
+			}
+			this.pinnedCaptains.add(guard);
+			return true;
 		}
 
 		public void unpin(UUID guard) {
