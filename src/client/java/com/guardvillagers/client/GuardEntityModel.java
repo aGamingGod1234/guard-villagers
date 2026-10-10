@@ -114,13 +114,7 @@ public final class GuardEntityModel extends HumanoidModel<GuardEntityRenderer.Gu
 	}
 
 	@Override
-	public void setAngles(GuardEntityRenderer.GuardRenderState state) {
-		super.setAngles(state);
-		// BipedEntityModel handles the side-arm idle pose plus bow/swing animations.
-	}
-
-	@Override
-	public void rotateArms(GuardEntityRenderer.GuardRenderState state, PoseStack matrices) {
-		this.setArmAngle(state, HumanoidArm.RIGHT, matrices);
+	public void translateToArms(GuardEntityRenderer.GuardRenderState state, PoseStack poseStack) {
+		this.translateToHand(state, HumanoidArm.RIGHT, poseStack);
 	}
 }
