@@ -2,16 +2,16 @@ package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.ai.GuardAiIntent;
+import com.guardvillagers.entity.ai.GuardMovementSlotResolver;
 import java.util.EnumSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.ai.goal.Goal;
 
+/** Gathers around a rally point (whistle / bell) in non-overlapping slots. */
 public final class GuardRallyGoal extends Goal {
-	private static final int REPATH_INTERVAL_TICKS = 10;
-
 	private final GuardEntity guard;
 	private final double speed;
-	private int repathTicks;
+	private final AnchorHold hold = new AnchorHold();
 
 	public GuardRallyGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
@@ -21,38 +21,31 @@ public final class GuardRallyGoal extends Goal {
 
 	@Override
 	public boolean canUse() {
-		return this.guard.isAiIntent(GuardAiIntent.RALLY)
-				&& this.guard.getRallyPoint().isPresent();
+		return this.guard.isAiIntent(GuardAiIntent.RALLY) && this.guard.getRallyPoint().isPresent();
 	}
 
 	@Override
 	public boolean canContinueToUse() {
-		return this.guard.isAiIntent(GuardAiIntent.RALLY)
-				&& this.guard.getRallyPoint().isPresent();
+		return this.canUse();
 	}
 
 	@Override
 	public void start() {
-		this.repathTicks = 0;
+		this.hold.reset();
 	}
 
 	@Override
 	public void stop() {
 		this.guard.getNavigation().stop();
-		this.repathTicks = 0;
 	}
 
 	@Override
 	public void tick() {
-		if (this.repathTicks-- > 0) {
-			return;
-		}
-		this.repathTicks = REPATH_INTERVAL_TICKS;
 		BlockPos rallyPoint = this.guard.getRallyPoint().orElse(null);
-		if (rallyPoint == null || !(this.guard.level() instanceof net.minecraft.server.level.ServerLevel world)) {
+		if (rallyPoint == null) {
 			return;
 		}
-		BlockPos slot = this.guard.resolveGroundMovementSlot(world, rallyPoint, 1.75D, false);
-		this.guard.getGuardNavigation().startMovingToStatic(slot, this.speed);
+		BlockPos slot = this.guard.resolveAnchorSlot(GuardMovementSlotResolver.AnchorKind.RALLY, rallyPoint, false);
+		this.hold.tick(this.guard, slot, this.guard.getResolvedSlotPosition(), this.speed);
 	}
 }

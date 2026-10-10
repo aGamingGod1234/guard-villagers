@@ -1,20 +1,29 @@
 package com.guardvillagers.navigation;
 
-import com.guardvillagers.GuardVillagersMod;
 import com.guardvillagers.entity.GuardEntity;
-import java.util.List;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.ai.navigation.GroundPathNavigation;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.pathfinder.Path;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
+/**
+ * Guard ground navigation.
+ *
+ * <ul>
+ * <li>Static routes are shared through {@link SquadRouteCache}.</li>
+ * <li>Repeated move requests are gated so goals can call every tick without re-pathing.</li>
+ * <li>A target whose last path could not reach it is backed off for a while instead of re-running
+ * a failing A* search every tick; goals can ask {@link #isLastTargetUnreachable()}.</li>
+ * <li>Stall recovery sidesteps out of guard crowds onto a path-validated spot, or leaves flowing
+ * water toward the nearest dry standing spot, and holds that recovery move for a short time so the
+ * calling goal does not immediately cancel it.</li>
+ * </ul>
+ */
 public class GuardNavigation extends GroundPathNavigation {
 	private static final int STALL_THRESHOLD_TICKS = 40;
 	private static final double MIN_STALL_PROGRESS_SQUARED = 0.25D;
@@ -22,26 +31,35 @@ public class GuardNavigation extends GroundPathNavigation {
 	private static final int DYNAMIC_REPATH_INTERVAL_TICKS = 4;
 	private static final double STATIC_REPATH_DISTANCE_SQUARED = 0.25D;
 	private static final double DYNAMIC_REPATH_DISTANCE_SQUARED = 1.0D;
-	private static final int WATER_EXIT_SEARCH_RADIUS = 4;
+	private static final int UNREACHABLE_BACKOFF_TICKS = 40;
+	private static final double UNREACHABLE_TARGET_MOVED_SQUARED = 4.0D;
+	private static final int WATER_EXIT_SEARCH_RADIUS = 5;
 	private static final int WATER_EXIT_VERTICAL_RANGE = 3;
-	private static final int CROWD_RECOVERY_TICKS = 20;
-	private static final double CROWD_RECOVERY_DISTANCE = 2.5D;
-	private static final double CROWD_JAM_RADIUS = 1.35D;
-	private static final int CROWD_RECOVERY_VERTICAL_RANGE = 6;
+	private static final int RECOVERY_HOLD_TICKS = 30;
+	private static final int CROWD_SIDESTEP_DISTANCE = 2;
+	private static final int CROWD_SIDESTEP_MAX_PATH = 6;
+	private static final int CROWD_SIDESTEP_MAX_PATH_CHECKS = 3;
+	private static final double CROWD_JAM_RADIUS = 0.9D;
+	private static final int CROWD_CHECK_INTERVAL_TICKS = 5;
 
 	private final GuardEntity guard;
 
-	private long lastRecalculateTick;
 	private BlockPos lastTargetPos;
 	private Vec3 lastStallCheckPos = Vec3.ZERO;
 	private Vec3 lastRequestedTargetPos;
+	private double lastRequestedSpeed = 1.0D;
 	private Vec3 lastIssuedTargetPos = Vec3.ZERO;
 	private RouteMode routeMode = RouteMode.STATIC;
 	private RouteMode lastIssuedRouteMode = RouteMode.STATIC;
 	private long lastMoveCommandTick = Long.MIN_VALUE;
 	private double lastIssuedSpeed;
 	private int stallTicks;
-	private int crowdRecoveryTicks;
+	private int recoveryHoldTicks;
+	private boolean crowdRecoveryActive;
+	private long lastCrowdCheckTick = Long.MIN_VALUE;
+	private boolean lastCrowdCheckResult;
+	private Vec3 unreachableTargetPos;
+	private long unreachableUntilTick = Long.MIN_VALUE;
 
 	public GuardNavigation(GuardEntity guard, Level world) {
 		super(guard, world);
@@ -50,16 +68,20 @@ public class GuardNavigation extends GroundPathNavigation {
 
 	@Override
 	public Path createPath(BlockPos target, int distance) {
-		if (target != null) {
-			this.lastTargetPos = target.immutable();
+		if (target == null) {
+			return null;
+		}
+		this.lastTargetPos = target.immutable();
+		// Same as vanilla's early-out: keep following the current path to this block.
+		if (this.path != null && !this.path.isDone() && target.equals(this.path.getTarget())) {
+			return this.path;
 		}
 
-		if (this.guard.getAirSupply() < 80 || this.routeMode != RouteMode.STATIC) {
-			this.lastRecalculateTick = this.guard.level().getGameTime();
+		if (this.routeMode != RouteMode.STATIC || this.guard.getAirSupply() < 80 || this.guard.getSquadId() == null) {
 			return super.createPath(target, distance);
 		}
 
-		long currentTick = this.guard.level().getGameTime();
+		long currentTick = this.level.getGameTime();
 		Path cached = SquadRouteCache.getSquadRoute(
 				this.level.dimension(),
 				this.guard.getSquadId(),
@@ -67,21 +89,13 @@ public class GuardNavigation extends GroundPathNavigation {
 				target,
 				currentTick);
 		if (cached != null) {
-			this.lastRecalculateTick = currentTick;
 			return cached;
 		}
 
 		Path newPath = super.createPath(target, distance);
 		if (newPath != null) {
-			SquadRouteCache.cacheSquadRoute(
-					this.level.dimension(),
-					this.guard.getSquadId(),
-					this.guard.blockPosition(),
-					target,
-					newPath,
-					currentTick);
+			SquadRouteCache.cacheSquadRoute(this.level.dimension(), this.guard.getSquadId(), target, newPath, currentTick);
 		}
-		this.lastRecalculateTick = currentTick;
 		return newPath;
 	}
 
@@ -91,9 +105,8 @@ public class GuardNavigation extends GroundPathNavigation {
 			return null;
 		}
 		this.lastTargetPos = entity.blockPosition().immutable();
-		this.lastRequestedTargetPos = new Vec3(entity.getX(), entity.getY(), entity.getZ());
+		this.lastRequestedTargetPos = entity.position();
 		this.routeMode = RouteMode.DYNAMIC;
-		this.lastRecalculateTick = this.guard.level().getGameTime();
 		return super.createPath(entity, distance);
 	}
 
@@ -102,13 +115,13 @@ public class GuardNavigation extends GroundPathNavigation {
 		if (entity == null) {
 			return false;
 		}
-		this.routeMode = RouteMode.DYNAMIC;
-		this.lastTargetPos = entity.blockPosition().immutable();
-		this.lastRequestedTargetPos = new Vec3(entity.getX(), entity.getY(), entity.getZ());
-		if (!this.shouldIssueMove(this.lastRequestedTargetPos, speed, RouteMode.DYNAMIC)) {
+		Vec3 targetPos = entity.position();
+		if (!this.shouldIssueMove(targetPos, speed, RouteMode.DYNAMIC)) {
 			return !this.isDone();
 		}
-		return super.moveTo(entity, speed);
+		this.routeMode = RouteMode.DYNAMIC;
+		this.lastTargetPos = entity.blockPosition().immutable();
+		return this.afterMove(targetPos, super.moveTo(entity, speed));
 	}
 
 	@Override
@@ -125,37 +138,46 @@ public class GuardNavigation extends GroundPathNavigation {
 
 	public boolean startMovingToStatic(double x, double y, double z, double speed) {
 		Vec3 targetPos = new Vec3(x, y, z);
-		this.routeMode = RouteMode.STATIC;
-		this.lastRequestedTargetPos = targetPos;
-		this.lastTargetPos = BlockPos.containing(x, y, z);
 		if (!this.shouldIssueMove(targetPos, speed, RouteMode.STATIC)) {
 			return !this.isDone();
 		}
-		return super.moveTo(x, y, z, speed);
+		this.routeMode = RouteMode.STATIC;
+		this.lastTargetPos = BlockPos.containing(x, y, z);
+		return this.afterMove(targetPos, super.moveTo(x, y, z, speed));
 	}
 
 	public boolean startMovingToDynamic(Vec3 targetPos, double speed) {
 		if (targetPos == null) {
 			return false;
 		}
-		this.routeMode = RouteMode.DYNAMIC;
-		this.lastRequestedTargetPos = targetPos;
-		this.lastTargetPos = BlockPos.containing(targetPos.x, targetPos.y, targetPos.z);
 		if (!this.shouldIssueMove(targetPos, speed, RouteMode.DYNAMIC)) {
 			return !this.isDone();
 		}
-		return super.moveTo(targetPos.x, targetPos.y, targetPos.z, speed);
+		this.routeMode = RouteMode.DYNAMIC;
+		this.lastTargetPos = BlockPos.containing(targetPos.x, targetPos.y, targetPos.z);
+		return this.afterMove(targetPos, super.moveTo(targetPos.x, targetPos.y, targetPos.z, speed));
 	}
 
+	/**
+	 * True when the most recent path toward the current target could not reach it (partial path or
+	 * no path). Goals use this to pick another approach instead of standing at a cliff base.
+	 */
+	public boolean isLastTargetUnreachable() {
+		return this.unreachableTargetPos != null && this.level.getGameTime() < this.unreachableUntilTick;
+	}
+
+	/** True when stalled inside a clump of guards, or while recovering from one. */
 	public boolean isCrowdBlocked() {
-		return this.crowdRecoveryTicks > 0 || this.hasNearbyAlliedCrowding();
+		return (this.crowdRecoveryActive && this.recoveryHoldTicks > 0) || this.hasNearbyGuardCrowding();
 	}
 
 	@Override
 	public void tick() {
 		super.tick();
-		if (this.crowdRecoveryTicks > 0) {
-			this.crowdRecoveryTicks--;
+		if (this.recoveryHoldTicks > 0 && (--this.recoveryHoldTicks == 0 || this.isDone())) {
+			this.recoveryHoldTicks = 0;
+			this.crowdRecoveryActive = false;
+			this.resumeRequestedMove();
 		}
 
 		if (this.isDone()) {
@@ -166,11 +188,10 @@ public class GuardNavigation extends GroundPathNavigation {
 
 		Vec3 currentPos = this.guard.position();
 		if (this.lastStallCheckPos.distanceToSqr(currentPos) < MIN_STALL_PROGRESS_SQUARED) {
-			this.stallTicks++;
-			if (this.stallTicks >= STALL_THRESHOLD_TICKS) {
-				this.recoverFromStall();
+			if (++this.stallTicks >= STALL_THRESHOLD_TICKS) {
 				this.stallTicks = 0;
 				this.lastStallCheckPos = currentPos;
+				this.recoverFromStall();
 			}
 			return;
 		}
@@ -179,42 +200,94 @@ public class GuardNavigation extends GroundPathNavigation {
 		this.stallTicks = 0;
 	}
 
-	private void recoverFromStall() {
-		BlockPos cachedTarget = this.lastTargetPos != null ? this.lastTargetPos.immutable() : this.getTargetPos();
-		BlockPos recoveryTarget = this.resolveWaterRecoveryTarget();
-		Vec3 crowdRecoveryTarget = this.resolveCrowdRecoveryTarget();
-		this.stop();
+	@Override
+	public void stop() {
+		super.stop();
+		// A goal handing over movement cancels any recovery in progress.
+		this.recoveryHoldTicks = 0;
+		this.crowdRecoveryActive = false;
+	}
 
-		if (this.routeMode == RouteMode.STATIC && cachedTarget != null) {
-			SquadRouteCache.invalidateSquadRoute(this.level.dimension(), this.guard.getSquadId(), cachedTarget);
+	private boolean afterMove(Vec3 targetPos, boolean started) {
+		Path current = this.path;
+		if (current == null || !current.canReach()) {
+			this.unreachableTargetPos = targetPos;
+			this.unreachableUntilTick = this.level.getGameTime() + UNREACHABLE_BACKOFF_TICKS;
+		} else {
+			this.unreachableTargetPos = null;
 		}
+		return started;
+	}
 
-		if (crowdRecoveryTarget != null) {
-			this.crowdRecoveryTicks = CROWD_RECOVERY_TICKS;
-			this.startMovingToDynamic(crowdRecoveryTarget, this.speedModifier);
+	private void resumeRequestedMove() {
+		if (this.lastRequestedTargetPos == null) {
 			return;
 		}
-
-		if (recoveryTarget != null) {
-			this.startMovingToStatic(recoveryTarget, this.speedModifier);
-			return;
-		}
-
-		if (this.routeMode == RouteMode.DYNAMIC && this.lastRequestedTargetPos != null) {
-			this.startMovingToDynamic(this.lastRequestedTargetPos, this.speedModifier);
-			return;
-		}
-
-		if (cachedTarget != null) {
-			this.startMovingToStatic(cachedTarget, this.speedModifier);
+		this.lastMoveCommandTick = Long.MIN_VALUE;
+		Vec3 target = this.lastRequestedTargetPos;
+		if (this.routeMode == RouteMode.DYNAMIC) {
+			this.startMovingToDynamic(target, this.lastRequestedSpeed);
+		} else {
+			this.startMovingToStatic(target.x, target.y, target.z, this.lastRequestedSpeed);
 		}
 	}
 
+	private void recoverFromStall() {
+		BlockPos stalledTarget = this.lastTargetPos;
+		if (this.routeMode == RouteMode.STATIC && stalledTarget != null) {
+			SquadRouteCache.invalidateSquadRoute(this.level.dimension(), this.guard.getSquadId(), stalledTarget);
+		}
+
+		if (this.hasNearbyGuardCrowding()) {
+			Path sidestep = this.findCrowdSidestep();
+			if (sidestep != null) {
+				super.moveTo(sidestep, this.speedModifier);
+				this.crowdRecoveryActive = true;
+				this.recoveryHoldTicks = RECOVERY_HOLD_TICKS;
+				return;
+			}
+		}
+
+		if (this.isInOrAgainstFlowingWater()) {
+			BlockPos dryExit = this.findNearbyDryExit();
+			if (dryExit == null) {
+				BlockPos lastLand = this.guard.getLastLandPos();
+				if (lastLand != null && GuardGrounding.isStandable(this.guard, lastLand)) {
+					dryExit = lastLand;
+				}
+			}
+			if (dryExit != null) {
+				Path exitPath = super.createPath(dryExit, 0);
+				if (exitPath != null && super.moveTo(exitPath, this.speedModifier)) {
+					this.recoveryHoldTicks = RECOVERY_HOLD_TICKS;
+					return;
+				}
+			}
+		}
+
+		// Plain re-path toward whatever the goal last asked for.
+		super.stop();
+		this.resumeRequestedMove();
+	}
+
 	private boolean shouldIssueMove(Vec3 targetPos, double speed, RouteMode mode) {
-		long currentTick = this.guard.level().getGameTime();
+		this.lastRequestedTargetPos = targetPos;
+		this.lastRequestedSpeed = speed;
+		if (this.recoveryHoldTicks > 0 && !this.isDone()) {
+			// Let the recovery move finish; the request is resumed afterwards.
+			this.routeMode = mode;
+			return false;
+		}
+
+		long currentTick = this.level.getGameTime();
+		if (this.isDone() && this.unreachableTargetPos != null && currentTick < this.unreachableUntilTick
+				&& this.unreachableTargetPos.distanceToSqr(targetPos) < UNREACHABLE_TARGET_MOVED_SQUARED) {
+			// Same unreachable target and we already stand at the end of the partial path.
+			return false;
+		}
+
 		int minInterval = mode == RouteMode.DYNAMIC ? DYNAMIC_REPATH_INTERVAL_TICKS : STATIC_REPATH_INTERVAL_TICKS;
 		double minDistanceSq = mode == RouteMode.DYNAMIC ? DYNAMIC_REPATH_DISTANCE_SQUARED : STATIC_REPATH_DISTANCE_SQUARED;
-
 		boolean shouldIssue = this.isDone()
 				|| this.lastMoveCommandTick == Long.MIN_VALUE
 				|| this.lastIssuedRouteMode != mode
@@ -231,56 +304,51 @@ public class GuardNavigation extends GroundPathNavigation {
 		return shouldIssue;
 	}
 
-	private boolean hasNearbyAlliedCrowding() {
-		AABB crowdBox = this.guard.getBoundingBox().inflate(CROWD_JAM_RADIUS);
-		List<GuardEntity> nearby = this.level.getEntitiesOfClass(
+	private boolean hasNearbyGuardCrowding() {
+		long now = this.level.getGameTime();
+		if (now - this.lastCrowdCheckTick < CROWD_CHECK_INTERVAL_TICKS && this.lastCrowdCheckTick != Long.MIN_VALUE) {
+			return this.lastCrowdCheckResult;
+		}
+		this.lastCrowdCheckTick = now;
+		AABB crowdBox = this.guard.getBoundingBox().inflate(CROWD_JAM_RADIUS, 0.0D, CROWD_JAM_RADIUS);
+		this.lastCrowdCheckResult = !this.level.getEntitiesOfClass(
 				GuardEntity.class,
 				crowdBox,
-				entity -> entity != this.guard && entity.isAlive() && this.guard.isSameMovementGroup(entity));
-		return !nearby.isEmpty();
+				entity -> entity != this.guard && entity.isAlive()).isEmpty();
+		return this.lastCrowdCheckResult;
 	}
 
-	private Vec3 resolveCrowdRecoveryTarget() {
-		if (!(this.level instanceof ServerLevel serverWorld) || !this.hasNearbyAlliedCrowding()) {
-			return null;
-		}
-
+	/** Short, path-validated sidestep to a free standing spot at roughly the same height. */
+	private Path findCrowdSidestep() {
 		Vec3 origin = this.guard.position();
+		int baseY = this.guard.getBlockY();
 		double baseAngle = Math.toRadians(Math.floorMod(this.guard.getUUID().hashCode(), 360));
-		for (int index = 0; index < 8; index++) {
+		int pathChecks = 0;
+		for (int index = 0; index < 8 && pathChecks < CROWD_SIDESTEP_MAX_PATH_CHECKS; index++) {
 			double angle = baseAngle + (Math.PI / 4.0D) * index;
-			Vec3 probe = origin.add(Math.cos(angle) * CROWD_RECOVERY_DISTANCE, 0.0D,
-					Math.sin(angle) * CROWD_RECOVERY_DISTANCE);
-			BlockPos candidateOrigin = BlockPos.containing(probe.x, this.guard.getBlockY(), probe.z);
-			BlockPos grounded = GuardVillagersMod.findNearbyGuardSpawnPos(
-					serverWorld,
-					candidateOrigin,
-					CROWD_RECOVERY_VERTICAL_RANGE);
-			if (grounded == null) {
+			int x = (int) Math.floor(origin.x + Math.cos(angle) * CROWD_SIDESTEP_DISTANCE);
+			int z = (int) Math.floor(origin.z + Math.sin(angle) * CROWD_SIDESTEP_DISTANCE);
+			BlockPos candidate = GuardGrounding.findStandable(this.guard, x, z, baseY, 1, 1);
+			if (candidate == null || this.isOccupiedByGuard(candidate)) {
 				continue;
 			}
-			return Vec3.atBottomCenterOf(grounded);
+			pathChecks++;
+			Path path = super.createPath(candidate, 0, CROWD_SIDESTEP_MAX_PATH);
+			if (path != null && path.canReach() && path.getNodeCount() <= CROWD_SIDESTEP_MAX_PATH + 2) {
+				return path;
+			}
 		}
 		return null;
 	}
 
-	private BlockPos resolveWaterRecoveryTarget() {
-		if (!(this.level instanceof ServerLevel serverWorld)) {
-			return null;
-		}
-
-		if (!this.isInOrAgainstFlowingWater()) {
-			return null;
-		}
-
-		BlockPos lastLand = this.guard.getLastLandPos();
-		if (lastLand != null && GuardVillagersMod.canGuardSpawnAt(serverWorld, lastLand)) {
-			return lastLand.immutable();
-		}
-		return this.findNearbyDryExit(serverWorld);
+	private boolean isOccupiedByGuard(BlockPos pos) {
+		return !this.level.getEntitiesOfClass(GuardEntity.class, new AABB(pos), entity -> entity != this.guard).isEmpty();
 	}
 
 	private boolean isInOrAgainstFlowingWater() {
+		if (this.guard.isInWater()) {
+			return true;
+		}
 		BlockPos origin = this.guard.blockPosition();
 		if (this.isFlowingWater(origin) || this.isFlowingWater(origin.above())) {
 			return true;
@@ -290,7 +358,7 @@ public class GuardNavigation extends GroundPathNavigation {
 				return true;
 			}
 		}
-		return this.guard.isInWater();
+		return false;
 	}
 
 	private boolean isFlowingWater(BlockPos pos) {
@@ -298,50 +366,76 @@ public class GuardNavigation extends GroundPathNavigation {
 		return fluid.is(FluidTags.WATER) && !fluid.isSource();
 	}
 
-	private BlockPos findNearbyDryExit(ServerLevel serverWorld) {
+	/**
+	 * Nearest dry standing spot around the guard (Chebyshev rings out to 5 blocks, +/-3 vertically),
+	 * classified by the walk pathfinder. No heightmap probing, so roofs and canopies are never picked.
+	 */
+	public BlockPos findNearbyDryExit() {
 		BlockPos origin = this.guard.blockPosition();
-		BlockPos best = null;
-		double bestDistanceSq = Double.MAX_VALUE;
-
 		for (int radius = 1; radius <= WATER_EXIT_SEARCH_RADIUS; radius++) {
+			BlockPos best = null;
+			double bestDistanceSq = Double.MAX_VALUE;
 			for (int dx = -radius; dx <= radius; dx++) {
 				for (int dz = -radius; dz <= radius; dz++) {
 					if (Math.max(Math.abs(dx), Math.abs(dz)) != radius) {
 						continue;
 					}
-
-					BlockPos topCandidate = this.level.getHeightmapPos(
-							Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
-							origin.offset(dx, 0, dz));
-					best = this.pickBestDryExit(serverWorld, topCandidate, best, origin, bestDistanceSq);
-					if (best != null) {
-						bestDistanceSq = best.distSqr(origin);
+					BlockPos candidate = GuardGrounding.findStandable(this.guard, origin.getX() + dx, origin.getZ() + dz,
+							origin.getY(), WATER_EXIT_VERTICAL_RANGE, WATER_EXIT_VERTICAL_RANGE);
+					if (candidate == null || !this.level.getFluidState(candidate).isEmpty()) {
+						continue;
 					}
+					double distanceSq = candidate.distSqr(origin);
+					if (distanceSq < bestDistanceSq) {
+						bestDistanceSq = distanceSq;
+						best = candidate;
+					}
+				}
+			}
+			if (best != null) {
+				return best;
+			}
+		}
+		return null;
+	}
 
-					for (int dy = -WATER_EXIT_VERTICAL_RANGE; dy <= WATER_EXIT_VERTICAL_RANGE; dy++) {
-						BlockPos candidate = origin.offset(dx, dy, dz);
-						best = this.pickBestDryExit(serverWorld, candidate, best, origin, bestDistanceSq);
-						if (best != null) {
-							bestDistanceSq = best.distSqr(origin);
-						}
+	/**
+	 * Nearest standing spot under open sky within 8 blocks (+/-2 vertically) that a short path
+	 * actually reaches. Used to walk boxed-in idle guards out of houses and doorways.
+	 */
+	public BlockPos findOpenSkyExit() {
+		BlockPos origin = this.guard.blockPosition();
+		int pathChecks = 0;
+		for (int radius = 2; radius <= 8; radius += 2) {
+			for (int dx = -radius; dx <= radius; dx += 2) {
+				for (int dz = -radius; dz <= radius; dz += 2) {
+					if (Math.max(Math.abs(dx), Math.abs(dz)) != radius) {
+						continue;
+					}
+					BlockPos candidate = GuardGrounding.findStandable(this.guard, origin.getX() + dx, origin.getZ() + dz,
+							origin.getY(), 2, 2);
+					if (candidate == null || !this.level.canSeeSky(candidate.above())) {
+						continue;
+					}
+					if (++pathChecks > 4) {
+						return null;
+					}
+					Path path = super.createPath(candidate, 0, 16);
+					if (path != null && path.canReach()) {
+						return candidate;
 					}
 				}
 			}
 		}
-
-		return best;
+		return null;
 	}
 
-	private BlockPos pickBestDryExit(ServerLevel serverWorld, BlockPos candidate, BlockPos currentBest, BlockPos origin, double bestDistanceSq) {
-		if (!GuardVillagersMod.canGuardSpawnAt(serverWorld, candidate)) {
-			return currentBest;
+	/** Moves to {@code target} and keeps goals from overriding the move for a short while. */
+	public void beginRecoveryMove(BlockPos target, double speed) {
+		Path path = super.createPath(target, 0);
+		if (path != null && super.moveTo(path, speed)) {
+			this.recoveryHoldTicks = RECOVERY_HOLD_TICKS * 2;
 		}
-
-		double distanceSq = candidate.distSqr(origin);
-		if (distanceSq >= bestDistanceSq) {
-			return currentBest;
-		}
-		return candidate.immutable();
 	}
 
 	private enum RouteMode {

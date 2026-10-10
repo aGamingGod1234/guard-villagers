@@ -2,13 +2,16 @@ package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.ai.GuardBehaviorExecutor;
+import com.guardvillagers.entity.ai.GuardMovementSlotResolver;
 import java.util.EnumSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.ai.goal.Goal;
 
+/** Walks a guard that strayed outside its zone back to a slot around home. */
 public final class GuardHomeAnchorGoal extends Goal {
 	private final GuardEntity guard;
 	private final double speed;
+	private final AnchorHold hold = new AnchorHold();
 
 	public GuardHomeAnchorGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
@@ -18,14 +21,17 @@ public final class GuardHomeAnchorGoal extends Goal {
 
 	@Override
 	public boolean canUse() {
-		return this.guard.isBehaviorExecutor(GuardBehaviorExecutor.HOME_ANCHOR)
-				&& this.guard.getHome().isPresent();
+		return this.guard.isBehaviorExecutor(GuardBehaviorExecutor.HOME_ANCHOR) && this.guard.getHome().isPresent();
 	}
 
 	@Override
 	public boolean canContinueToUse() {
-		return this.guard.isBehaviorExecutor(GuardBehaviorExecutor.HOME_ANCHOR)
-				&& this.guard.getHome().isPresent();
+		return this.canUse();
+	}
+
+	@Override
+	public void start() {
+		this.hold.reset();
 	}
 
 	@Override
@@ -36,14 +42,10 @@ public final class GuardHomeAnchorGoal extends Goal {
 	@Override
 	public void tick() {
 		BlockPos home = this.guard.getHome().orElse(null);
-		if (home == null || !(this.guard.level() instanceof net.minecraft.server.level.ServerLevel world)) {
+		if (home == null) {
 			return;
 		}
-		BlockPos slot = this.guard.resolveGroundMovementSlot(world, home, 1.75D, false);
-		if (this.guard.distanceToSqr(slot.getX() + 0.5D, slot.getY(), slot.getZ() + 0.5D) <= 2.25D) {
-			this.guard.getNavigation().stop();
-			return;
-		}
-		this.guard.getGuardNavigation().startMovingToStatic(slot, this.speed);
+		BlockPos slot = this.guard.resolveAnchorSlot(GuardMovementSlotResolver.AnchorKind.HOME, home, false);
+		this.hold.tick(this.guard, slot, this.guard.getResolvedSlotPosition(), this.speed);
 	}
 }

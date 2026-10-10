@@ -167,15 +167,12 @@ public final class GuardCommands {
 		return reportOrders(source, changed, message);
 	}
 
-	/**
-	 * Stand ground where they are. GuardEntity has no "fight in place without chasing" mode yet, so this uses
-	 * stay (pinned to the current block, owner alerts ignored); see the hand-off notes for the entity API it needs.
-	 */
+	/** Stand ground where they are: fight only what is in reach, never path away (GuardEntity hold mode). */
 	private static int hold(CommandSourceStack source) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
 		List<GuardEntity> guards = ownedGuards(player);
 		for (GuardEntity guard : guards) {
-			guard.setStaying(true);
+			guard.setHoldPosition(true);
 		}
 		return reportOrders(source, guards.size(), Component.translatable("commands.guardvillagers.hold", guards.size()));
 	}

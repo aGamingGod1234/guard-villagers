@@ -2,33 +2,53 @@ package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
 import java.util.EnumSet;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.level.pathfinder.PathType;
-import net.minecraft.world.phys.Vec3;
 
+/**
+ * Runs for the whole FOLLOW_OWNER intent and has two modes.
+ *
+ * <ul>
+ * <li><b>Catch-up</b> (owner far away or on a different level): path to the ground under the
+ * owner. All guards behind the owner share that one target, so they take the same route (the
+ * squad route cache lets neighbours reuse it) and queue up the owner's ramp or stairs instead of
+ * each aiming at a ring slot that may sit on top of an unreachable ledge.</li>
+ * <li><b>Formation</b> (owner close): walk to this guard's unique ring slot and stand there. If the
+ * slot turns out to be unreachable from here, approach the owner instead for a while.</li>
+ * </ul>
+ *
+ * Arrive / depart thresholds differ so guards do not twitch at the edge of their slot.
+ */
 public final class FormationFollowOwnerGoal extends Goal {
-	private static final int CATCH_UP_REPATH_INTERVAL_TICKS = 2;
-	private static final int STALLED_PROGRESS_WINDOW_TICKS = 20;
-	private static final int EXIT_STABILITY_TICKS = 10;
-	private static final double IMMEDIATE_CATCH_UP_DISTANCE_BLOCKS = 14.0D;
-	private static final double STALLED_CATCH_UP_DISTANCE_BLOCKS = 8.0D;
-	private static final double EXIT_DISTANCE_BLOCKS = 6.0D;
-	private static final double MIN_PROGRESS_BLOCKS = 0.5D;
-	private static final double MAX_EXIT_REGRESSION_BLOCKS = 0.25D;
+	private static final double CATCH_UP_ENTER_DISTANCE = 12.0D;
+	private static final double CATCH_UP_EXIT_DISTANCE = 8.0D;
+	private static final double CATCH_UP_VERTICAL_ENTER = 3.0D;
+	private static final double CATCH_UP_VERTICAL_EXIT = 2.0D;
+	private static final double SPEED_BOOST_DISTANCE = 16.0D;
+	private static final double SLOT_DEPART_DISTANCE_SQUARED = 2.5D * 2.5D;
+	private static final double SLOT_ARRIVE_DISTANCE_SQUARED = 1.0D;
+	private static final double OWNER_APPROACH_STOP_DISTANCE_SQUARED = 3.0D * 3.0D;
+	private static final int REPATH_INTERVAL_TICKS = 5;
+	private static final int UNREACHABLE_SLOT_TICKS = 40;
+	private static final int TELEPORT_RETRY_TICKS = 40;
+	private static final double OWNER_GROUND_MAX_DRIFT_SQUARED = 8.0D * 8.0D;
+	private static final double CATCH_UP_RETARGET_DISTANCE_SQUARED = 3.0D * 3.0D;
+	private static final int CATCH_UP_RETARGET_TICKS = 20;
 
 	private final GuardEntity guard;
 	private final double speed;
 	private ServerPlayer owner;
-	private int updateCountdownTicks;
-	private int progressWindowTicks;
-	private int settledTicks;
-	private double sampledDistanceBlocks = Double.MAX_VALUE;
-	private double lastDistanceBlocks = Double.MAX_VALUE;
-	private float oldWaterPathfindingPenalty;
-	private Vec3 cachedFollowSlot;
-	private double cachedDistanceBlocks;
+	private BlockPos ownerGround;
+	private boolean catchingUp;
+	private boolean movingToSlot;
+	private int repathCooldown;
+	private long slotUnreachableUntil;
+	private long nextTeleportAttempt;
+	private BlockPos catchUpTarget;
+	private long catchUpIssuedTick;
 
 	public FormationFollowOwnerGoal(GuardEntity guard, double speed) {
 		this.guard = guard;
@@ -38,146 +58,141 @@ public final class FormationFollowOwnerGoal extends Goal {
 
 	@Override
 	public boolean canUse() {
-		if (!(this.guard.level() instanceof ServerLevel world)) {
-			this.resetProgressSampling();
+		if (!(this.guard.level() instanceof ServerLevel world) || !this.guard.canFollowOwnerFormation()) {
 			return false;
 		}
-
-		if (!this.guard.canFollowOwnerFormation()) {
-			this.resetProgressSampling();
-			return false;
-		}
-
 		ServerPlayer resolvedOwner = this.guard.resolveOwner(world);
 		if (resolvedOwner == null || resolvedOwner.isSpectator()) {
-			this.guard.tryTeleportToOwnerWorld(world);
-			this.resetProgressSampling();
+			// Owner online but in another dimension: follow them through it.
+			long now = world.getGameTime();
+			if (now >= this.nextTeleportAttempt) {
+				this.nextTeleportAttempt = now + TELEPORT_RETRY_TICKS;
+				this.guard.tryTeleportToOwnerWorld(world);
+			}
 			return false;
 		}
-
-		Vec3 followSlot = this.guard.resolveFollowSlot(world, resolvedOwner);
-		double distanceSq = this.guard.distanceToSqr(followSlot);
-		double distanceBlocks = Math.sqrt(distanceSq);
-		if (!this.shouldEnterCatchUp(distanceBlocks)) {
-			return false;
-		}
-
 		this.owner = resolvedOwner;
-		this.cachedFollowSlot = followSlot;
-		this.cachedDistanceBlocks = distanceBlocks;
 		return true;
 	}
 
 	@Override
 	public boolean canContinueToUse() {
-		if (this.owner == null || !this.owner.isAlive()) {
-			return false;
-		}
-		if (!this.guard.canFollowOwnerFormation()) {
-			return false;
-		}
-
-		if (!(this.owner.level() instanceof ServerLevel world)) {
-			return false;
-		}
-		Vec3 followSlot = this.guard.resolveFollowSlot(world, this.owner);
-		double distanceBlocks = Math.sqrt(this.guard.distanceToSqr(followSlot));
-		if (distanceBlocks > EXIT_DISTANCE_BLOCKS) {
-			this.settledTicks = 0;
-			this.lastDistanceBlocks = distanceBlocks;
-			return true;
-		}
-
-		if (distanceBlocks <= this.lastDistanceBlocks + MAX_EXIT_REGRESSION_BLOCKS) {
-			this.settledTicks++;
-		} else {
-			this.settledTicks = 0;
-		}
-		this.lastDistanceBlocks = distanceBlocks;
-		return this.settledTicks < EXIT_STABILITY_TICKS;
+		return this.owner != null
+				&& this.owner.isAlive()
+				&& !this.owner.isRemoved()
+				&& !this.owner.isSpectator()
+				&& this.owner.level() == this.guard.level()
+				&& this.guard.canFollowOwnerFormation();
 	}
 
 	@Override
 	public void start() {
-		this.updateCountdownTicks = 0;
-		this.settledTicks = 0;
-		this.lastDistanceBlocks = this.cachedDistanceBlocks != 0.0D ? this.cachedDistanceBlocks : Double.MAX_VALUE;
-		this.oldWaterPathfindingPenalty = this.guard.getPathfindingMalus(PathType.WATER);
+		this.repathCooldown = 0;
+		this.catchingUp = false;
+		this.movingToSlot = false;
+		this.ownerGround = null;
+		this.slotUnreachableUntil = 0L;
+		this.catchUpTarget = null;
 		this.guard.setPathfindingMalus(PathType.WATER, 0.0F);
-		this.guard.setCatchUpSpeedActive(true);
 	}
 
 	@Override
 	public void stop() {
 		this.owner = null;
-		this.updateCountdownTicks = 0;
-		this.settledTicks = 0;
-		this.lastDistanceBlocks = Double.MAX_VALUE;
-		this.cachedFollowSlot = null;
-		this.cachedDistanceBlocks = 0.0D;
+		this.ownerGround = null;
 		this.guard.getNavigation().stop();
-		this.guard.setPathfindingMalus(PathType.WATER, this.oldWaterPathfindingPenalty);
+		this.guard.setPathfindingMalus(PathType.WATER, GuardEntity.DEFAULT_WATER_MALUS);
 		this.guard.setCatchUpSpeedActive(false);
 	}
 
 	@Override
 	public void tick() {
-		if (this.owner == null) {
+		ServerPlayer currentOwner = this.owner;
+		if (currentOwner == null) {
+			return;
+		}
+		this.updateOwnerGround(currentOwner);
+
+		double ownerDistanceSq = this.guard.distanceToSqr(currentOwner);
+		if (!this.guard.getNavigation().isInProgress() && ownerDistanceSq < 10.0D * 10.0D) {
+			this.guard.getLookControl().setLookAt(currentOwner, 10.0F, this.guard.getMaxHeadXRot());
+		}
+		if (--this.repathCooldown > 0 || this.guard.isLeashed() || this.guard.isPassenger()) {
+			return;
+		}
+		this.repathCooldown = this.adjustedTickDelay(REPATH_INTERVAL_TICKS);
+
+		double ownerDistance = Math.sqrt(ownerDistanceSq);
+		double verticalDelta = Math.abs(currentOwner.getY() - this.guard.getY());
+		if (this.catchingUp) {
+			this.catchingUp = ownerDistance > CATCH_UP_EXIT_DISTANCE || verticalDelta > CATCH_UP_VERTICAL_EXIT;
+		} else {
+			this.catchingUp = ownerDistance > CATCH_UP_ENTER_DISTANCE
+					|| (verticalDelta > CATCH_UP_VERTICAL_ENTER && ownerDistance > 3.0D);
+		}
+		this.guard.setCatchUpSpeedActive(this.catchingUp && ownerDistance > SPEED_BOOST_DISTANCE);
+
+		long now = this.guard.level().getGameTime();
+		if (this.catchingUp) {
+			this.movingToSlot = false;
+			this.catchUp(now);
 			return;
 		}
 
-		this.guard.getLookControl().setLookAt(this.owner, 10.0F, this.guard.getMaxHeadXRot());
-		if (--this.updateCountdownTicks > 0) {
+		if (now < this.slotUnreachableUntil) {
+			if (ownerDistanceSq <= OWNER_APPROACH_STOP_DISTANCE_SQUARED) {
+				this.guard.getNavigation().stop();
+			} else {
+				this.guard.getGuardNavigation().startMovingToStatic(this.ownerGround, this.speed);
+			}
 			return;
 		}
-		this.updateCountdownTicks = this.adjustedTickDelay(CATCH_UP_REPATH_INTERVAL_TICKS);
 
-		if (this.guard.isLeashed() || this.guard.isPassenger()) {
+		BlockPos slot = this.guard.resolveFollowSlot(currentOwner, this.ownerGround);
+		double slotDistanceSq = this.guard.distanceToSqr(slot.getX() + 0.5D, slot.getY(), slot.getZ() + 0.5D);
+		double stopDistanceSq = this.movingToSlot ? SLOT_ARRIVE_DISTANCE_SQUARED : SLOT_DEPART_DISTANCE_SQUARED;
+		if (slotDistanceSq <= stopDistanceSq) {
+			if (this.movingToSlot) {
+				this.guard.getNavigation().stop();
+				this.movingToSlot = false;
+			}
 			return;
 		}
 
-		if (!(this.owner.level() instanceof ServerLevel world)) {
-			return;
+		this.movingToSlot = true;
+		this.guard.getGuardNavigation().startMovingToStatic(slot, this.speed);
+		if (this.guard.getGuardNavigation().isLastTargetUnreachable()) {
+			this.slotUnreachableUntil = now + UNREACHABLE_SLOT_TICKS;
 		}
-		Vec3 followSlot = this.guard.resolveFollowSlot(world, this.owner);
-		this.guard.getGuardNavigation().startMovingToDynamic(followSlot, this.speed);
 	}
 
-	private boolean shouldEnterCatchUp(double distanceBlocks) {
-		if (distanceBlocks <= EXIT_DISTANCE_BLOCKS) {
-			this.resetProgressSampling(distanceBlocks);
-			return false;
+	/**
+	 * Re-targets the catch-up path only when the owner moved a few blocks, the path ended, or a
+	 * second passed. Re-pathing every time the owner crosses a block border cost one A* search
+	 * per guard every few ticks, which dominated tick time with large groups.
+	 */
+	private void catchUp(long now) {
+		boolean retarget = this.catchUpTarget == null
+				|| this.guard.getNavigation().isDone()
+				|| this.catchUpTarget.distSqr(this.ownerGround) > CATCH_UP_RETARGET_DISTANCE_SQUARED
+				|| now - this.catchUpIssuedTick >= CATCH_UP_RETARGET_TICKS;
+		if (!retarget) {
+			return;
 		}
-		if (distanceBlocks > IMMEDIATE_CATCH_UP_DISTANCE_BLOCKS) {
-			this.resetProgressSampling(distanceBlocks);
-			return true;
-		}
-		if (distanceBlocks <= STALLED_CATCH_UP_DISTANCE_BLOCKS) {
-			this.resetProgressSampling(distanceBlocks);
-			return false;
-		}
-		if (this.progressWindowTicks == 0) {
-			this.resetProgressSampling(distanceBlocks);
-			return false;
-		}
-
-		this.progressWindowTicks++;
-		if (this.progressWindowTicks < STALLED_PROGRESS_WINDOW_TICKS) {
-			return false;
-		}
-
-		double progressBlocks = this.sampledDistanceBlocks - distanceBlocks;
-		this.resetProgressSampling(distanceBlocks);
-		return progressBlocks < MIN_PROGRESS_BLOCKS;
+		this.catchUpTarget = this.ownerGround;
+		this.catchUpIssuedTick = now;
+		this.guard.getGuardNavigation().startMovingToStatic(this.catchUpTarget, this.speed);
 	}
 
-	private void resetProgressSampling() {
-		this.progressWindowTicks = 0;
-		this.sampledDistanceBlocks = Double.MAX_VALUE;
-	}
-
-	private void resetProgressSampling(double distanceBlocks) {
-		this.progressWindowTicks = 1;
-		this.sampledDistanceBlocks = distanceBlocks;
+	/**
+	 * Ground under the owner. While the owner jumps, flies or swims the last grounded position is
+	 * kept (if still close) so guards do not path toward a point in mid-air.
+	 */
+	private void updateOwnerGround(ServerPlayer currentOwner) {
+		BlockPos ownerPos = currentOwner.blockPosition();
+		if (currentOwner.onGround() || this.ownerGround == null
+				|| this.ownerGround.distSqr(ownerPos) > OWNER_GROUND_MAX_DRIFT_SQUARED) {
+			this.ownerGround = ownerPos;
+		}
 	}
 }

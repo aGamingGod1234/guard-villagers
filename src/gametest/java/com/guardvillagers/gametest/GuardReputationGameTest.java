@@ -213,7 +213,7 @@ public class GuardReputationGameTest {
 	 * Starting from the default 0.50, one decay step puts them below the 0.50 trust line. Their own,
 	 * already-hired guards should still follow them; the README only gates hiring and claiming on trust.
 	 */
-	@GameTest(structure = ARENA, environment = ENV, maxTicks = 300, required = false)
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 300)
 	public void ownedGuardKeepsFollowingAfterOneDecayStep(GameTestHelper helper) {
 		GuardTestSupport.floor(helper);
 		ServerLevel level = helper.getLevel();
