@@ -59,20 +59,24 @@ public final class VoiceRateLimiter {
 	}
 
 	/**
-	 * Cheap check before any audio is decoded: would an STT request for this player be refused right now?
+	 * Cheap check before any audio is decoded: is STT backed off, or has the player used this hour's budget?
+	 * Request spacing is not checked here, because a player may start the next sentence while the previous
+	 * one is still being transcribed; {@link #sttSpacingRemaining} handles that when the request is made.
 	 * Does not reserve anything.
 	 */
 	public synchronized Decision checkStt(UUID player) {
 		long now = clock.getAsLong();
 		if (now < backoffUntil.getOrDefault(SpeechException.Channel.STT, Long.MIN_VALUE)) return Decision.BACKOFF;
 		PlayerUsage usage = players.get(player);
-		if (usage != null) {
-			if (now - usage.lastSttStart < limits.sttMinIntervalMs()) return Decision.TOO_SOON;
-			if (usage.sttMillisInLastHour(now) >= budgetMillis()) return Decision.HOURLY_CAP;
-		} else if (budgetMillis() <= 0) {
-			return Decision.HOURLY_CAP;
-		}
-		return Decision.OK;
+		long used = usage == null ? 0L : usage.sttMillisInLastHour(now);
+		return used >= budgetMillis() ? Decision.HOURLY_CAP : Decision.OK;
+	}
+
+	/** Milliseconds until this player may start another STT request; 0 when allowed now. */
+	public synchronized long sttSpacingRemaining(UUID player) {
+		PlayerUsage usage = players.get(player);
+		if (usage == null) return 0L;
+		return Math.max(0L, limits.sttMinIntervalMs() - (clock.getAsLong() - usage.lastSttStart));
 	}
 
 	/**

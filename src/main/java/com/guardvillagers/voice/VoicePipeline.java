@@ -182,6 +182,18 @@ public final class VoicePipeline implements AutoCloseable {
 	 */
 	public CompletableFuture<Void> transcribe(UUID player, short[] pcm48k, long endpointMs) {
 		if (!inputAvailable() || !isConsented(player) || pcm48k.length == 0) return CompletableFuture.completedFuture(null);
+		long wait = limiter.sttSpacingRemaining(player);
+		if (wait > 0L) {
+			// The capture engine runs one request per player at a time, so waiting out the spacing here
+			// delays this sentence instead of dropping it.
+			return CompletableFuture.runAsync(() -> { }, CompletableFuture.delayedExecutor(wait, TimeUnit.MILLISECONDS))
+					.thenCompose(ignored -> startTranscription(player, pcm48k, endpointMs + wait));
+		}
+		return startTranscription(player, pcm48k, endpointMs);
+	}
+
+	private CompletableFuture<Void> startTranscription(UUID player, short[] pcm48k, long endpointMs) {
+		if (closed) return CompletableFuture.completedFuture(null);
 		long audioMillis = pcm48k.length * 1000L / SpeechToText.INPUT_SAMPLE_RATE;
 		VoiceRateLimiter.Decision decision = limiter.acquireStt(player, audioMillis);
 		if (!decision.allowed()) {
