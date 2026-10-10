@@ -455,6 +455,33 @@ public class GuardCommanderGameTest {
 		});
 	}
 
+	/** Owner leaves mid-raid: what the raid response changed goes back, what the player changed since stays. */
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void raidBehaviorsRestoredWhenOwnerLeaves(GameTestHelper helper) {
+		Squad squad = squad(helper);
+		var server = helper.getLevel().getServer();
+		UUID owner = squad.owner().getUUID();
+		GuardEntity raided = squad.guards().get(0);
+		GuardEntity retasked = squad.guards().get(1);
+		helper.runAfterDelay(5, () -> {
+			var command = GuardHierarchy.state(server).getOrCreate(owner);
+			raided.setBehavior(com.guardvillagers.entity.GuardBehavior.OFFENSIVE);
+			command.recordRaidBehavior(raided.getUUID(), com.guardvillagers.entity.GuardBehavior.PERIMETER,
+					com.guardvillagers.entity.GuardBehavior.OFFENSIVE);
+			// The raid set DEFENSIVE, then the player picked CROWD_CONTROL.
+			retasked.setBehavior(com.guardvillagers.entity.GuardBehavior.CROWD_CONTROL);
+			command.recordRaidBehavior(retasked.getUUID(), com.guardvillagers.entity.GuardBehavior.PERIMETER,
+					com.guardvillagers.entity.GuardBehavior.DEFENSIVE);
+			CommanderService.forget(server, owner);
+			helper.assertTrue(raided.getBehavior() == com.guardvillagers.entity.GuardBehavior.PERIMETER,
+					"raid behavior not restored: " + raided.getBehavior());
+			helper.assertTrue(retasked.getBehavior() == com.guardvillagers.entity.GuardBehavior.CROWD_CONTROL,
+					"player's own change was overwritten: " + retasked.getBehavior());
+			helper.assertTrue(GuardHierarchy.state(server).peek(owner).raidBehaviors().isEmpty(), "entries not cleared");
+			helper.succeed();
+		});
+	}
+
 	// ---- commander intuition ----
 
 	@GameTest(structure = ARENA, environment = ENV, maxTicks = 200)

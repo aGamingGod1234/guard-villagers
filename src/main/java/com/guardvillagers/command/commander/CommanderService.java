@@ -414,6 +414,9 @@ public final class CommanderService {
 		if (context != null) {
 			resumeAll(context);
 		}
+		// Without the owner nobody runs the raid response, so its behavior changes are put back now; guards that
+		// are not loaded keep their saved entry until the owner's commander next sees them.
+		CommanderBrain.restoreRaidBehaviors(server, owner, context != null ? context.book.active() : List.of());
 		CommanderCallouts.forget(owner);
 		VoiceCommandBridge.forget(owner);
 	}

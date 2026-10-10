@@ -9,6 +9,7 @@ import com.guardvillagers.command.order.OrderSource;
 import com.guardvillagers.command.order.Scope;
 import com.guardvillagers.command.order.TargetRef;
 import com.guardvillagers.entity.FormationType;
+import com.guardvillagers.entity.GuardBehavior;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import java.util.ArrayList;
@@ -119,6 +120,9 @@ public final class GuardCommandState extends SavedData {
 
 	/** One owner's chain of command. Mutators do not mark the state dirty; callers do. */
 	public static final class OwnerCommand {
+		/** Guards whose behavior a raid response changed and has not put back yet. */
+		public static final int MAX_RAID_BEHAVIORS = 256;
+
 		private static final Codec<CaptainEntry> CAPTAIN_CODEC = RecordCodecBuilder.create(instance -> instance.group(
 				Codec.intRange(0, MAX_CAPTAINS - 1).fieldOf("group").forGetter(CaptainEntry::group),
 				UUIDUtil.STRING_CODEC.fieldOf("guard").forGetter(CaptainEntry::guard)
@@ -132,8 +136,11 @@ public final class GuardCommandState extends SavedData {
 						.forGetter(command -> List.copyOf(command.pinnedCaptains)),
 				Codec.BOOL.optionalFieldOf("autoCommand", true).forGetter(OwnerCommand::autoCommand),
 				SavedOrder.CODEC.listOf(0, OrderBook.MAX_ACTIVE).optionalFieldOf("orders", List.of()).forGetter(command -> command.orders),
-				Codec.BOOL.optionalFieldOf("voiceConsent").forGetter(command -> Optional.ofNullable(command.voiceConsent))
+				Codec.BOOL.optionalFieldOf("voiceConsent").forGetter(command -> Optional.ofNullable(command.voiceConsent)),
+				RaidEntry.CODEC.listOf(0, MAX_RAID_BEHAVIORS).optionalFieldOf("raidBehaviors", List.of())
+						.forGetter(OwnerCommand::raidEntryList)
 		).apply(instance, OwnerCommand::new));
+
 
 		private UUID commander;
 		private UUID pinnedCommander;
@@ -143,12 +150,15 @@ public final class GuardCommandState extends SavedData {
 		private List<SavedOrder> orders = List.of();
 		/** Null until the player chooses; then the config default no longer applies. */
 		private Boolean voiceConsent;
+		/** Oldest first, so the oldest entry goes when full. */
+		private final Map<UUID, RaidBehavior> raidBehaviors = new LinkedHashMap<>();
 
 		public OwnerCommand() {
 		}
 
 		private OwnerCommand(Optional<UUID> commander, Optional<UUID> pinnedCommander, List<CaptainEntry> captains,
-				List<UUID> pinnedCaptains, boolean autoCommand, List<SavedOrder> orders, Optional<Boolean> voiceConsent) {
+				List<UUID> pinnedCaptains, boolean autoCommand, List<SavedOrder> orders, Optional<Boolean> voiceConsent,
+				List<RaidEntry> raidEntries) {
 			this.commander = commander.orElse(null);
 			this.pinnedCommander = pinnedCommander.orElse(null);
 			for (CaptainEntry entry : captains) {
@@ -158,6 +168,9 @@ public final class GuardCommandState extends SavedData {
 			this.autoCommand = autoCommand;
 			this.orders = List.copyOf(orders);
 			this.voiceConsent = voiceConsent.orElse(null);
+			for (RaidEntry entry : raidEntries) {
+				entry.toBehavior().ifPresent(behavior -> this.raidBehaviors.put(entry.guard(), behavior));
+			}
 		}
 
 		public OwnerCommand copy() {
@@ -169,13 +182,14 @@ public final class GuardCommandState extends SavedData {
 			copy.autoCommand = this.autoCommand;
 			copy.orders = this.orders;
 			copy.voiceConsent = this.voiceConsent;
+			copy.raidBehaviors.putAll(this.raidBehaviors);
 			return copy;
 		}
 
 		/** True when the row carries something only the player can set (rank fields are recomputed by elections). */
 		boolean holdsPlayerChoices() {
 			return this.voiceConsent != null || !this.autoCommand || this.pinnedCommander != null
-					|| !this.pinnedCaptains.isEmpty() || !this.orders.isEmpty();
+					|| !this.pinnedCaptains.isEmpty() || !this.orders.isEmpty() || !this.raidBehaviors.isEmpty();
 		}
 
 		public UUID commander() {
@@ -264,6 +278,42 @@ public final class GuardCommandState extends SavedData {
 			this.orders = List.copyOf(saved);
 		}
 
+		public Map<UUID, RaidBehavior> raidBehaviors() {
+			return Collections.unmodifiableMap(this.raidBehaviors);
+		}
+
+		/**
+		 * Notes that a raid response set {@code guard} to {@code applied}. The first original is kept across repeated
+		 * calls and raids, so the guard goes back to what the player had chosen.
+		 */
+		public boolean recordRaidBehavior(UUID guard, GuardBehavior original, GuardBehavior applied) {
+			RaidBehavior existing = this.raidBehaviors.get(guard);
+			if (existing != null) {
+				if (existing.applied() == applied) {
+					return false;
+				}
+				this.raidBehaviors.put(guard, new RaidBehavior(existing.original(), applied));
+				return true;
+			}
+			if (this.raidBehaviors.size() >= MAX_RAID_BEHAVIORS) {
+				this.raidBehaviors.remove(this.raidBehaviors.keySet().iterator().next());
+			}
+			this.raidBehaviors.put(guard, new RaidBehavior(original, applied));
+			return true;
+		}
+
+		public void clearRaidBehavior(UUID guard) {
+			this.raidBehaviors.remove(guard);
+		}
+
+		private List<RaidEntry> raidEntryList() {
+			List<RaidEntry> list = new ArrayList<>(this.raidBehaviors.size());
+			for (Map.Entry<UUID, RaidBehavior> entry : this.raidBehaviors.entrySet()) {
+				list.add(new RaidEntry(entry.getKey(), entry.getValue().original().name(), entry.getValue().applied().name()));
+			}
+			return list;
+		}
+
 		private List<CaptainEntry> captainList() {
 			List<CaptainEntry> list = new ArrayList<>(this.captainByGroup.size());
 			for (Map.Entry<Integer, UUID> entry : this.captainByGroup.entrySet()) {
@@ -274,6 +324,26 @@ public final class GuardCommandState extends SavedData {
 	}
 
 	private record CaptainEntry(int group, UUID guard) {
+	}
+
+	/** A guard's behavior before a raid response changed it, and what the raid set. */
+	public record RaidBehavior(GuardBehavior original, GuardBehavior applied) {
+	}
+
+	private record RaidEntry(UUID guard, String original, String applied) {
+		static final Codec<RaidEntry> CODEC = RecordCodecBuilder.create(instance -> instance.group(
+				UUIDUtil.STRING_CODEC.fieldOf("guard").forGetter(RaidEntry::guard),
+				Codec.string(1, 32).fieldOf("original").forGetter(RaidEntry::original),
+				Codec.string(1, 32).fieldOf("applied").forGetter(RaidEntry::applied)
+		).apply(instance, RaidEntry::new));
+
+		Optional<RaidBehavior> toBehavior() {
+			try {
+				return Optional.of(new RaidBehavior(GuardBehavior.valueOf(this.original), GuardBehavior.valueOf(this.applied)));
+			} catch (IllegalArgumentException unknown) {
+				return Optional.empty();
+			}
+		}
 	}
 
 	/** Flat, codec-friendly form of an {@link ActiveOrder}; unknown wire names are dropped on load. */

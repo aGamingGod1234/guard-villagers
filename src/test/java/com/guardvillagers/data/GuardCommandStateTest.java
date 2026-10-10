@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import com.guardvillagers.entity.GuardBehavior;
+import com.mojang.serialization.JsonOps;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -38,5 +40,19 @@ final class GuardCommandStateTest {
 		assertNotNull(state.peek(chose), "the oldest row holds a player choice and survives");
 		assertNull(state.peek(derivedOnly), "a row with only election results goes first");
 		assertEquals(GuardCommandState.MAX_OWNERS, state.trackedOwnerCount());
+	}
+
+	@Test
+	void raidBehaviorsKeepTheFirstOriginalAndSurviveSaving() {
+		GuardCommandState state = new GuardCommandState();
+		UUID owner = new UUID(5, 0);
+		UUID guard = new UUID(5, 1);
+		GuardCommandState.OwnerCommand command = state.getOrCreate(owner);
+		command.recordRaidBehavior(guard, GuardBehavior.PERIMETER, GuardBehavior.DEFENSIVE);
+		command.recordRaidBehavior(guard, GuardBehavior.DEFENSIVE, GuardBehavior.OFFENSIVE);
+		var json = GuardCommandState.CODEC.encodeStart(JsonOps.INSTANCE, state).getOrThrow();
+		GuardCommandState loaded = GuardCommandState.CODEC.parse(JsonOps.INSTANCE, json).getOrThrow();
+		assertEquals(new GuardCommandState.RaidBehavior(GuardBehavior.PERIMETER, GuardBehavior.OFFENSIVE),
+				loaded.peek(owner).raidBehaviors().get(guard));
 	}
 }

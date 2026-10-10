@@ -1,9 +1,10 @@
-	private final Map<UUID, GuardBehavior> raidBehaviors = new HashMap<>();
 package com.guardvillagers.command.commander;
 
+import com.guardvillagers.command.hierarchy.GuardHierarchy;
 import com.guardvillagers.command.order.Action;
 import com.guardvillagers.command.order.ActiveOrder;
 import com.guardvillagers.command.order.OrderExecutor;
+import com.guardvillagers.data.GuardCommandState;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.GuardRole;
@@ -303,7 +304,7 @@ final class CommanderBrain {
 		Set<GuardEntity> busy = new HashSet<>();
 		this.pressAttackOrders(server, player, context, busy);
 		this.guardOwner(player, busy);
-		this.respondToRaid(server, player, now);
+		this.respondToRaid(server, player, context, now);
 		Set<GuardEntity> bodyguards = this.pickBodyguards(player, busy);
 		this.assignThreats(server, player, busy, bodyguards);
 		this.pullBackWounded(player, now);
@@ -369,7 +370,7 @@ final class CommanderBrain {
 		}
 	}
 
-	private void respondToRaid(MinecraftServer server, ServerPlayer player, long now) {
+	private void respondToRaid(MinecraftServer server, ServerPlayer player, CommanderService.OwnerContext context, long now) {
 		Raid raid = player.level().getRaids().getNearbyRaid(player.blockPosition(), RAID_RADIUS * RAID_RADIUS);
 		boolean active = raid != null && raid.isActive();
 		if (active && !this.raidActive) {
@@ -385,28 +386,73 @@ final class CommanderBrain {
 					counts[guard.getRole() == GuardRole.BOWMAN ? 1 : 0]++;
 				}
 			}
+			GuardCommandState state = GuardHierarchy.state(server);
+			GuardCommandState.OwnerCommand command = null;
+			boolean changed = false;
 			for (GuardEntity guard : this.roster) {
 				if (this.controls.get(guard) != Control.FREE || guard.getHome().isEmpty() || guard.hasFollowOverride()) {
 					continue;
 				}
 				int[] counts = roles.get(guard.getGroupIndex());
 				GuardBehavior wanted = counts != null && counts[0] >= counts[1] ? GuardBehavior.OFFENSIVE : GuardBehavior.DEFENSIVE;
-				this.raidBehaviors.putIfAbsent(guard.getUUID(), guard.getBehavior());
-				guard.setBehavior(wanted);
+				if (guard.getBehavior() != wanted) {
+					// Saved, so the change is put back even if the guard unloads or the owner leaves before the raid ends.
+					command = command != null ? command : state.getOrCreate(this.owner);
+					changed |= command.recordRaidBehavior(guard.getUUID(), guard.getBehavior(), wanted);
+					guard.setBehavior(wanted);
+				}
 				if (!this.raidActive && guard.getTarget() == null) {
 					this.rally(guard, post, 240, now);
 				}
 			}
-		} else if (this.raidActive) {
-			for (GuardEntity guard : this.roster) {
-				GuardBehavior original = this.raidBehaviors.remove(guard.getUUID());
-				if (original != null) {
-					guard.setBehavior(original);
-				}
+			if (changed) {
+				state.setDirty();
 			}
-			this.raidBehaviors.clear();
+		} else {
+			restoreRaidBehaviors(server, this.owner, context.book.active());
 		}
 		this.raidActive = active;
+	}
+
+	/**
+	 * Puts back what raid responses changed, for every loaded guard of the owner: only where the behavior is still the
+	 * one the raid set and no player order (defend, patrol) has set it since. Entries for guards that are not loaded
+	 * wait for them.
+	 */
+	static void restoreRaidBehaviors(MinecraftServer server, UUID owner, List<ActiveOrder> active) {
+		GuardCommandState state = GuardHierarchy.state(server);
+		GuardCommandState.OwnerCommand command = state.peek(owner);
+		if (command == null || command.raidBehaviors().isEmpty()) {
+			return;
+		}
+		List<GuardEntity> guards = CommanderService.livingGuards(server, owner);
+		GuardEntity commander = GuardHierarchy.commanderAmong(server, owner, guards);
+		boolean changed = false;
+		for (GuardEntity guard : guards) {
+			GuardCommandState.RaidBehavior saved = command.raidBehaviors().get(guard.getUUID());
+			if (saved == null) {
+				continue;
+			}
+			if (guard.getBehavior() == saved.applied() && !behaviorOrdered(guard, active, commander)) {
+				guard.setBehavior(saved.original());
+			}
+			command.clearRaidBehavior(guard.getUUID());
+			changed = true;
+		}
+		if (changed) {
+			state.setDirty();
+		}
+	}
+
+	private static boolean behaviorOrdered(GuardEntity guard, List<ActiveOrder> active, GuardEntity commander) {
+		for (ActiveOrder order : active) {
+			Action action = order.order().action();
+			if ((action == Action.DEFEND_VILLAGE || action == Action.PATROL_HERE)
+					&& OrderExecutor.covers(order.order().scope(), guard, commander)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** Up to two healthy following guards nearest the owner stay with them while squads fight elsewhere. */
