@@ -15,6 +15,7 @@ import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import com.guardvillagers.data.SafeFiles;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -25,9 +26,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -396,97 +395,100 @@ public final class ClientTacticsDataStore {
 		}
 	}
 
+	/**
+	 * Runs from the static INSTANCE initializer, so it must never throw: an exception here would become an
+	 * ExceptionInInitializerError and every later use a NoClassDefFoundError. A malformed file is moved aside and
+	 * the store starts empty.
+	 */
 	private void load() {
 		this.worlds.clear();
-		if (!Files.exists(SAVE_PATH)) {
+		if (!SafeFiles.readOrQuarantine(SAVE_PATH, LOGGER, this::parse)) {
+			this.worlds.clear();
+		}
+		this.dirty = false;
+	}
+
+	private void parse(String json) {
+		JsonElement rootElement = JsonParser.parseString(json);
+		if (!rootElement.isJsonObject()) {
 			return;
 		}
-		try {
-			String json = Files.readString(SAVE_PATH);
-			JsonElement rootElement = JsonParser.parseString(json);
-			if (!rootElement.isJsonObject()) {
-				return;
+		JsonObject rootObject = rootElement.getAsJsonObject();
+		JsonObject worldsObject = asObject(rootObject.get("worlds"));
+		if (worldsObject == null) {
+			return;
+		}
+		for (Map.Entry<String, JsonElement> worldEntry : worldsObject.entrySet()) {
+			JsonObject worldObject = asObject(worldEntry.getValue());
+			if (worldObject == null) {
+				continue;
 			}
-			JsonObject rootObject = rootElement.getAsJsonObject();
-			JsonObject worldsObject = asObject(rootObject.get("worlds"));
-			if (worldsObject == null) {
-				return;
-			}
-			for (Map.Entry<String, JsonElement> worldEntry : worldsObject.entrySet()) {
-				JsonObject worldObject = asObject(worldEntry.getValue());
-				if (worldObject == null) {
-					continue;
-				}
-				WorldData worldData = new WorldData();
-				worldData.groupNames.clear();
+			WorldData worldData = new WorldData();
+			worldData.groupNames.clear();
 
-				JsonArray rolesArray = asArray(worldObject.get("groupNames"));
-				if (rolesArray != null) {
-					for (JsonElement roleElement : rolesArray) {
-						String sanitized = sanitizeGroupName(asString(roleElement));
-						if (!sanitized.isBlank()) {
-							worldData.groupNames.add(sanitized);
-						}
+			JsonArray rolesArray = asArray(worldObject.get("groupNames"));
+			if (rolesArray != null) {
+				for (JsonElement roleElement : rolesArray) {
+					String sanitized = sanitizeGroupName(asString(roleElement));
+					if (!sanitized.isBlank()) {
+						worldData.groupNames.add(sanitized);
 					}
 				}
-				JsonObject rowColorsObject = asObject(worldObject.get("rowColors"));
-				if (rowColorsObject != null) {
-					for (Map.Entry<String, JsonElement> colorEntry : rowColorsObject.entrySet()) {
-						try {
-							int row = Integer.parseInt(colorEntry.getKey());
-							RegionColor color = RegionColor.fromId(asInt(colorEntry.getValue(), 0));
-							if (row >= 0 && color != RegionColor.NONE) {
-								worldData.rowColorByGroup.put(row, color.id());
+			}
+			JsonObject rowColorsObject = asObject(worldObject.get("rowColors"));
+			if (rowColorsObject != null) {
+				for (Map.Entry<String, JsonElement> colorEntry : rowColorsObject.entrySet()) {
+					try {
+						int row = Integer.parseInt(colorEntry.getKey());
+						RegionColor color = RegionColor.fromId(asInt(colorEntry.getValue(), 0));
+						if (row >= 0 && color != RegionColor.NONE) {
+							worldData.rowColorByGroup.put(row, color.id());
+						}
+					} catch (NumberFormatException ignored) {
+					}
+				}
+			}
+
+			JsonObject dimensionsObject = asObject(worldObject.get("dimensions"));
+			if (dimensionsObject != null) {
+				for (Map.Entry<String, JsonElement> dimensionEntry : dimensionsObject.entrySet()) {
+					JsonObject dimensionObject = asObject(dimensionEntry.getValue());
+					if (dimensionObject == null) {
+						continue;
+					}
+					DimensionData dimensionData = new DimensionData();
+					JsonArray discoveredArray = asArray(dimensionObject.get("discovered"));
+					if (discoveredArray != null) {
+						for (JsonElement discoveredElement : discoveredArray) {
+							try {
+								long chunkKey = Long.parseLong(asString(discoveredElement));
+								this.addDiscoveredChunk(dimensionData, chunkKey);
+							} catch (NumberFormatException ignored) {
 							}
-						} catch (NumberFormatException ignored) {
 						}
 					}
-				}
 
-				JsonObject dimensionsObject = asObject(worldObject.get("dimensions"));
-				if (dimensionsObject != null) {
-					for (Map.Entry<String, JsonElement> dimensionEntry : dimensionsObject.entrySet()) {
-						JsonObject dimensionObject = asObject(dimensionEntry.getValue());
-						if (dimensionObject == null) {
-							continue;
-						}
-						DimensionData dimensionData = new DimensionData();
-						JsonArray discoveredArray = asArray(dimensionObject.get("discovered"));
-						if (discoveredArray != null) {
-							for (JsonElement discoveredElement : discoveredArray) {
-								try {
-									long chunkKey = Long.parseLong(asString(discoveredElement));
-									this.addDiscoveredChunk(dimensionData, chunkKey);
-								} catch (NumberFormatException ignored) {
+					JsonObject regionsObject = asObject(dimensionObject.get("regions"));
+					if (regionsObject != null) {
+						for (Map.Entry<String, JsonElement> regionEntry : regionsObject.entrySet()) {
+							try {
+								long chunkKey = Long.parseLong(regionEntry.getKey());
+								RegionColor color = RegionColor.fromId(asInt(regionEntry.getValue(), 0));
+								if (color != RegionColor.NONE && dimensionData.discovered.contains(chunkKey)) {
+									dimensionData.regionByChunk.put(chunkKey, color.id());
 								}
+							} catch (NumberFormatException ignored) {
 							}
-						}
-
-						JsonObject regionsObject = asObject(dimensionObject.get("regions"));
-						if (regionsObject != null) {
-							for (Map.Entry<String, JsonElement> regionEntry : regionsObject.entrySet()) {
-								try {
-									long chunkKey = Long.parseLong(regionEntry.getKey());
-									RegionColor color = RegionColor.fromId(asInt(regionEntry.getValue(), 0));
-									if (color != RegionColor.NONE && dimensionData.discovered.contains(chunkKey)) {
-										dimensionData.regionByChunk.put(chunkKey, color.id());
-									}
-								} catch (NumberFormatException ignored) {
-								}
-							}
-						}
-						if (worldData.dimensions.size() < MAX_DIMENSIONS_PER_WORLD) {
-							worldData.dimensions.put(dimensionEntry.getKey(), dimensionData);
 						}
 					}
-				}
-				if (this.worlds.size() < MAX_WORLDS) {
-					this.worlds.put(worldEntry.getKey(), worldData);
+					if (worldData.dimensions.size() < MAX_DIMENSIONS_PER_WORLD) {
+						worldData.dimensions.put(dimensionEntry.getKey(), dimensionData);
+					}
 				}
 			}
-			this.dirty = false;
-		} catch (IOException exception) {
-			LOGGER.error("Failed to load client tactics data from {}", SAVE_PATH, exception);
+			if (this.worlds.size() < MAX_WORLDS) {
+				this.worlds.put(worldEntry.getKey(), worldData);
+			}
 		}
 	}
 
@@ -541,14 +543,7 @@ public final class ClientTacticsDataStore {
 		}
 
 		try {
-			Files.createDirectories(SAVE_PATH.getParent());
-			Files.writeString(
-				SAVE_PATH,
-				GSON.toJson(rootObject),
-				StandardOpenOption.CREATE,
-				StandardOpenOption.TRUNCATE_EXISTING,
-				StandardOpenOption.WRITE
-			);
+			SafeFiles.writeAtomically(SAVE_PATH, GSON.toJson(rootObject));
 			this.dirty = false;
 		} catch (IOException exception) {
 			LOGGER.error("Failed to save client tactics data to {}", SAVE_PATH, exception);
