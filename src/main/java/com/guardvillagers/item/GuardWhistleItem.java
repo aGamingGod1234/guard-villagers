@@ -40,7 +40,7 @@ public final class GuardWhistleItem extends Item {
 			return InteractionResult.PASS;
 		}
 		if (!guard.isOwnedBy(player.getUUID())) {
-			player.displayClientMessage(Component.literal("This guard does not follow your commands."), true);
+			player.sendOverlayMessage(Component.literal("This guard does not follow your commands."));
 			return InteractionResult.SUCCESS;
 		}
 
@@ -53,13 +53,13 @@ public final class GuardWhistleItem extends Item {
 			} else {
 				guard.setPatrolRadius(nextRadius);
 			}
-			player.displayClientMessage(Component.literal("Patrol radius set to " + nextRadius + " blocks."), true);
+			player.sendOverlayMessage(Component.literal("Patrol radius set to " + nextRadius + " blocks."));
 		} else {
 			int radius = Math.max(24, guard.getPatrolRadius());
 			guard.setFollowOverride(false);
 			guard.clearCombatTarget();
 			guard.setHome(guard.blockPosition(), radius);
-			player.displayClientMessage(Component.literal("Guard home zone assigned at current location."), true);
+			player.sendOverlayMessage(Component.literal("Guard home zone assigned at current location."));
 		}
 		return InteractionResult.SUCCESS;
 	}
@@ -81,6 +81,6 @@ public final class GuardWhistleItem extends Item {
 				leader.setPriorityTarget(threat);
 			}
 		}
-		caller.displayClientMessage(Component.literal("Rally command sent to " + leaders.size() + " squad leaders."), true);
+		caller.sendOverlayMessage(Component.literal("Rally command sent to " + leaders.size() + " squad leaders."));
 	}
 }

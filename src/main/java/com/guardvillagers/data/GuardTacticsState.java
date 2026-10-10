@@ -33,7 +33,7 @@ public final class GuardTacticsState extends SavedData {
 	).apply(instance, GuardTacticsState::new));
 
 	public static final SavedDataType<GuardTacticsState> TYPE = new SavedDataType<>(
-		"guardvillagers_tactics",
+		GuardSavedData.id("tactics"),
 		GuardTacticsState::new,
 		CODEC,
 		DataFixTypes.LEVEL
@@ -346,7 +346,7 @@ public final class GuardTacticsState extends SavedData {
 			try {
 				int x = Integer.parseInt(key.substring(0, comma).trim());
 				int z = Integer.parseInt(key.substring(comma + 1).trim());
-				return OptionalLong.of(net.minecraft.world.level.ChunkPos.asLong(x, z));
+				return OptionalLong.of(net.minecraft.world.level.ChunkPos.pack(x, z));
 			} catch (NumberFormatException ignored) {
 				return OptionalLong.empty();
 			}

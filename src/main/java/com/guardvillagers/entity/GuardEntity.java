@@ -1095,7 +1095,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 
 		if (this.ownerUuid != null && !this.ownerUuid.equals(player.getUUID())) {
 			if (this.level() instanceof ServerLevel) {
-				player.displayClientMessage(Component.literal("I'm not your guard!"), true);
+				player.sendOverlayMessage(Component.literal("I'm not your guard!"));
 			}
 			return InteractionResult.SUCCESS;
 		}
@@ -1103,12 +1103,12 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		if (this.ownerUuid == null && stack.is(Items.EMERALD)) {
 			if (this.level() instanceof ServerLevel world) {
 				if (!GuardReputationManager.isTrustedByGuards(world, player.getUUID(), this.blockPosition())) {
-					player.displayClientMessage(Component.literal("The guard distrusts you due to village reputation."), true);
+					player.sendOverlayMessage(Component.literal("The guard distrusts you due to village reputation."));
 					return InteractionResult.SUCCESS;
 				}
 				int hirePrice = com.guardvillagers.GuardHirePricing.getHirePrice(this.getLevel());
 				if (!player.getAbilities().instabuild && stack.getCount() < hirePrice) {
-					player.displayClientMessage(Component.literal("Need " + hirePrice + " emerald(s) to hire this guard."), true);
+					player.sendOverlayMessage(Component.literal("Need " + hirePrice + " emerald(s) to hire this guard."));
 					return InteractionResult.SUCCESS;
 				}
 
@@ -1119,7 +1119,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 				if (!player.getAbilities().instabuild) {
 					stack.shrink(hirePrice);
 				}
-				player.displayClientMessage(Component.literal(this.getName().getString() + " is now loyal to you."), true);
+				player.sendOverlayMessage(Component.literal(this.getName().getString() + " is now loyal to you."));
 			}
 			return InteractionResult.SUCCESS;
 		}
@@ -1127,10 +1127,10 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		if (this.ownerUuid != null && this.ownerUuid.equals(player.getUUID()) && stack.isEmpty()) {
 			if (player.isShiftKeyDown()) {
 				this.cycleBehavior();
-				player.displayClientMessage(Component.literal("Behavior set to " + this.getBehavior().name().toLowerCase()), true);
+				player.sendOverlayMessage(Component.literal("Behavior set to " + this.getBehavior().name().toLowerCase()));
 			} else {
 				this.setStaying(!this.staying);
-				player.displayClientMessage(Component.literal(this.staying ? "Guard staying." : "Guard following."), true);
+				player.sendOverlayMessage(Component.literal(this.staying ? "Guard staying." : "Guard following."));
 			}
 			return InteractionResult.SUCCESS;
 		}
@@ -1139,7 +1139,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 			if (this.tryApplyPlayerUpgrade(player, hand, stack)) {
 				return InteractionResult.SUCCESS;
 			}
-			player.displayClientMessage(Component.literal("That item is not an upgrade for this guard."), true);
+			player.sendOverlayMessage(Component.literal("That item is not an upgrade for this guard."));
 			return InteractionResult.SUCCESS;
 		}
 
@@ -1158,12 +1158,12 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		}
 
 		if (this.tryApplyArmorUpgrade(player, hand, offered)) {
-			player.displayClientMessage(Component.literal("Guard armor upgraded."), true);
+			player.sendOverlayMessage(Component.literal("Guard armor upgraded."));
 			return true;
 		}
 
 		if (this.tryApplyWeaponUpgrade(player, hand, offered)) {
-			player.displayClientMessage(Component.literal("Guard weapon upgraded."), true);
+			player.sendOverlayMessage(Component.literal("Guard weapon upgraded."));
 			return true;
 		}
 

@@ -21,7 +21,7 @@ public final class GuardVillageState extends SavedData {
 	).apply(instance, GuardVillageState::new));
 
 	public static final SavedDataType<GuardVillageState> TYPE = new SavedDataType<>(
-		"guardvillagers_village_state",
+		GuardSavedData.id("village_state"),
 		GuardVillageState::new,
 		CODEC,
 		DataFixTypes.LEVEL

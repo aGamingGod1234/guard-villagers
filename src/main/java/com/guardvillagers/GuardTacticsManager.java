@@ -14,6 +14,6 @@ public final class GuardTacticsManager {
 		if (checkedServer.overworld() == null) {
 			throw new IllegalStateException("Cannot access guard tactics state before overworld is available");
 		}
-		return checkedServer.overworld().getDataStorage().computeIfAbsent(GuardTacticsState.TYPE);
+		return checkedServer.getDataStorage().computeIfAbsent(GuardTacticsState.TYPE);
 	}
 }

@@ -7,7 +7,7 @@ import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.ChestMenu;
-import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 
@@ -47,7 +47,7 @@ public final class GuardTacticsScreenHandler extends ChestMenu {
 	}
 
 	@Override
-	public void clicked(int slotIndex, int button, ClickType actionType, Player player) {
+	public void clicked(int slotIndex, int button, ContainerInput actionType, Player player) {
 		if (this.owner == null || this.tacticsInventory == null) {
 			super.clicked(slotIndex, button, actionType, player);
 			return;
@@ -62,7 +62,7 @@ public final class GuardTacticsScreenHandler extends ChestMenu {
 		}
 
 		if (slotIndex >= 0 && slotIndex < TACTICS_SLOT_COUNT) {
-			if (actionType != ClickType.PICKUP && actionType != ClickType.QUICK_MOVE) {
+			if (actionType != ContainerInput.PICKUP && actionType != ContainerInput.QUICK_MOVE) {
 				return;
 			}
 			if (this.tacticsInventory.handleClick(slotIndex, button)) {

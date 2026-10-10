@@ -277,7 +277,7 @@ public final class ChunkMapWidget {
 			int maxZ = Math.max(this.selectionStart.z, this.selectionEnd.z);
 			for (int chunkX = minX; chunkX <= maxX; chunkX++) {
 				for (int chunkZ = minZ; chunkZ <= maxZ; chunkZ++) {
-					long chunkKey = ChunkPos.asLong(chunkX, chunkZ);
+					long chunkKey = ChunkPos.pack(chunkX, chunkZ);
 					this.dataStore.setRegionColor(worldContext, chunkKey, paintColor);
 				}
 			}

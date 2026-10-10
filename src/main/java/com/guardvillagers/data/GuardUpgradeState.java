@@ -22,7 +22,7 @@ public final class GuardUpgradeState extends SavedData {
 	).apply(instance, GuardUpgradeState::new));
 
 	public static final SavedDataType<GuardUpgradeState> TYPE = new SavedDataType<>(
-		"guardvillagers_upgrades",
+		GuardSavedData.id("upgrades"),
 		GuardUpgradeState::new,
 		CODEC,
 		DataFixTypes.LEVEL

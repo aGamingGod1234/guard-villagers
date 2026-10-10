@@ -56,7 +56,7 @@ public final class ChunkTerrainCache {
 		int asyncQueued = 0;
 
 		for (ChunkPos chunkPos : visibleChunks) {
-			long chunkKey = ChunkPos.asLong(chunkPos.x, chunkPos.z);
+			long chunkKey = ChunkPos.pack(chunkPos.x, chunkPos.z);
 			TileKey tileKey = new TileKey(worldKey, chunkKey);
 			if (cache.containsKey(chunkKey) || this.pendingGeneration.containsKey(tileKey)) {
 				continue;
@@ -92,7 +92,7 @@ public final class ChunkTerrainCache {
 		if (cache == null) {
 			return null;
 		}
-		return cache.get(ChunkPos.asLong(chunkX, chunkZ));
+		return cache.get(ChunkPos.pack(chunkX, chunkZ));
 	}
 
 	public void invalidate(ClientTacticsDataStore.WorldContext context, int chunkX, int chunkZ) {
@@ -101,7 +101,7 @@ public final class ChunkTerrainCache {
 		}
 
 		String worldKey = this.worldKey(context);
-		long chunkKey = ChunkPos.asLong(chunkX, chunkZ);
+		long chunkKey = ChunkPos.pack(chunkX, chunkZ);
 		TileKey tileId = new TileKey(worldKey, chunkKey);
 		this.pendingGeneration.remove(tileId);
 		this.asyncResults.remove(tileId);
@@ -170,7 +170,7 @@ public final class ChunkTerrainCache {
 	private TerrainTile generateTile(String worldKey, ClientLevel world, LevelChunk chunk) {
 		ChunkPos chunkPos = chunk.getPos();
 		int[] colors = snapshotBlockColors(world, chunk, chunkPos, snapshotHeightmap(chunk));
-		return this.createTerrainTile(worldKey, ChunkPos.asLong(chunkPos.x, chunkPos.z), computeTileSnapshot(colors));
+		return this.createTerrainTile(worldKey, ChunkPos.pack(chunkPos.x, chunkPos.z), computeTileSnapshot(colors));
 	}
 
 	private TerrainTile createTerrainTile(String worldKey, long chunkKey, TerrainSnapshot snapshot) {

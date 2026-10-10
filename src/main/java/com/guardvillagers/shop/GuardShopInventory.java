@@ -72,63 +72,63 @@ public class GuardShopInventory extends SimpleContainer {
 		switch (result.result()) {
 			case SUCCESS -> {
 				if (result.spawnedCount() == 1 && !result.guardNames().isEmpty()) {
-					this.player.displayClientMessage(Component.literal(result.guardNames().getFirst() + " hired."), true);
+					this.player.sendOverlayMessage(Component.literal(result.guardNames().getFirst() + " hired."));
 				} else {
-					this.player.displayClientMessage(Component.literal("Guards hired: " + result.spawnedCount() + "."), true);
+					this.player.sendOverlayMessage(Component.literal("Guards hired: " + result.spawnedCount() + "."));
 				}
 			}
-			case NOT_TRUSTED -> this.player.displayClientMessage(Component.literal("Village trust is too low to hire guards."), true);
-			case LIMIT_REACHED -> this.player.displayClientMessage(Component.literal("Personal guard limit reached."), true);
-			case INSUFFICIENT_FUNDS -> this.player.displayClientMessage(Component.literal("Need " + cost + " emerald block(s) to hire a guard."), true);
-			case SPAWN_FAILED -> this.player.displayClientMessage(Component.literal("Could not find space to spawn a guard. Move to open ground."), true);
-			case INTERNAL_ERROR -> this.player.displayClientMessage(Component.literal("Guard purchase failed due to an internal error. Check logs."), true);
+			case NOT_TRUSTED -> this.player.sendOverlayMessage(Component.literal("Village trust is too low to hire guards."));
+			case LIMIT_REACHED -> this.player.sendOverlayMessage(Component.literal("Personal guard limit reached."));
+			case INSUFFICIENT_FUNDS -> this.player.sendOverlayMessage(Component.literal("Need " + cost + " emerald block(s) to hire a guard."));
+			case SPAWN_FAILED -> this.player.sendOverlayMessage(Component.literal("Could not find space to spawn a guard. Move to open ground."));
+			case INTERNAL_ERROR -> this.player.sendOverlayMessage(Component.literal("Guard purchase failed due to an internal error. Check logs."));
 		}
 	}
 
 	private void upgradeArmor() {
 		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgrades(this.player);
 		if (upgrades.getArmorLevel() >= GuardPlayerUpgrades.MAX_ARMOR_LEVEL) {
-			this.player.displayClientMessage(Component.literal("Armor upgrades are already maxed."), true);
+			this.player.sendOverlayMessage(Component.literal("Armor upgrades are already maxed."));
 			return;
 		}
 
 		int cost = upgrades.getArmorUpgradeCost();
 		if (!GuardVillagersMod.spendEmeraldBlocks(this.player, cost)) {
-			this.player.displayClientMessage(Component.literal("Need " + cost + " emerald blocks for armor upgrade."), true);
+			this.player.sendOverlayMessage(Component.literal("Need " + cost + " emerald blocks for armor upgrade."));
 			return;
 		}
 
 		upgrades.upgradeArmor();
-		this.player.displayClientMessage(Component.literal("Armor upgrade purchased."), true);
+		this.player.sendOverlayMessage(Component.literal("Armor upgrade purchased."));
 	}
 
 	private void upgradeWeapon() {
 		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgrades(this.player);
 		if (upgrades.getWeaponLevel() >= GuardPlayerUpgrades.MAX_WEAPON_LEVEL) {
-			this.player.displayClientMessage(Component.literal("Weapon upgrades are already maxed."), true);
+			this.player.sendOverlayMessage(Component.literal("Weapon upgrades are already maxed."));
 			return;
 		}
 
 		int cost = upgrades.getWeaponUpgradeCost();
 		if (!GuardVillagersMod.spendEmeraldBlocks(this.player, cost)) {
-			this.player.displayClientMessage(Component.literal("Need " + cost + " emerald blocks for weapon upgrade."), true);
+			this.player.sendOverlayMessage(Component.literal("Need " + cost + " emerald blocks for weapon upgrade."));
 			return;
 		}
 
 		upgrades.upgradeWeapon();
-		this.player.displayClientMessage(Component.literal("Weapon upgrade purchased."), true);
+		this.player.sendOverlayMessage(Component.literal("Weapon upgrade purchased."));
 	}
 
 	private void upgradeHealing() {
 		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgrades(this.player);
 		if (upgrades.getSupportLevel() >= GuardPlayerUpgrades.MAX_SUPPORT_LEVEL) {
-			this.player.displayClientMessage(Component.literal("Support upgrades are already maxed."), true);
+			this.player.sendOverlayMessage(Component.literal("Support upgrades are already maxed."));
 			return;
 		}
 
 		int cost = upgrades.getHealingUpgradeCost();
 		if (!GuardVillagersMod.spendEmeraldBlocks(this.player, cost)) {
-			this.player.displayClientMessage(Component.literal("Need " + cost + " emerald blocks for support upgrade."), true);
+			this.player.sendOverlayMessage(Component.literal("Need " + cost + " emerald blocks for support upgrade."));
 			return;
 		}
 
@@ -139,7 +139,7 @@ public class GuardShopInventory extends SimpleContainer {
 			case 3 -> "Healing upgraded to 1 heart every second.";
 			default -> "Support upgraded.";
 		};
-		this.player.displayClientMessage(Component.literal(message), true);
+		this.player.sendOverlayMessage(Component.literal(message));
 	}
 
 	public void refresh() {

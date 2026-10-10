@@ -34,7 +34,7 @@ public final class GuardReputationManager {
 	}
 
 	public static GuardReputationState getState(MinecraftServer server) {
-		return server.overworld().getDataStorage().computeIfAbsent(GuardReputationState.TYPE);
+		return server.getDataStorage().computeIfAbsent(GuardReputationState.TYPE);
 	}
 
 	public static double getEffectiveReputation(ServerLevel world, UUID playerUuid, BlockPos reference, int radius) {

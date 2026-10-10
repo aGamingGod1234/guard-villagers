@@ -31,7 +31,7 @@ public final class GuardReputationState extends SavedData {
 	).apply(instance, GuardReputationState::fromCodecData));
 
 	public static final SavedDataType<GuardReputationState> TYPE = new SavedDataType<>(
-		"guardvillagers_reputation",
+		GuardSavedData.id("reputation"),
 		GuardReputationState::new,
 		CODEC,
 		DataFixTypes.LEVEL

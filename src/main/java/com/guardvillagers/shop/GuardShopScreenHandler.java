@@ -4,7 +4,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.ChestMenu;
-import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
@@ -34,7 +34,7 @@ public class GuardShopScreenHandler extends ChestMenu {
 	}
 
 	@Override
-	public void clicked(int slotIndex, int button, ClickType actionType, Player player) {
+	public void clicked(int slotIndex, int button, ContainerInput actionType, Player player) {
 		if (player != this.owner) {
 			return;
 		}
@@ -44,12 +44,12 @@ public class GuardShopScreenHandler extends ChestMenu {
 		}
 
 		if (slotIndex >= 0 && slotIndex < SHOP_SLOT_COUNT) {
-			if (actionType != ClickType.PICKUP && actionType != ClickType.QUICK_MOVE) {
+			if (actionType != ContainerInput.PICKUP && actionType != ContainerInput.QUICK_MOVE) {
 				return;
 			}
 
 			try {
-				boolean bulkPurchase = actionType == ClickType.QUICK_MOVE;
+				boolean bulkPurchase = actionType == ContainerInput.QUICK_MOVE;
 				if (this.shopInventory.handleClick(slotIndex, bulkPurchase)) {
 					this.shopInventory.refresh();
 					this.broadcastChanges();

@@ -23,7 +23,7 @@ public final class GuardDiplomacyState extends SavedData {
 	).apply(instance, GuardDiplomacyState::new));
 
 	public static final SavedDataType<GuardDiplomacyState> TYPE = new SavedDataType<>(
-		"guardvillagers_diplomacy",
+		GuardSavedData.id("diplomacy"),
 		GuardDiplomacyState::new,
 		CODEC,
 		DataFixTypes.LEVEL

@@ -15,7 +15,7 @@ public final class GuardDebugManager {
 		if (checkedServer.overworld() == null) {
 			throw new IllegalStateException("Cannot access guard debug state before overworld is available");
 		}
-		return checkedServer.overworld().getDataStorage().computeIfAbsent(GuardDebugState.TYPE);
+		return checkedServer.getDataStorage().computeIfAbsent(GuardDebugState.TYPE);
 	}
 
 	public static boolean isEnabled(MinecraftServer server, UUID playerId) {

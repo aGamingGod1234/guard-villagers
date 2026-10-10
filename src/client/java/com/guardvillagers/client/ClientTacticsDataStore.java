@@ -65,14 +65,14 @@ public final class ClientTacticsDataStore {
 	// Dev note: discovered chunks are tracked from client chunk-load events and persisted by world + dimension.
 	public void markDiscovered(WorldContext context, int chunkX, int chunkZ) {
 		DimensionData dimensionData = this.dimension(context);
-		long chunkKey = ChunkPos.asLong(chunkX, chunkZ);
+		long chunkKey = ChunkPos.pack(chunkX, chunkZ);
 		if (this.addDiscoveredChunk(dimensionData, chunkKey)) {
 			this.markDirty();
 		}
 	}
 
 	public boolean isDiscovered(WorldContext context, int chunkX, int chunkZ) {
-		return this.dimension(context).discovered.contains(ChunkPos.asLong(chunkX, chunkZ));
+		return this.dimension(context).discovered.contains(ChunkPos.pack(chunkX, chunkZ));
 	}
 
 	public long[] discoveredChunkKeys(WorldContext context) {
@@ -97,12 +97,12 @@ public final class ClientTacticsDataStore {
 	}
 
 	public RegionColor getRegionColor(WorldContext context, int chunkX, int chunkZ) {
-		int colorId = this.dimension(context).regionByChunk.get(ChunkPos.asLong(chunkX, chunkZ));
+		int colorId = this.dimension(context).regionByChunk.get(ChunkPos.pack(chunkX, chunkZ));
 		return RegionColor.fromId(colorId);
 	}
 
 	public void setRegionColor(WorldContext context, int chunkX, int chunkZ, RegionColor color) {
-		this.setRegionColor(context, ChunkPos.asLong(chunkX, chunkZ), color);
+		this.setRegionColor(context, ChunkPos.pack(chunkX, chunkZ), color);
 	}
 
 	public void setRegionColor(WorldContext context, long chunkKey, RegionColor color) {

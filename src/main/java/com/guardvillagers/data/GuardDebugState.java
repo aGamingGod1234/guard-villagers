@@ -19,7 +19,7 @@ public final class GuardDebugState extends SavedData {
 	).apply(instance, GuardDebugState::new));
 
 	public static final SavedDataType<GuardDebugState> TYPE = new SavedDataType<>(
-		"guardvillagers_debug",
+		GuardSavedData.id("debug"),
 		GuardDebugState::new,
 		CODEC,
 		DataFixTypes.LEVEL

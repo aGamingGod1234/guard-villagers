@@ -11,7 +11,7 @@ public final class GuardDiplomacyManager {
 	}
 
 	public static GuardDiplomacyState getState(MinecraftServer server) {
-		return server.overworld().getDataStorage().computeIfAbsent(GuardDiplomacyState.TYPE);
+		return server.getDataStorage().computeIfAbsent(GuardDiplomacyState.TYPE);
 	}
 
 	public static boolean toggleWhitelist(MinecraftServer server, UUID owner, UUID target) {

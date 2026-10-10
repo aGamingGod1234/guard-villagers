@@ -9,7 +9,7 @@ import com.guardvillagers.data.GuardTacticsState;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.GuardRole;
-import com.guardvillagers.item.GuardSpawnEggItem;
+import net.minecraft.world.item.SpawnEggItem;
 import com.guardvillagers.network.GuardDebugDataPayload;
 import com.guardvillagers.network.GuardDebugSyncPayload;
 import com.guardvillagers.network.GuardRosterSyncPayload;
@@ -23,11 +23,13 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import com.guardvillagers.data.GuardSavedData;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
-import net.fabricmc.fabric.api.itemgroup.v1.FabricItemGroup;
+import net.fabricmc.fabric.api.creativetab.v1.FabricCreativeModeTab;
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandBuildContext;
@@ -134,15 +136,14 @@ public class GuardVillagersMod implements ModInitializer {
 	public static final Item GUARD_SPAWN_EGG = Registry.register(
 			BuiltInRegistries.ITEM,
 			id("guard_spawn_egg"),
-			new GuardSpawnEggItem(new Item.Properties()
+			new SpawnEggItem(new Item.Properties()
 					.setId(ResourceKey.create(Registries.ITEM, id("guard_spawn_egg")))
-					.component(DataComponents.ENTITY_DATA,
-							TypedEntityData.of(GUARD_ENTITY_TYPE, new CompoundTag()))));
+					.spawnEgg(GUARD_ENTITY_TYPE)));
 
 	public static final net.minecraft.world.item.CreativeModeTab GUARD_KIT_GROUP = Registry.register(
 			BuiltInRegistries.CREATIVE_MODE_TAB,
 			id("guards"),
-			FabricItemGroup.builder()
+			FabricCreativeModeTab.builder()
 					.title(Component.translatable("itemGroup.guardvillagers.guards"))
 					.icon(() -> new ItemStack(GUARD_SPAWN_EGG))
 					.displayItems((context, entries) -> {
@@ -161,6 +162,7 @@ public class GuardVillagersMod implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		warmupPersistentStateClasses();
+		ServerLifecycleEvents.SERVER_STARTING.register(GuardSavedData::migrateLegacyFiles);
 		registerPayloads();
 		FabricDefaultAttributeRegistry.register(GUARD_ENTITY_TYPE, GuardEntity.createAttributes());
 		registerDispenserBehavior();
@@ -170,9 +172,9 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	private static void registerPayloads() {
-		PayloadTypeRegistry.playS2C().register(GuardDebugSyncPayload.ID, GuardDebugSyncPayload.CODEC);
-		PayloadTypeRegistry.playS2C().register(GuardDebugDataPayload.ID, GuardDebugDataPayload.CODEC);
-		PayloadTypeRegistry.playS2C().register(GuardRosterSyncPayload.ID, GuardRosterSyncPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(GuardDebugSyncPayload.ID, GuardDebugSyncPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(GuardDebugDataPayload.ID, GuardDebugDataPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(GuardRosterSyncPayload.ID, GuardRosterSyncPayload.CODEC);
 	}
 
 	private static void warmupPersistentStateClasses() {
@@ -237,7 +239,7 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	public static GuardPlayerUpgrades getUpgrades(MinecraftServer server, UUID playerUuid) {
-		GuardUpgradeState state = server.overworld().getDataStorage().computeIfAbsent(GuardUpgradeState.TYPE);
+		GuardUpgradeState state = server.getDataStorage().computeIfAbsent(GuardUpgradeState.TYPE);
 		return state.getOrCreate(playerUuid);
 	}
 
@@ -250,7 +252,7 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	public static GuardPlayerUpgrades getUpgradesView(MinecraftServer server, UUID playerUuid) {
-		GuardUpgradeState state = server.overworld().getDataStorage().computeIfAbsent(GuardUpgradeState.TYPE);
+		GuardUpgradeState state = server.getDataStorage().computeIfAbsent(GuardUpgradeState.TYPE);
 		return state.getOrDefault(playerUuid);
 	}
 
@@ -440,7 +442,7 @@ public class GuardVillagersMod implements ModInitializer {
 					Component.translatable("screen.guardvillagers.shop")));
 		} catch (RuntimeException exception) {
 			LOGGER.error("Failed to open guard shop for {}", player.getName().getString(), exception);
-			player.displayClientMessage(Component.literal("Could not open the guard shop. Check server logs."), false);
+			player.sendSystemMessage(Component.literal("Could not open the guard shop. Check server logs."));
 		}
 	}
 
@@ -453,7 +455,7 @@ public class GuardVillagersMod implements ModInitializer {
 					Component.translatable("screen.guardvillagers.tactics")));
 		} catch (RuntimeException exception) {
 			LOGGER.error("Failed to open tactics screen for {}", player.getName().getString(), exception);
-			player.displayClientMessage(Component.literal("Could not open tactics screen. Check server logs."), false);
+			player.sendSystemMessage(Component.literal("Could not open tactics screen. Check server logs."));
 		}
 	}
 
@@ -466,7 +468,7 @@ public class GuardVillagersMod implements ModInitializer {
 					Component.translatable("screen.guardvillagers.groups")));
 		} catch (RuntimeException exception) {
 			LOGGER.error("Failed to open groups screen for {}", player.getName().getString(), exception);
-			player.displayClientMessage(Component.literal("Could not open groups screen. Check server logs."), false);
+			player.sendSystemMessage(Component.literal("Could not open groups screen. Check server logs."));
 		}
 	}
 
@@ -634,14 +636,14 @@ public class GuardVillagersMod implements ModInitializer {
 			guard.clearCombatTarget();
 			changed++;
 		}
-		player.displayClientMessage(Component.literal("Set " + changed + " guards to " + behavior.name().toLowerCase() + "."), true);
+		player.sendOverlayMessage(Component.literal("Set " + changed + " guards to " + behavior.name().toLowerCase() + "."));
 		return changed;
 	}
 
 	private static int setBehaviorRandom(ServerPlayer player) {
 		List<GuardEntity> ownedGuards = getOwnedGuards(player.createCommandSourceStack().getServer(), player.getUUID());
 		if (ownedGuards.isEmpty()) {
-			player.displayClientMessage(Component.literal("No owned guards found."), true);
+			player.sendOverlayMessage(Component.literal("No owned guards found."));
 			return 0;
 		}
 		Collections.shuffle(ownedGuards, new java.util.Random(player.level().getRandom().nextLong()));
@@ -652,8 +654,7 @@ public class GuardVillagersMod implements ModInitializer {
 			guard.setBehavior(behavior);
 			guard.clearCombatTarget();
 		}
-		player.displayClientMessage(Component.literal("Distributed " + ownedGuards.size() + " guards evenly across behaviors."),
-				true);
+		player.sendOverlayMessage(Component.literal("Distributed " + ownedGuards.size() + " guards evenly across behaviors."));
 		return ownedGuards.size();
 	}
 
@@ -744,22 +745,20 @@ public class GuardVillagersMod implements ModInitializer {
 	private static int setReputationValue(ServerPlayer admin, ServerPlayer target, String input) {
 		Double parsedValue = parseReputationInput(input);
 		if (parsedValue == null) {
-			admin.displayClientMessage(Component.literal(
+			admin.sendSystemMessage(Component.literal(
 					"Invalid reputation value \"" + input + "\". Use 0.00 to 1.00 with up to 2 decimal places.")
-					.withStyle(ChatFormatting.RED), false);
+					.withStyle(ChatFormatting.RED));
 			return 0;
 		}
 
 		GuardReputationManager.setReputation(admin.level(), target.getUUID(), parsedValue);
 		String valueText = formatReputation(parsedValue);
 		if (admin.getUUID().equals(target.getUUID())) {
-			admin.displayClientMessage(Component.literal("Set your guard reputation to " + valueText + "."), false);
+			admin.sendSystemMessage(Component.literal("Set your guard reputation to " + valueText + "."));
 		} else {
-			admin.displayClientMessage(
-					Component.literal("Set " + target.getName().getString() + "'s guard reputation to " + valueText + "."),
-					false);
-			target.displayClientMessage(Component.literal("Your guard reputation was set to " + valueText + " by an operator."),
-					false);
+			admin.sendSystemMessage(
+					Component.literal("Set " + target.getName().getString() + "'s guard reputation to " + valueText + "."));
+			target.sendSystemMessage(Component.literal("Your guard reputation was set to " + valueText + " by an operator."));
 		}
 		return Command.SINGLE_SUCCESS;
 	}
@@ -970,7 +969,7 @@ public class GuardVillagersMod implements ModInitializer {
 			DEBUG_PATH_HASH_CACHE.remove(playerId);
 			sendDebugSync(player, false, 0.0D);
 			clearDebugData(player);
-			player.displayClientMessage(Component.literal("Debug disabled."), false);
+			player.sendSystemMessage(Component.literal("Debug disabled."));
 			return Command.SINGLE_SUCCESS;
 		}
 
@@ -979,8 +978,7 @@ public class GuardVillagersMod implements ModInitializer {
 		GuardDebugManager.setEnabled(server, playerId, true);
 		double effectiveRange = GuardDebugManager.getEffectiveRange(player);
 		sendDebugSync(player, true, effectiveRange);
-		player.displayClientMessage(Component.literal("Debug enabled. Range: " + formatDebugRange(effectiveRange) + " blocks."),
-				false);
+		player.sendSystemMessage(Component.literal("Debug enabled. Range: " + formatDebugRange(effectiveRange) + " blocks."));
 		return Command.SINGLE_SUCCESS;
 	}
 
@@ -1042,7 +1040,7 @@ public class GuardVillagersMod implements ModInitializer {
 			return InteractionResult.PASS;
 		});
 
-		ServerTickEvents.END_WORLD_TICK.register(world -> {
+		ServerTickEvents.END_LEVEL_TICK.register(world -> {
 			try {
 				syncGuardDebug(world);
 				VillageManagerHandler.maintainVillageGuards(world);
