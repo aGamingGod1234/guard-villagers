@@ -22,6 +22,14 @@ public final class GuardDiplomacyManager {
 		return getState(server).toggleBlacklist(owner, target);
 	}
 
+	public static GuardDiplomacyState.Change trust(MinecraftServer server, UUID owner, UUID target) {
+		return getState(server).addToWhitelist(owner, target);
+	}
+
+	public static GuardDiplomacyState.Change untrust(MinecraftServer server, UUID owner, UUID target) {
+		return getState(server).removeFromWhitelist(owner, target);
+	}
+
 	public static boolean isBlacklisted(MinecraftServer server, UUID owner, UUID target) {
 		return getState(server).isBlacklisted(owner, target);
 	}

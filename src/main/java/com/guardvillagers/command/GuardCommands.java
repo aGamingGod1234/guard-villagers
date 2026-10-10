@@ -1,13 +1,16 @@
 package com.guardvillagers.command;
 
 import com.guardvillagers.GuardDebugManager;
+import com.guardvillagers.GuardDiplomacyManager;
 import com.guardvillagers.GuardOwnershipIndex;
 import com.guardvillagers.GuardReputationManager;
 import com.guardvillagers.GuardSecurityLimits;
 import com.guardvillagers.GuardTacticsManager;
 import com.guardvillagers.GuardVillagersMod;
+import com.guardvillagers.data.GuardDiplomacyState;
 import com.guardvillagers.data.GuardTacticsState;
 import com.guardvillagers.entity.GuardEntity;
+import com.guardvillagers.network.GuardGroupResultPayload;
 import com.guardvillagers.shop.GuardShopScreenHandler;
 import com.guardvillagers.tactics.GuardTacticsMenus;
 import com.mojang.brigadier.Command;
@@ -17,6 +20,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -27,11 +31,13 @@ import java.util.stream.Collectors;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.EntityArgument;
+import net.minecraft.commands.arguments.GameProfileArgument;
 import net.minecraft.commands.arguments.UuidArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.players.NameAndId;
 import net.minecraft.world.SimpleMenuProvider;
 
 /** The {@code /guards} command tree. Player-facing subcommands only ever touch the caller's own guards and state. */
@@ -91,6 +97,17 @@ public final class GuardCommands {
 												.executes(context -> assignMany(context)))))
 				)
 				.then(Commands.literal("count").executes(context -> count(context.getSource())))
+				// Players your guards treat as friends: they will not be targeted, and they can ring your guards to a bell.
+				.then(Commands.literal("trust")
+						.then(Commands.literal("list").executes(context -> listTrusted(context.getSource())))
+						.then(Commands.literal("add")
+								.then(Commands.argument("players", GameProfileArgument.gameProfile())
+										.executes(context -> changeTrust(context.getSource(),
+												GameProfileArgument.getGameProfiles(context, "players"), true))))
+						.then(Commands.literal("remove")
+								.then(Commands.argument("players", GameProfileArgument.gameProfile())
+										.executes(context -> changeTrust(context.getSource(),
+												GameProfileArgument.getGameProfiles(context, "players"), false)))))
 				.then(Commands.literal("reputation")
 						.requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
 						.then(Commands.literal("get")
@@ -208,6 +225,7 @@ public final class GuardCommands {
 		int row = tactics.addGroup();
 		if (row < 0) {
 			source.sendFailure(Component.translatable("commands.guardvillagers.groups.limit", GuardTacticsState.PlayerTactics.MAX_GROUPS));
+			GuardTacticsMenus.sendGroupResult(player, GuardGroupResultPayload.Action.ADD, -1, 0, 1, "commands.guardvillagers.groups.limit");
 			return 0;
 		}
 		state.setDirty();
@@ -215,6 +233,7 @@ public final class GuardCommands {
 		GuardTacticsMenus.refreshOpenScreen(player);
 		String name = tactics.getGroupName(row);
 		source.sendSuccess(() -> Component.translatable("commands.guardvillagers.groups.added", row + 1, name), false);
+		GuardTacticsMenus.sendGroupResult(player, GuardGroupResultPayload.Action.ADD, row, 1, 0, "");
 		return row + 1;
 	}
 
@@ -222,12 +241,14 @@ public final class GuardCommands {
 		ServerPlayer player = source.getPlayerOrException();
 		if (requestedName == null || requestedName.isBlank()) {
 			source.sendFailure(Component.translatable("commands.guardvillagers.groups.invalid_name"));
+			GuardTacticsMenus.sendGroupResult(player, GuardGroupResultPayload.Action.RENAME, row, 0, 1, "commands.guardvillagers.groups.invalid_name");
 			return 0;
 		}
 		GuardTacticsState state = GuardTacticsManager.getState(source.getServer());
 		GuardTacticsState.PlayerTactics tactics = state.getOrDefault(player.getUUID());
 		if (row >= tactics.groupCount()) {
 			source.sendFailure(Component.translatable("commands.guardvillagers.groups.no_such_row", row + 1, tactics.groupCount()));
+			GuardTacticsMenus.sendGroupResult(player, GuardGroupResultPayload.Action.RENAME, row, 0, 1, "commands.guardvillagers.groups.no_such_row");
 			return 0;
 		}
 		tactics = state.getOrCreate(player.getUUID());
@@ -242,6 +263,7 @@ public final class GuardCommands {
 		GuardTacticsMenus.syncOwnedGuardRoster(player);
 		GuardTacticsMenus.refreshOpenScreen(player);
 		source.sendSuccess(() -> Component.translatable("commands.guardvillagers.groups.renamed", row + 1, normalizedName), false);
+		GuardTacticsMenus.sendGroupResult(player, GuardGroupResultPayload.Action.RENAME, row, 1, 0, "");
 		return Command.SINGLE_SUCCESS;
 	}
 
@@ -251,6 +273,8 @@ public final class GuardCommands {
 		List<UUID> guardIds = parseUuidList(StringArgumentType.getString(context, "guardUuids"));
 		if (guardIds == null) {
 			source.sendFailure(Component.translatable("commands.guardvillagers.groups.invalid_uuids", MAX_BATCH_ASSIGN));
+			GuardTacticsMenus.sendGroupResult(source.getPlayerOrException(), GuardGroupResultPayload.Action.ASSIGN, groupRow, 0, 1,
+					"commands.guardvillagers.groups.invalid_uuids");
 			return 0;
 		}
 		return assign(source, guardIds, groupRow);
@@ -264,6 +288,8 @@ public final class GuardCommands {
 			GuardTacticsState.PlayerTactics tactics = GuardTacticsManager.getState(source.getServer()).getOrDefault(player.getUUID());
 			if (groupRow >= tactics.groupCount()) {
 				source.sendFailure(Component.translatable("commands.guardvillagers.groups.no_such_row", groupRow + 1, tactics.groupCount()));
+				GuardTacticsMenus.sendGroupResult(player, GuardGroupResultPayload.Action.ASSIGN, groupRow, 0, guardIds.size(),
+						"commands.guardvillagers.groups.no_such_row");
 				return 0;
 			}
 			groupName = tactics.getGroupName(groupRow);
@@ -284,6 +310,8 @@ public final class GuardCommands {
 		}
 		if (changed == 0) {
 			source.sendFailure(Component.translatable("commands.guardvillagers.groups.guard_not_found"));
+			GuardTacticsMenus.sendGroupResult(player, GuardGroupResultPayload.Action.ASSIGN, groupRow, 0, guardIds.size(),
+					"commands.guardvillagers.groups.guard_not_found");
 			return 0;
 		}
 
@@ -300,6 +328,8 @@ public final class GuardCommands {
 					: Component.translatable("commands.guardvillagers.groups.assigned_many", finalChanged, guardIds.size(), groupRow + 1, groupName);
 		}
 		source.sendSuccess(() -> message, false);
+		GuardTacticsMenus.sendGroupResult(player, GuardGroupResultPayload.Action.ASSIGN, groupRow, changed, guardIds.size() - changed,
+				changed < guardIds.size() ? "commands.guardvillagers.groups.guard_not_found" : "");
 		return changed;
 	}
 
@@ -330,6 +360,54 @@ public final class GuardCommands {
 		source.sendSuccess(() -> Component.translatable("commands.guardvillagers.count", owned, loaded,
 				GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER), false);
 		return owned;
+	}
+
+	private static int changeTrust(CommandSourceStack source, Collection<NameAndId> targets, boolean add) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		int changed = 0;
+		for (NameAndId target : targets) {
+			GuardDiplomacyState.Change result = add
+					? GuardDiplomacyManager.trust(source.getServer(), player.getUUID(), target.id())
+					: GuardDiplomacyManager.untrust(source.getServer(), player.getUUID(), target.id());
+			switch (result) {
+				case ADDED -> {
+					changed++;
+					source.sendSuccess(() -> Component.translatable("commands.guardvillagers.trust.added", target.name()), false);
+				}
+				case REMOVED -> {
+					changed++;
+					source.sendSuccess(() -> Component.translatable("commands.guardvillagers.trust.removed", target.name()), false);
+				}
+				case ALREADY_PRESENT -> source.sendFailure(Component.translatable("commands.guardvillagers.trust.already", target.name()));
+				case NOT_PRESENT -> source.sendFailure(Component.translatable("commands.guardvillagers.trust.not_trusted", target.name()));
+				case SELF -> source.sendFailure(Component.translatable("commands.guardvillagers.trust.self"));
+				case LIST_FULL -> {
+					source.sendFailure(Component.translatable("commands.guardvillagers.trust.full", GuardDiplomacyState.MAX_LIST_SIZE));
+					return changed;
+				}
+				case STATE_FULL -> {
+					source.sendFailure(Component.translatable("commands.guardvillagers.trust.server_full"));
+					return changed;
+				}
+			}
+		}
+		return changed;
+	}
+
+	private static int listTrusted(CommandSourceStack source) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		Set<UUID> trusted = GuardDiplomacyManager.getWhitelist(source.getServer(), player.getUUID());
+		if (trusted.isEmpty()) {
+			source.sendSuccess(() -> Component.translatable("commands.guardvillagers.trust.list.empty"), false);
+			return 0;
+		}
+		String names = trusted.stream()
+				.map(id -> source.getServer().services().nameToIdCache().get(id).map(NameAndId::name).orElse(id.toString()))
+				.sorted(String.CASE_INSENSITIVE_ORDER)
+				.collect(Collectors.joining(", "));
+		source.sendSuccess(() -> Component.translatable("commands.guardvillagers.trust.list", trusted.size(),
+				GuardDiplomacyState.MAX_LIST_SIZE, names), false);
+		return trusted.size();
 	}
 
 	private static int getReputation(CommandSourceStack source, ServerPlayer target) {
