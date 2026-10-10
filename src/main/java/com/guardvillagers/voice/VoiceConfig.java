@@ -56,7 +56,11 @@ public record VoiceConfig(
 	public record Tts(boolean enabled, int distance, int cacheMiB, String tone) {
 	}
 
-	public record Llm(boolean enabled, String model, int maxPerPlayerPerMinute) {
+	/**
+	 * @param maxPerMinuteGlobal interpretations per minute for the whole server
+	 * @param maxInFlight        interpretations waiting on OpenAI at once, server-wide
+	 */
+	public record Llm(boolean enabled, String model, int maxPerPlayerPerMinute, int maxPerMinuteGlobal, int maxInFlight) {
 	}
 
 	public record RateLimits(int sttMinIntervalMs, int sttSecondsPerPlayerPerHour, int sttGlobalInFlight,
@@ -169,7 +173,9 @@ public record VoiceConfig(
 		Llm llm = new Llm(
 				r.bool("llm", "enabled", true),
 				r.pattern("llm", "model", com.guardvillagers.command.language.llm.LlmConfig.DEFAULT_MODEL, MODEL_ID),
-				r.integer("llm", "maxPerPlayerPerMinute", 6, 0, 60)
+				r.integer("llm", "maxPerPlayerPerMinute", 6, 0, 60),
+				r.integer("llm", "maxPerMinuteGlobal", 60, 0, 600),
+				r.integer("llm", "maxInFlight", 4, 1, 32)
 		);
 		RateLimits rateLimits = new RateLimits(
 				r.integer("rateLimits", "sttMinIntervalMs", 1_000, 0, 60_000),
@@ -250,6 +256,8 @@ public record VoiceConfig(
 		model.addProperty("enabled", llm.enabled());
 		model.addProperty("model", llm.model());
 		model.addProperty("maxPerPlayerPerMinute", llm.maxPerPlayerPerMinute());
+		model.addProperty("maxPerMinuteGlobal", llm.maxPerMinuteGlobal());
+		model.addProperty("maxInFlight", llm.maxInFlight());
 		root.add("llm", model);
 		JsonObject limits = new JsonObject();
 		limits.addProperty("sttMinIntervalMs", rateLimits.sttMinIntervalMs());

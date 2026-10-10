@@ -130,9 +130,27 @@ public final class VoiceCommandBridge {
 		}
 	}
 
-	/** The voice pipeline's per-player LLM budget; with no pipeline the interpreter's own limit applies. */
-	static boolean llmAllowed(UUID player) {
-		return VoiceRuntime.pipeline().map(pipeline -> pipeline.rateLimiter().tryLlm(player).allowed()).orElse(true);
+	/**
+	 * Reserves one LLM call within the voice pipeline's per-player and server-wide budgets. Returns the release to
+	 * run when the call ends, or null when over budget. With no pipeline the interpreter's own per-player limit
+	 * applies and the release does nothing.
+	 */
+	static Runnable acquireLlm(UUID player) {
+		VoicePipeline pipeline = VoiceRuntime.pipeline().orElse(null);
+		if (pipeline == null) {
+			return () -> {
+			};
+		}
+		com.guardvillagers.voice.VoiceRateLimiter limiter = pipeline.rateLimiter();
+		if (!limiter.acquireLlm(player).allowed()) {
+			return null;
+		}
+		java.util.concurrent.atomic.AtomicBoolean released = new java.util.concurrent.atomic.AtomicBoolean();
+		return () -> {
+			if (released.compareAndSet(false, true)) {
+				limiter.releaseLlm();
+			}
+		};
 	}
 
 	/** Keeps the STT spelling hint (group and guard names) fresh; called from the commander tick, server thread. */

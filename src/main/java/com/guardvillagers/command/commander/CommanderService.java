@@ -97,16 +97,25 @@ public final class CommanderService {
 		OwnerRoster roster = roster(speaker);
 		OrderInterpreter current = interpreter;
 		// Grammar first, offline. The LLM is only asked when the grammar found nothing in words addressed to the
-		// guards, and only within the speaker's LLM budget.
+		// guards, the speaker has loaded guards to command, and the per-player and server-wide LLM budgets allow it.
 		Interpretation local = current.interpretLocally(text, roster);
 		boolean addressed = local.addressed() || explicitlyAddressed;
-		if (local.understood() || !local.rejected().isEmpty() || !current.llmAvailable() || !addressed
-				|| !VoiceCommandBridge.llmAllowed(speaker.getUUID())) {
+		boolean askLlm = !local.understood() && local.rejected().isEmpty() && current.llmAvailable() && addressed
+				&& !roster.guardNames().isEmpty();
+		Runnable releaseLlm = askLlm ? VoiceCommandBridge.acquireLlm(speaker.getUUID()) : null;
+		if (releaseLlm == null) {
 			handle(speaker, new Interpretation(local.origin(), local.orders(), local.rejected(), addressed, local.reply(),
 					local.llmStatus(), local.retryAfter()));
 			return;
 		}
-		CompletableFuture<Interpretation> future = current.interpret(speaker.getUUID(), text, roster, explicitlyAddressed);
+		CompletableFuture<Interpretation> future;
+		try {
+			future = current.interpret(speaker.getUUID(), text, roster, explicitlyAddressed);
+		} catch (RuntimeException exception) {
+			releaseLlm.run();
+			throw exception;
+		}
+		future.whenComplete((ignored, error) -> releaseLlm.run());
 		if (future.isDone()) {
 			handle(speaker, future.join());
 			return;

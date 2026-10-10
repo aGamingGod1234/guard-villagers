@@ -10,7 +10,8 @@ import java.util.function.LongSupplier;
 
 /**
  * Cost and abuse limits for the OpenAI key: per-player STT spacing and hourly audio budget, global in-flight
- * caps, per-owner callout spacing, per-player LLM calls per minute, and Retry-After back-off per channel.
+ * caps, per-owner callout spacing, LLM calls per player and server-wide per minute plus a server-wide LLM
+ * in-flight cap, and Retry-After back-off per channel.
  * Thread-safe. The clock is injected so tests control time.
  */
 public final class VoiceRateLimiter {
@@ -36,7 +37,13 @@ public final class VoiceRateLimiter {
 	}
 
 	private final VoiceConfig.RateLimits limits;
+	static final int DEFAULT_LLM_GLOBAL_PER_MINUTE = 60;
+	static final int DEFAULT_LLM_IN_FLIGHT = 4;
 	private final int llmPerMinute;
+	private final int llmGlobalPerMinute;
+	private final int llmMaxInFlight;
+	private final ArrayDeque<Long> llmCallsGlobal = new ArrayDeque<>();
+	private int llmInFlight;
 	private final LongSupplier clock;
 	private final Map<SpeechException.Channel, Long> backoffUntil = new EnumMap<>(SpeechException.Channel.class);
 	private final Map<UUID, PlayerUsage> players = new LinkedHashMap<>(64, 0.75F, true) {
@@ -49,13 +56,22 @@ public final class VoiceRateLimiter {
 	private int ttsInFlight;
 
 	public VoiceRateLimiter(VoiceConfig.RateLimits limits, int llmPerMinute, LongSupplier clockMillis) {
+		this(limits, llmPerMinute, DEFAULT_LLM_GLOBAL_PER_MINUTE, DEFAULT_LLM_IN_FLIGHT, clockMillis);
+	}
+
+	public VoiceRateLimiter(VoiceConfig.RateLimits limits, int llmPerMinute, int llmGlobalPerMinute, int llmMaxInFlight,
+			LongSupplier clockMillis) {
 		this.limits = Objects.requireNonNull(limits, "limits");
 		this.llmPerMinute = llmPerMinute;
+		this.llmGlobalPerMinute = llmGlobalPerMinute;
+		this.llmMaxInFlight = Math.max(1, llmMaxInFlight);
 		this.clock = Objects.requireNonNull(clockMillis, "clock");
 	}
 
 	public static VoiceRateLimiter fromConfig(VoiceConfig config) {
-		return new VoiceRateLimiter(config.rateLimits(), config.llm().maxPerPlayerPerMinute(), System::currentTimeMillis);
+		VoiceConfig.Llm llm = config.llm();
+		return new VoiceRateLimiter(config.rateLimits(), llm.maxPerPlayerPerMinute(), llm.maxPerMinuteGlobal(),
+				llm.maxInFlight(), System::currentTimeMillis);
 	}
 
 	/**
@@ -124,15 +140,31 @@ public final class VoiceRateLimiter {
 		return Decision.OK;
 	}
 
-	/** At most {@code llm.maxPerPlayerPerMinute} interpretations per player in any 60 s window. */
-	public synchronized Decision tryLlm(UUID player) {
+	/**
+	 * Reserves one LLM interpretation: at most {@code llm.maxPerPlayerPerMinute} per player and
+	 * {@code llm.maxPerMinuteGlobal} server-wide in any 60 s window, and {@code llm.maxInFlight} waiting at once.
+	 * On {@link Decision#OK} the caller must call {@link #releaseLlm()} exactly once when the request ends.
+	 */
+	public synchronized Decision acquireLlm(UUID player) {
 		long now = clock.getAsLong();
 		if (now < backoffUntil.getOrDefault(SpeechException.Channel.LLM, Long.MIN_VALUE)) return Decision.BACKOFF;
 		PlayerUsage usage = players.computeIfAbsent(player, ignored -> new PlayerUsage());
 		while (!usage.llmCalls.isEmpty() && now - usage.llmCalls.peekFirst() >= MINUTE_MILLIS) usage.llmCalls.pollFirst();
 		if (usage.llmCalls.size() >= llmPerMinute) return Decision.TOO_SOON;
+		while (!llmCallsGlobal.isEmpty() && now - llmCallsGlobal.peekFirst() >= MINUTE_MILLIS) llmCallsGlobal.pollFirst();
+		if (llmCallsGlobal.size() >= llmGlobalPerMinute || llmInFlight >= llmMaxInFlight) return Decision.BUSY;
 		usage.llmCalls.addLast(now);
+		llmCallsGlobal.addLast(now);
+		llmInFlight++;
 		return Decision.OK;
+	}
+
+	public synchronized void releaseLlm() {
+		if (llmInFlight > 0) llmInFlight--;
+	}
+
+	synchronized int llmInFlight() {
+		return llmInFlight;
 	}
 
 	/** Blocks the channel for {@code millis} (capped at 300 s); a longer existing back-off is kept. */

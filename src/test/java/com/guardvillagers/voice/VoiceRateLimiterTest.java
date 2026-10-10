@@ -87,10 +87,33 @@ class VoiceRateLimiterTest {
 		assertEquals(Decision.OK, limiter.tryCallout(B));
 		now.addAndGet(4_000);
 		assertEquals(Decision.OK, limiter.tryCallout(A));
-		for (int i = 0; i < 6; i++) assertEquals(Decision.OK, limiter.tryLlm(A));
-		assertEquals(Decision.TOO_SOON, limiter.tryLlm(A));
+		for (int i = 0; i < 6; i++) {
+			assertEquals(Decision.OK, limiter.acquireLlm(A));
+			limiter.releaseLlm();
+		}
+		assertEquals(Decision.TOO_SOON, limiter.acquireLlm(A));
 		now.addAndGet(60_000);
-		assertEquals(Decision.OK, limiter.tryLlm(A));
+		assertEquals(Decision.OK, limiter.acquireLlm(A));
+	}
+
+	@Test
+	void llmCallsAreCappedServerWide() {
+		VoiceRateLimiter limiter = new VoiceRateLimiter(new VoiceConfig.RateLimits(0, 300, 4, 4, 4_000), 6, 5, 2, now::get);
+		assertEquals(Decision.OK, limiter.acquireLlm(new UUID(5, 0)));
+		assertEquals(Decision.OK, limiter.acquireLlm(new UUID(5, 1)));
+		assertEquals(Decision.BUSY, limiter.acquireLlm(new UUID(5, 2)), "two already waiting on OpenAI");
+		limiter.releaseLlm();
+		assertEquals(Decision.OK, limiter.acquireLlm(new UUID(5, 3)));
+		limiter.releaseLlm();
+		limiter.releaseLlm();
+		for (int i = 4; i < 6; i++) {
+			assertEquals(Decision.OK, limiter.acquireLlm(new UUID(5, i)));
+			limiter.releaseLlm();
+		}
+		assertEquals(Decision.BUSY, limiter.acquireLlm(new UUID(5, 9)), "five calls this minute across all players");
+		assertEquals(0, limiter.llmInFlight());
+		now.addAndGet(60_000);
+		assertEquals(Decision.OK, limiter.acquireLlm(new UUID(5, 9)));
 	}
 
 	@Test
