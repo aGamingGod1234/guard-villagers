@@ -76,14 +76,34 @@ public final class OrderExecutor {
 		return matched;
 	}
 
+	/**
+	 * Why {@code order} would reach nobody (no guard in scope, or no attack target), without touching anything; empty
+	 * when it would reach someone. Lets the caller leave the order book alone for an order that cannot be carried out.
+	 */
+	public static Optional<Result> precheck(Order order, Context context) {
+		Action action = order.action();
+		if (action.isAppointment() || action == Action.STATUS_REPORT || action == Action.AS_YOU_WERE) {
+			return Optional.empty();
+		}
+		if (inScope(order.scope(), context.guards(), context.commander()).isEmpty()) {
+			return Optional.of(new Result(0, CommanderCallouts.text("guardvillagers.order.no_guards", "Nobody answers to that."),
+					Optional.empty(), false));
+		}
+		if (action == Action.ATTACK_TARGET
+				&& TargetResolver.resolve(context.speaker(), order.target().orElse(TargetRef.MY_TARGET)).isEmpty()) {
+			return Optional.of(new Result(0, CommanderCallouts.text("guardvillagers.order.no_target", "I don't see a target."),
+					Optional.empty(), false));
+		}
+		return Optional.empty();
+	}
+
 	public static Result execute(Order order, Context context) {
 		List<GuardEntity> targets = inScope(order.scope(), context.guards(), context.commander());
 		boolean commanderIncluded = context.commander() != null && targets.contains(context.commander());
 		String prefix = prefix(order.scope());
 		if (targets.isEmpty() && !order.action().isAppointment() && order.action() != Action.STATUS_REPORT
 				&& order.action() != Action.AS_YOU_WERE) {
-			return new Result(0, CommanderCallouts.text("guardvillagers.order.no_guards", "Nobody answers to that."),
-					Optional.empty(), false);
+			return precheck(order, context).orElseThrow();
 		}
 		ServerPlayer speaker = context.speaker();
 		Optional<LivingEntity> resolvedTarget = Optional.empty();
@@ -207,10 +227,17 @@ public final class OrderExecutor {
 		return new Result(targets.size(), line, resolvedTarget, obeys);
 	}
 
-	/** Reverts what an order did when "as you were" clears it, or when a timed order ends. */
-	public static void undo(ActiveOrder removed, List<GuardEntity> guards, @Nullable GuardEntity commander, boolean expired) {
+	/**
+	 * Reverts what an order did when it is cleared, replaced, evicted or ends. A guard that a still-active order of the
+	 * same action also covers keeps what that order set (an expiring "everyone hold" does not release a group whose own
+	 * newer hold still stands).
+	 *
+	 * @param stillActive orders that remain in force, which may include the one replacing {@code removed}
+	 */
+	public static void undo(ActiveOrder removed, List<GuardEntity> guards, @Nullable GuardEntity commander, boolean expired,
+			List<ActiveOrder> stillActive) {
 		for (GuardEntity guard : guards) {
-			if (!covers(removed.order().scope(), guard, commander)) {
+			if (!covers(removed.order().scope(), guard, commander) || stillCovered(removed, guard, commander, stillActive)) {
 				continue;
 			}
 			switch (removed.order().action()) {
@@ -242,6 +269,17 @@ public final class OrderExecutor {
 				}
 			}
 		}
+	}
+
+	private static boolean stillCovered(ActiveOrder removed, GuardEntity guard, @Nullable GuardEntity commander,
+			List<ActiveOrder> stillActive) {
+		for (ActiveOrder other : stillActive) {
+			if (other.id() != removed.id() && other.order().action() == removed.order().action()
+					&& covers(other.order().scope(), guard, commander)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** Ends a rally early (the controller drops a rally whose ticks reach zero). */

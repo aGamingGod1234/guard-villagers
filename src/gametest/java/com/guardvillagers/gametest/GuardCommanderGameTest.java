@@ -349,6 +349,112 @@ public class GuardCommanderGameTest {
 		});
 	}
 
+	// ---- order lifecycle ----
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 80)
+	public void typedOrderEndsRetreatSuspension(GameTestHelper helper) {
+		Squad squad = squad(helper);
+		helper.runAfterDelay(5, () -> {
+			GuardTestSupport.runCommand(squad.owner(), "guards say fall back");
+			squad.guards().forEach(guard -> helper.assertTrue(guard.isCombatSuspended(), "retreat did not suspend combat"));
+			// The typed command replaces the voice retreat without running its undo.
+			GuardTestSupport.runCommand(squad.owner(), "guards follow");
+		});
+		helper.runAfterDelay(10, () -> {
+			squad.guards().forEach(guard -> helper.assertFalse(guard.isCombatSuspended(),
+					"guard still will not fight after its retreat was replaced"));
+			helper.succeed();
+		});
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 300)
+	public void retreatSuspensionIsCapped(GameTestHelper helper) {
+		Squad squad = squad(helper);
+		var server = helper.getLevel().getServer();
+		helper.runAfterDelay(5, () -> GuardTestSupport.runCommand(squad.owner(), "guards say fall back"));
+		helper.runAfterDelay(5 + com.guardvillagers.command.order.OrderExecutor.RETREAT_SUSPEND_TICKS + 5, () -> {
+			helper.assertFalse(CommanderService.activeOrders(server, squad.owner().getUUID()).isEmpty(),
+					"setup: the retreat order itself lasts longer than the suspension");
+			squad.guards().forEach(guard -> helper.assertFalse(guard.isCombatSuspended(), "suspension outlived its cap"));
+			helper.succeed();
+		});
+	}
+
+	/** Owner logs out mid-retreat, comes back and types an order: nothing stays suspended or pinned. */
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 60)
+	public void relogThenTypedOrderClearsSavedOrders(GameTestHelper helper) {
+		Squad squad = squad(helper);
+		var server = helper.getLevel().getServer();
+		UUID owner = squad.owner().getUUID();
+		helper.runAfterDelay(5, () -> {
+			GuardTestSupport.runCommand(squad.owner(), "guards say fall back");
+			CommanderService.forget(server, owner);
+			squad.guards().forEach(guard -> helper.assertFalse(guard.isCombatSuspended(), "logout left guards suspended"));
+			helper.assertFalse(GuardHierarchy.state(server).peek(owner).orders().isEmpty(), "setup: retreat not saved");
+			GuardTestSupport.runCommand(squad.owner(), "guards stay");
+			helper.assertTrue(GuardHierarchy.state(server).peek(owner).orders().isEmpty(),
+					"typed order after a relog left the saved voice orders in place");
+			helper.succeed();
+		});
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 60)
+	public void typedGroupOrderClearsEveryoneOrder(GameTestHelper helper) {
+		Squad squad = squad(helper);
+		squad.guards().forEach(guard -> group(guard, 0, "Alpha"));
+		var server = helper.getLevel().getServer();
+		helper.runAfterDelay(5, () -> {
+			GuardTestSupport.runCommand(squad.owner(), "guards say hold");
+			GuardTestSupport.runCommand(squad.owner(), "guards follow Alpha");
+			helper.assertTrue(CommanderService.activeOrders(server, squad.owner().getUUID()).isEmpty(),
+					"the everyone-hold still covers Alpha after a typed Alpha order");
+			helper.succeed();
+		});
+	}
+
+	/** An order that reaches nobody must not wipe the standing order it would have replaced. */
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 60)
+	public void unreachableOrderKeepsStandingOrder(GameTestHelper helper) {
+		Squad squad = squad(helper);
+		var server = helper.getLevel().getServer();
+		helper.runAfterDelay(5, () -> {
+			GuardTestSupport.runCommand(squad.owner(), "guards say hold");
+			squad.owner().setXRot(-90.0F); // looking at the sky: no target
+			GuardTestSupport.runCommand(squad.owner(), "guards say attack my target");
+			var active = CommanderService.activeOrders(server, squad.owner().getUUID());
+			helper.assertTrue(active.size() == 1 && active.getFirst().order().action() == com.guardvillagers.command.order.Action.HOLD,
+					"hold order lost to an attack with no target: " + active);
+			squad.guards().forEach(guard -> helper.assertTrue(guard.isHoldingPosition(), "guard stopped holding"));
+			helper.assertTrue(calloutContains(squad.owner(), "don't see a target"), "no refusal: " + CommanderCallouts.recent(squad.owner().getUUID()));
+			helper.succeed();
+		});
+	}
+
+	/** An expiring "everyone form a line" must not reset a group that has its own newer formation order. */
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void expiringEveryoneOrderSparesNewerGroupOrder(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		GuardEntity blue = owned(helper, owner, CENTER - 3.5, CENTER + 0.5, GuardRole.SWORDSMAN, 0);
+		GuardEntity red = owned(helper, owner, CENTER + 3.5, CENTER + 0.5, GuardRole.SWORDSMAN, 0);
+		group(blue, 0, "Blue");
+		group(red, 1, "Red");
+		helper.runAfterDelay(5, () -> {
+			blue.setFormationType(com.guardvillagers.entity.FormationType.SQUARE);
+			red.setFormationType(com.guardvillagers.entity.FormationType.LINE);
+			var everyone = new com.guardvillagers.command.order.ActiveOrder(1L, com.guardvillagers.command.order.Order.form(
+					com.guardvillagers.command.order.Scope.ALL, com.guardvillagers.entity.FormationType.LINE),
+					com.guardvillagers.command.order.OrderSource.VOICE, 0L, 10L);
+			var blueSquare = new com.guardvillagers.command.order.ActiveOrder(2L, com.guardvillagers.command.order.Order.form(
+					com.guardvillagers.command.order.Scope.group("Blue"), com.guardvillagers.entity.FormationType.SQUARE),
+					com.guardvillagers.command.order.OrderSource.VOICE, 5L, 5_000L);
+			com.guardvillagers.command.order.OrderExecutor.undo(everyone, List.of(blue, red), null, true, List.of(blueSquare));
+			helper.assertTrue(blue.getFormationType() == com.guardvillagers.entity.FormationType.SQUARE, "Blue's square was reset");
+			helper.assertTrue(red.getFormationType() == com.guardvillagers.entity.FormationType.FOLLOW, "Red's line was not undone");
+			helper.succeed();
+		});
+	}
+
 	// ---- commander intuition ----
 
 	@GameTest(structure = ARENA, environment = ENV, maxTicks = 200)

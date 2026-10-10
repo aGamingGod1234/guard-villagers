@@ -123,6 +123,15 @@ public final class OrderBook {
 		return removeIf(entry -> scope.kind() == Scope.Kind.ALL || entry.order().scope().sameAs(scope));
 	}
 
+	/**
+	 * Clears every order that covers the whole of {@code scope}: the scope itself, and orders for every guard. A
+	 * typed command for one group therefore also drops an "everyone" order, since that order covered the group.
+	 */
+	public synchronized List<ActiveOrder> clearCovering(Scope scope) {
+		return removeIf(entry -> scope.kind() == Scope.Kind.ALL || entry.order().scope().kind() == Scope.Kind.ALL
+				|| entry.order().scope().sameAs(scope));
+	}
+
 	public synchronized List<ActiveOrder> clearAll() {
 		return removeIf(entry -> true);
 	}

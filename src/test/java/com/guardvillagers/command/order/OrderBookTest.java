@@ -117,4 +117,14 @@ final class OrderBookTest {
 		long maxRestored = this.book.active().stream().mapToLong(ActiveOrder::id).max().orElseThrow();
 		assertTrue(next.id() > maxRestored);
 	}
+
+	@Test
+	void typedGroupOrderClearsEveryoneOrdersToo() {
+		this.book.issue(Order.of(Action.HOLD, Scope.ALL), OrderSource.VOICE);
+		this.book.issue(Order.of(Action.STAY, Scope.group("Beta")), OrderSource.VOICE);
+		this.book.issue(Order.of(Action.FORM, Scope.group("Alpha")), OrderSource.VOICE);
+		List<ActiveOrder> cleared = this.book.clearCovering(Scope.group("alpha"));
+		assertEquals(2, cleared.size(), "Alpha's own order and the everyone order");
+		assertEquals(List.of(Action.STAY), this.book.active().stream().map(order -> order.order().action()).toList());
+	}
 }

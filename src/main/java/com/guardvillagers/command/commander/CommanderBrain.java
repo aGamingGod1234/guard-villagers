@@ -1,3 +1,4 @@
+	private final Map<UUID, GuardBehavior> raidBehaviors = new HashMap<>();
 package com.guardvillagers.command.commander;
 
 import com.guardvillagers.command.order.Action;
@@ -82,7 +83,6 @@ final class CommanderBrain {
 	private final Map<UUID, Long> ownRallies = new HashMap<>();
 	private final Set<UUID> wounded = new HashSet<>();
 	private final Set<UUID> announcedThreats = new HashSet<>();
-	private final Map<UUID, GuardBehavior> raidBehaviors = new HashMap<>();
 	/** Guard to threat, as decided by the last plan (rules 2 and 4). */
 	private final Map<UUID, UUID> assignments = new HashMap<>();
 	private boolean planRequested = true;
@@ -148,8 +148,12 @@ final class CommanderBrain {
 		List<ActiveOrder> expired = context.book.expire();
 		GuardEntity commander = com.guardvillagers.command.hierarchy.GuardHierarchy.commanderAmong(server, this.owner, this.roster);
 		if (!expired.isEmpty()) {
+			// Undo on every loaded guard, not just this dimension's roster: a guard elsewhere was ordered too.
+			List<GuardEntity> everyone = CommanderService.livingGuards(server, this.owner);
+			GuardEntity anyCommander = com.guardvillagers.command.hierarchy.GuardHierarchy.commanderAmong(server, this.owner, everyone);
+			List<ActiveOrder> stillActive = context.book.active();
 			for (ActiveOrder order : expired) {
-				OrderExecutor.undo(order, this.roster, commander, true);
+				OrderExecutor.undo(order, everyone, anyCommander, true, stillActive);
 				context.attackTargets.remove(order.id());
 			}
 			CommanderService.saveOrders(server, context);
