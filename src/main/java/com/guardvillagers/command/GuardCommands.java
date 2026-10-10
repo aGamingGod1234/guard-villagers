@@ -54,7 +54,11 @@ public final class GuardCommands {
 					GuardTacticsMenus.openTactics(context.getSource().getPlayerOrException());
 					return Command.SINGLE_SUCCESS;
 				}))
-				.then(Commands.literal("stay").executes(context -> stay(context.getSource())))
+				.then(Commands.literal("stay")
+						.executes(context -> stay(context.getSource(), null))
+						// Mirrors "follow <group>" so the tactics screen can order one group at a time.
+						.then(Commands.argument("group", StringArgumentType.greedyString())
+								.executes(context -> stay(context.getSource(), StringArgumentType.getString(context, "group")))))
 				.then(Commands.literal("hold").executes(context -> hold(context.getSource())))
 				.then(Commands.literal("cleartargets").executes(context -> clearTargets(context.getSource())))
 				.then(Commands.literal("follow")
@@ -126,13 +130,24 @@ public final class GuardCommands {
 		}
 	}
 
-	private static int stay(CommandSourceStack source) throws CommandSyntaxException {
+	private static int stay(CommandSourceStack source, String groupName) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		List<GuardEntity> guards = ownedGuards(player);
-		for (GuardEntity guard : guards) {
+		int changed = 0;
+		for (GuardEntity guard : ownedGuards(player)) {
+			if (groupName != null && !guard.getGroupName().equalsIgnoreCase(groupName.trim())) {
+				continue;
+			}
 			guard.setStaying(true);
+			changed++;
 		}
-		return reportOrders(source, guards.size(), Component.translatable("commands.guardvillagers.stay", guards.size()));
+		if (groupName != null && changed == 0) {
+			source.sendFailure(Component.translatable("commands.guardvillagers.stay.no_group", groupName.trim()));
+			return 0;
+		}
+		Component message = groupName == null
+				? Component.translatable("commands.guardvillagers.stay", changed)
+				: Component.translatable("commands.guardvillagers.stay.group", changed, groupName.trim());
+		return reportOrders(source, changed, message);
 	}
 
 	/**

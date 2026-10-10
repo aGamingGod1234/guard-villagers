@@ -9,6 +9,8 @@
   "itemGroup.guardvillagers.guards": "Guards",
   "commands.guardvillagers.no_loaded_guards": "You have no loaded guards to command.",
   "commands.guardvillagers.stay": "Ordered %s guards to stay.",
+  "commands.guardvillagers.stay.group": "Ordered %s guards from group \"%s\" to stay.",
+  "commands.guardvillagers.stay.no_group": "None of your loaded guards are in a group named \"%s\".",
   "commands.guardvillagers.hold": "Ordered %s guards to hold their position.",
   "commands.guardvillagers.cleartargets": "Cleared the targets of %s guards.",
   "commands.guardvillagers.follow.all": "Ordered %s guards to follow.",
