@@ -52,17 +52,21 @@ public class GuardNavigation extends GroundPathNavigation {
 	private Vec3 lastStallCheckPos = Vec3.ZERO;
 	private Vec3 lastRequestedTargetPos;
 	private double lastRequestedSpeed = 1.0D;
+	private int lastRequestedReach = 1;
+	private RouteMode lastRequestedMode = RouteMode.STATIC;
 	private Vec3 lastIssuedTargetPos = Vec3.ZERO;
 	private RouteMode routeMode = RouteMode.STATIC;
 	private RouteMode lastIssuedRouteMode = RouteMode.STATIC;
 	private long lastMoveCommandTick = Long.MIN_VALUE;
 	private double lastIssuedSpeed;
+	private int lastIssuedReach;
 	private int stallTicks;
 	private int recoveryHoldTicks;
 	private boolean crowdRecoveryActive;
 	private long lastCrowdCheckTick = Long.MIN_VALUE;
 	private boolean lastCrowdCheckResult;
 	private Vec3 unreachableTargetPos;
+	private int unreachableReach;
 	private long unreachableUntilTick = Long.MIN_VALUE;
 	/** Destination and reach range of the path being followed; what recomputePath re-paths to. */
 	private BlockPos followTarget;
@@ -84,13 +88,14 @@ public class GuardNavigation extends GroundPathNavigation {
 		this.lastTargetPos = target.immutable();
 		this.requestedTarget = this.lastTargetPos;
 		this.requestedReach = distance;
-		// Same as vanilla's early-out: keep following the current path to this block.
-		if (this.path != null && !this.path.isDone() && target.equals(this.path.getTarget())) {
+		// Retain progress only if this path was requested with at least this precision.
+		if (this.path != null && !this.path.isDone() && target.equals(this.path.getTarget())
+				&& this.followReach <= distance) {
 			return this.path;
 		}
 
 		if (this.routeMode != RouteMode.STATIC || this.guard.getAirSupply() < 80 || this.guard.getSquadId() == null) {
-			return this.search(() -> super.createPath(target, distance));
+			return this.recordRequestedPath(this.search(() -> super.createPath(target, distance)), distance);
 		}
 
 		long currentTick = this.level.getGameTime();
@@ -99,16 +104,17 @@ public class GuardNavigation extends GroundPathNavigation {
 				this.guard.getSquadId(),
 				this.guard.blockPosition(),
 				target,
+				distance,
 				currentTick);
 		if (cached != null) {
-			return cached;
+			return this.recordRequestedPath(cached, distance);
 		}
 
 		Path newPath = this.search(() -> super.createPath(target, distance));
 		if (newPath != null) {
-			SquadRouteCache.cacheSquadRoute(this.level.dimension(), this.guard.getSquadId(), target, newPath, currentTick);
+			SquadRouteCache.cacheSquadRoute(this.level.dimension(), this.guard.getSquadId(), target, newPath, distance, currentTick);
 		}
-		return newPath;
+		return this.recordRequestedPath(newPath, distance);
 	}
 
 	@Override
@@ -117,24 +123,39 @@ public class GuardNavigation extends GroundPathNavigation {
 			return null;
 		}
 		this.lastTargetPos = entity.blockPosition().immutable();
-		this.lastRequestedTargetPos = entity.position();
 		this.routeMode = RouteMode.DYNAMIC;
 		this.requestedTarget = this.lastTargetPos;
 		this.requestedReach = distance;
-		if (this.path != null && !this.path.isDone() && this.lastTargetPos.equals(this.path.getTarget())) {
+		if (this.path != null && !this.path.isDone() && this.lastTargetPos.equals(this.path.getTarget())
+				&& this.followReach <= distance) {
 			return this.path;
 		}
-		return this.search(() -> super.createPath(entity, distance));
+		return this.recordRequestedPath(this.search(() -> super.createPath(entity, distance)), distance);
+	}
+
+	private Path recordRequestedPath(Path result, int reach) {
+		// Ground navigation can project a requested air/solid block onto a different surface block.
+		this.requestedTarget = result == null ? null : result.getTarget();
+		this.requestedReach = reach;
+		return result;
 	}
 
 	@Override
 	public boolean moveTo(Path newPath, double speed) {
+		Path previous = this.path;
+		// Vanilla compares only node lists, retaining a completed cursor even for a fresh join.
+		if (newPath != null && previous != null && (previous.isDone() && !newPath.isDone()
+				|| this.requestedReach < this.followReach)) {
+			this.path = newPath;
+		}
 		boolean started = super.moveTo(newPath, speed);
 		if (this.path == null) {
 			this.followTarget = null;
 		} else {
 			this.followTarget = this.path.getTarget();
-			this.followReach = this.followTarget.equals(this.requestedTarget) ? this.requestedReach : 0;
+			if (this.path != previous) {
+				this.followReach = this.followTarget.equals(this.requestedTarget) ? this.requestedReach : 0;
+			}
 		}
 		return started;
 	}
@@ -188,7 +209,7 @@ public class GuardNavigation extends GroundPathNavigation {
 			return false;
 		}
 		Vec3 targetPos = entity.position();
-		if (!this.shouldIssueMove(targetPos, speed, RouteMode.DYNAMIC)) {
+		if (!this.shouldIssueMove(targetPos, speed, RouteMode.DYNAMIC, 1)) {
 			return !this.isDone();
 		}
 		this.routeMode = RouteMode.DYNAMIC;
@@ -226,7 +247,7 @@ public class GuardNavigation extends GroundPathNavigation {
 
 	private boolean startMovingToStatic(double x, double y, double z, double speed, int reachRange) {
 		Vec3 targetPos = new Vec3(x, y, z);
-		if (!this.shouldIssueMove(targetPos, speed, RouteMode.STATIC)) {
+		if (!this.shouldIssueMove(targetPos, speed, RouteMode.STATIC, reachRange)) {
 			return !this.isDone();
 		}
 		this.routeMode = RouteMode.STATIC;
@@ -238,7 +259,7 @@ public class GuardNavigation extends GroundPathNavigation {
 		if (targetPos == null) {
 			return false;
 		}
-		if (!this.shouldIssueMove(targetPos, speed, RouteMode.DYNAMIC)) {
+		if (!this.shouldIssueMove(targetPos, speed, RouteMode.DYNAMIC, 1)) {
 			return !this.isDone();
 		}
 		this.routeMode = RouteMode.DYNAMIC;
@@ -292,6 +313,8 @@ public class GuardNavigation extends GroundPathNavigation {
 	public void stop() {
 		super.stop();
 		this.followTarget = null;
+		this.lastRequestedTargetPos = null;
+		this.lastMoveCommandTick = Long.MIN_VALUE;
 		// A goal handing over movement cancels any recovery in progress.
 		this.recoveryHoldTicks = 0;
 		this.crowdRecoveryActive = false;
@@ -301,6 +324,7 @@ public class GuardNavigation extends GroundPathNavigation {
 		Path current = this.path;
 		if (current == null || !current.canReach()) {
 			this.unreachableTargetPos = targetPos;
+			this.unreachableReach = this.lastRequestedReach;
 			this.unreachableUntilTick = this.level.getGameTime() + UNREACHABLE_BACKOFF_TICKS;
 		} else {
 			this.unreachableTargetPos = null;
@@ -314,10 +338,10 @@ public class GuardNavigation extends GroundPathNavigation {
 		}
 		this.lastMoveCommandTick = Long.MIN_VALUE;
 		Vec3 target = this.lastRequestedTargetPos;
-		if (this.routeMode == RouteMode.DYNAMIC) {
+		if (this.lastRequestedMode == RouteMode.DYNAMIC) {
 			this.startMovingToDynamic(target, this.lastRequestedSpeed);
 		} else {
-			this.startMovingToStatic(target.x, target.y, target.z, this.lastRequestedSpeed);
+			this.startMovingToStatic(target.x, target.y, target.z, this.lastRequestedSpeed, this.lastRequestedReach);
 		}
 	}
 
@@ -360,9 +384,11 @@ public class GuardNavigation extends GroundPathNavigation {
 		this.resumeRequestedMove();
 	}
 
-	private boolean shouldIssueMove(Vec3 targetPos, double speed, RouteMode mode) {
+	private boolean shouldIssueMove(Vec3 targetPos, double speed, RouteMode mode, int reachRange) {
 		this.lastRequestedTargetPos = targetPos;
 		this.lastRequestedSpeed = speed;
+		this.lastRequestedReach = reachRange;
+		this.lastRequestedMode = mode;
 		if (this.recoveryHoldTicks > 0 && !this.isDone()) {
 			// Let the recovery move finish; the request is resumed afterwards.
 			this.routeMode = mode;
@@ -371,6 +397,7 @@ public class GuardNavigation extends GroundPathNavigation {
 
 		long currentTick = this.level.getGameTime();
 		if (this.isDone() && this.unreachableTargetPos != null && currentTick < this.unreachableUntilTick
+				&& this.unreachableReach == reachRange
 				&& this.unreachableTargetPos.distanceToSqr(targetPos) < UNREACHABLE_TARGET_MOVED_SQUARED) {
 			// Same unreachable target and we already stand at the end of the partial path.
 			return false;
@@ -381,6 +408,7 @@ public class GuardNavigation extends GroundPathNavigation {
 		boolean shouldIssue = this.isDone()
 				|| this.lastMoveCommandTick == Long.MIN_VALUE
 				|| this.lastIssuedRouteMode != mode
+				|| this.lastIssuedReach != reachRange
 				|| Math.abs(speed - this.lastIssuedSpeed) > 0.05D
 				|| this.lastIssuedTargetPos.distanceToSqr(targetPos) > minDistanceSq
 				|| currentTick - this.lastMoveCommandTick >= minInterval;
@@ -390,6 +418,7 @@ public class GuardNavigation extends GroundPathNavigation {
 			this.lastIssuedTargetPos = targetPos;
 			this.lastIssuedRouteMode = mode;
 			this.lastIssuedSpeed = speed;
+			this.lastIssuedReach = reachRange;
 		}
 		return shouldIssue;
 	}
@@ -523,8 +552,14 @@ public class GuardNavigation extends GroundPathNavigation {
 	/** Moves to {@code target} and keeps goals from overriding the move for a short while. */
 	public void beginRecoveryMove(BlockPos target, double speed) {
 		Path path = this.search(() -> super.createPath(target, 0));
-		if (path != null && this.moveTo(path, speed)) {
-			this.recoveryHoldTicks = RECOVERY_HOLD_TICKS * 2;
+		if (path != null) {
+			// This is a standalone watchdog escape, not a suspended goal request.
+			this.lastRequestedTargetPos = null;
+			this.requestedTarget = target;
+			this.requestedReach = 0;
+			if (this.moveTo(path, speed)) {
+				this.recoveryHoldTicks = RECOVERY_HOLD_TICKS * 2;
+			}
 		}
 	}
 
