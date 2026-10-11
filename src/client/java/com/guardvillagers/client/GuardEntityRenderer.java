@@ -4,10 +4,11 @@ import com.guardvillagers.command.hierarchy.GuardRank;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.GuardRole;
 import com.mojang.blaze3d.vertex.PoseStack;
+import java.lang.ref.WeakReference;
 import java.util.HashMap;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.WeakHashMap;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.HumanoidModel;
@@ -43,6 +44,10 @@ public class GuardEntityRenderer
 	private static final Identifier PLAINS_TEXTURE = typeTexture(VillagerType.PLAINS);
 	private static final Component COMMANDER_MARKER = Component.literal("★ ").withStyle(ChatFormatting.GOLD);
 	private static final Component CAPTAIN_MARKER = Component.literal("» ").withStyle(ChatFormatting.GRAY);
+	// Cache values never refer back to entities or levels, so despawns and disconnects can release them.
+	private final Map<GuardEntity, NameCache> names = new WeakHashMap<>();
+	private final Map<BlockPos, RobeCache> robes = new WeakHashMap<>();
+	private WeakReference<Level> robeLevel = new WeakReference<>(null);
 
 	public GuardEntityRenderer(EntityRendererProvider.Context context) {
 		super(
@@ -87,17 +92,30 @@ public class GuardEntityRenderer
 	 * synced, so the choice is stable while the guard walks across biomes; guards without a home, or whose home chunk
 	 * is not loaded on this client, wear plains clothing.
 	 */
-	private static Identifier resolveTypeTexture(GuardEntity entity) {
+	private Identifier resolveTypeTexture(GuardEntity entity) {
 		Optional<BlockPos> home = entity.getSyncedHome();
 		if (home.isEmpty()) {
 			return PLAINS_TEXTURE;
 		}
 		Level level = entity.level();
+		if (this.robeLevel.get() != level) {
+			this.robes.clear();
+			this.robeLevel = new WeakReference<>(level);
+		}
 		BlockPos pos = home.get();
 		if (!level.isLoaded(pos)) {
+			this.robes.remove(pos);
 			return PLAINS_TEXTURE;
 		}
-		return typeTexture(VillagerType.byBiome(level.getBiome(pos)));
+		// Share exact home positions, not chunks: biome borders and height can change the robe within a chunk.
+		// Recheck each game tick to observe biome packets, including changes to neighboring biome samples.
+		RobeCache cache = this.robes.computeIfAbsent(pos, ignored -> new RobeCache());
+		long tick = level.getGameTime();
+		if (cache.tick != tick) {
+			cache.texture = typeTexture(VillagerType.byBiome(level.getBiome(pos)));
+			cache.tick = tick;
+		}
+		return cache.texture;
 	}
 
 	private static Identifier typeTexture(ResourceKey<VillagerType> type) {
@@ -122,25 +140,56 @@ public class GuardEntityRenderer
 	 */
 	@Override
 	protected @Nullable Component getNameTag(GuardEntity entity) {
-		Component name = super.getNameTag(entity);
-		Component marker = rankMarker(entity.getRank());
-		if (!this.isLookedAt(entity)) {
-			return name == null || marker == null ? name : Component.empty().append(marker).append(name);
+		NameCache cache = this.names.computeIfAbsent(entity, ignored -> new NameCache());
+		Component customName = entity.getCustomName();
+		// Teams have mutable prefixes, suffixes and styles. Keep vanilla formatting live for those rare guards.
+		boolean changedName = cache.name == null || cache.customName != customName || entity.getTeam() != null || cache.hadTeam;
+		if (changedName) {
+			cache.customName = customName;
+			cache.name = super.getNameTag(entity);
+			cache.hadTeam = entity.getTeam() != null;
+		}
+		Component name = cache.name;
+		GuardRank rank = entity.getRank();
+		boolean focused = this.isLookedAt(entity);
+		boolean includeName = focused && name != null && customName != null
+				&& super.shouldShowName(entity, this.entityRenderDispatcher.distanceToSqr(entity));
+		int level = focused ? entity.getLevel() : 0;
+		GuardRole role = focused ? entity.getRole() : null;
+		float health = focused ? entity.getHealth() : 0;
+		float maxHealth = focused ? Math.max(1.0F, entity.getMaxHealth()) : 1;
+		float ratio = Mth.clamp(health / maxHealth, 0.0F, 1.0F);
+		ChatFormatting healthColor = ratio > 0.6F ? ChatFormatting.GREEN : ratio > 0.3F ? ChatFormatting.YELLOW : ChatFormatting.RED;
+		int hp = Mth.ceil(health);
+		int maxHp = Mth.ceil(maxHealth);
+		if (!changedName && cache.rank == rank && cache.focused == focused && cache.includeName == includeName
+				&& cache.level == level && cache.role == role && cache.hp == hp && cache.maxHp == maxHp && cache.healthColor == healthColor) {
+			return cache.label;
+		}
+		cache.rank = rank;
+		cache.focused = focused;
+		cache.includeName = includeName;
+		cache.level = level;
+		cache.role = role;
+		cache.hp = hp;
+		cache.maxHp = maxHp;
+		cache.healthColor = healthColor;
+		Component marker = rankMarker(rank);
+		if (!focused) {
+			cache.label = name == null || marker == null ? name : Component.empty().append(marker).append(name);
+			return cache.label;
 		}
 		MutableComponent label = Component.empty();
 		if (marker != null) {
 			label.append(marker);
 		}
-		if (name != null && entity.hasCustomName()
-				&& super.shouldShowName(entity, this.entityRenderDispatcher.distanceToSqr(entity))) {
+		if (includeName) {
 			label.append(name).append(Component.literal("  "));
 		}
-		label.append(Component.literal("Lv " + entity.getLevel()).withStyle(ChatFormatting.YELLOW));
-		label.append(Component.literal(" " + roleLabel(entity.getRole()) + " ").withStyle(ChatFormatting.WHITE));
-		float maxHealth = Math.max(1.0F, entity.getMaxHealth());
-		float ratio = Mth.clamp(entity.getHealth() / maxHealth, 0.0F, 1.0F);
-		ChatFormatting healthColor = ratio > 0.6F ? ChatFormatting.GREEN : ratio > 0.3F ? ChatFormatting.YELLOW : ChatFormatting.RED;
-		label.append(Component.literal("❤ " + Mth.ceil(entity.getHealth()) + "/" + Mth.ceil(maxHealth)).withStyle(healthColor));
+		label.append(Component.literal("Lv " + level).withStyle(ChatFormatting.YELLOW));
+		label.append(Component.literal(role == GuardRole.BOWMAN ? " Bowman " : " Swordsman ").withStyle(ChatFormatting.WHITE));
+		label.append(Component.literal("❤ " + hp + "/" + maxHp).withStyle(healthColor));
+		cache.label = label;
 		return label;
 	}
 
@@ -153,9 +202,24 @@ public class GuardEntityRenderer
 		};
 	}
 
-	private static String roleLabel(GuardRole role) {
-		String raw = role.name().toLowerCase(Locale.ROOT);
-		return Character.toUpperCase(raw.charAt(0)) + raw.substring(1);
+	private static final class RobeCache {
+		private long tick = Long.MIN_VALUE;
+		private Identifier texture = PLAINS_TEXTURE;
+	}
+
+	private static final class NameCache {
+		private Component customName;
+		private Component name;
+		private Component label;
+		private GuardRank rank;
+		private GuardRole role;
+		private ChatFormatting healthColor;
+		private boolean hadTeam;
+		private boolean focused;
+		private boolean includeName;
+		private int level;
+		private int hp;
+		private int maxHp;
 	}
 
 	@Override

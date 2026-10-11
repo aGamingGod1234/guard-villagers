@@ -25,6 +25,7 @@ public class GuardRenderClientGameTest implements FabricClientGameTest {
 
 	@Override
 	public void runTest(ClientGameTestContext context) {
+		GuardScaleClientBenchmark.run(context);
 		Map<String, Map<EquipmentSlot, Item>> loadouts = new LinkedHashMap<>();
 		loadouts.put("no_gear", Map.of());
 		loadouts.put("sword", Map.of(EquipmentSlot.MAINHAND, Items.IRON_SWORD));

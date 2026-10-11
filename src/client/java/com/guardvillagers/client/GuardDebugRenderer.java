@@ -3,6 +3,8 @@ package com.guardvillagers.client;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.GuardRole;
 import com.mojang.blaze3d.vertex.PoseStack;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelExtractionContext;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
@@ -16,6 +18,8 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.gizmos.GizmoStyle;
 import net.minecraft.gizmos.Gizmos;
 import net.minecraft.network.chat.Style;
+import net.minecraft.server.packs.resources.ReloadableResourceManager;
+import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.minecraft.util.ARGB;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.util.LightCoordsUtil;
@@ -46,8 +50,8 @@ import java.util.UUID;
  *
  * <p>Everything fades with camera distance. Only the guard under the crosshair (own ray pick, 48 blocks) gets the
  * ring and the full label; other guards show a two-line summary (plus target), and labels that would overlap a
- * nearer or focused label are skipped so crowds stay readable. Label text is rebuilt once per game
- * tick into pooled buffers; per frame this class only does arithmetic. The gizmo API itself still allocates one small
+ * nearer or focused label are skipped so crowds stay readable. Label values are checked once per game
+ * tick; unchanged text and measured widths are reused in pooled buffers. The gizmo API itself still allocates one small
  * record per primitive, as it does for vanilla debug renderers.
  */
 public final class GuardDebugRenderer {
@@ -97,6 +101,14 @@ public final class GuardDebugRenderer {
 	private static final Vector3f CAMERA_UP = new Vector3f();
 	private static final Vector3f CAMERA_FORWARD = new Vector3f();
 	private static int[] drawOrder = new int[16];
+	private static int[] sortScratch = new int[16];
+	// Tangent-space bands narrow overlap checks without dropping any labels. Outer bands include infinity.
+	private static final IntArrayList[] OVERLAP_BANDS = new IntArrayList[128];
+	static {
+		for (int i = 0; i < OVERLAP_BANDS.length; i++) {
+			OVERLAP_BANDS[i] = new IntArrayList();
+		}
+	}
 
 	private static final List<GuardEntity> CACHED_GUARDS = new ArrayList<>();
 	private static final List<GuardLabel> LABEL_POOL = new ArrayList<>();
@@ -112,6 +124,9 @@ public final class GuardDebugRenderer {
 	public static void register() {
 		LevelRenderEvents.END_EXTRACTION.register(GuardDebugRenderer::extract);
 		LevelRenderEvents.COLLECT_SUBMITS.register(GuardDebugRenderer::submitLabels);
+		ClientLifecycleEvents.CLIENT_STARTED.register(client ->
+				((ReloadableResourceManager) client.getResourceManager()).registerReloadListener(
+						(ResourceManagerReloadListener) resources -> reset()));
 	}
 
 	/** Drops every cached entity reference and timer; call on disconnect so nothing leaks into the next world. */
@@ -188,10 +203,8 @@ public final class GuardDebugRenderer {
 			ClientGuardDebugData.GuardDebugSnapshot snapshot = ClientGuardDebugData.get(guard.getId());
 			LivingEntity target = resolveTarget(guard, snapshot, level);
 			boolean hasTarget = target != null && target.isAlive();
-			Vec3 position = guard.getPosition(partialTick);
-
 			if (isFocused) {
-				emitDetectionCircle(position);
+				emitDetectionCircle(guard.getPosition(partialTick));
 			}
 			emitPathHighlights(snapshot, fade);
 			if (hasTarget) {
@@ -200,12 +213,12 @@ public final class GuardDebugRenderer {
 			}
 
 			GuardLabel label = obtainLabel(activeLabelCount++);
-			label.x = position.x;
-			label.y = position.y + guard.getBbHeight() + LABEL_Y_OFFSET;
-			label.z = position.z;
-			// Label text only changes with game state, so rebuild it once per tick (or on focus change), not per frame.
+			label.x = Mth.lerp(partialTick, guard.xo, guard.getX());
+			label.y = Mth.lerp(partialTick, guard.yo, guard.getY()) + guard.getBbHeight() + LABEL_Y_OFFSET;
+			label.z = Mth.lerp(partialTick, guard.zo, guard.getZ());
+			// Check label values once per tick (or on focus change); unchanged text retains its measured width.
 			if (newTick || label.guardId != guard.getId() || label.focused != isFocused) {
-				if (worldContext == null) {
+				if (isFocused && worldContext == null) {
 					worldContext = ClientTacticsDataStore.resolveContext(client, level);
 				}
 				label.guardId = guard.getId();
@@ -411,6 +424,7 @@ public final class GuardDebugRenderer {
 		camera.orientation.transform(CAMERA_FORWARD.set(0.0F, 0.0F, -1.0F));
 		if (drawOrder.length < activeLabelCount) {
 			drawOrder = new int[Math.max(activeLabelCount, drawOrder.length * 2)];
+			sortScratch = new int[drawOrder.length];
 		}
 		int candidates = 0;
 		for (int i = 0; i < activeLabelCount; i++) {
@@ -433,30 +447,56 @@ public final class GuardDebugRenderer {
 			label.halfH = heightWorld / 2.0D / depth;
 			drawOrder[candidates++] = i;
 		}
-		// Insertion sort: focused first, then nearest. Label counts are small.
-		for (int i = 1; i < candidates; i++) {
-			int current = drawOrder[i];
-			int j = i - 1;
-			while (j >= 0 && drawsBefore(LABEL_POOL.get(current), LABEL_POOL.get(drawOrder[j]))) {
-				drawOrder[j + 1] = drawOrder[j];
-				j--;
-			}
-			drawOrder[j + 1] = current;
+		sortLabels(0, candidates);
+		for (IntArrayList band : OVERLAP_BANDS) {
+			band.clear();
 		}
 		int kept = 0;
 		for (int i = 0; i < candidates; i++) {
 			GuardLabel label = LABEL_POOL.get(drawOrder[i]);
 			boolean overlaps = false;
-			for (int k = 0; k < kept && !overlaps; k++) {
-				GuardLabel other = LABEL_POOL.get(drawOrder[k]);
-				overlaps = Math.abs(label.screenX - other.screenX) < label.halfW + other.halfW
-						&& Math.abs(label.screenY - other.screenY) < label.halfH + other.halfH;
+			int firstBand = overlapBand(label.screenY - label.halfH);
+			int lastBand = overlapBand(label.screenY + label.halfH);
+			for (int b = firstBand; b <= lastBand && !overlaps; b++) {
+				IntArrayList band = OVERLAP_BANDS[b];
+				for (int k = 0; k < band.size() && !overlaps; k++) {
+					GuardLabel other = LABEL_POOL.get(band.getInt(k));
+					overlaps = Math.abs(label.screenX - other.screenX) < label.halfW + other.halfW
+							&& Math.abs(label.screenY - other.screenY) < label.halfH + other.halfH;
+				}
 			}
 			if (!overlaps) {
+				for (int b = firstBand; b <= lastBand; b++) {
+					OVERLAP_BANDS[b].add(drawOrder[i]);
+				}
 				drawOrder[kept++] = drawOrder[i];
 			}
 		}
 		return kept;
+	}
+
+	private static int overlapBand(double y) {
+		return Mth.clamp((int) Math.floor((y + 2.0D) * 32.0D), 0, OVERLAP_BANDS.length - 1);
+	}
+
+	/** Stable merge sort preserves the old focused/nearest/tie priority without quadratic crowd sorting. */
+	private static void sortLabels(int from, int to) {
+		if (to - from < 2) {
+			return;
+		}
+		int middle = (from + to) >>> 1;
+		sortLabels(from, middle);
+		sortLabels(middle, to);
+		int left = from;
+		int right = middle;
+		for (int i = from; i < to; i++) {
+			if (left < middle && (right == to || !drawsBefore(LABEL_POOL.get(drawOrder[right]), LABEL_POOL.get(drawOrder[left])))) {
+				sortScratch[i] = drawOrder[left++];
+			} else {
+				sortScratch[i] = drawOrder[right++];
+			}
+		}
+		System.arraycopy(sortScratch, from, drawOrder, from, to - from);
 	}
 
 	private static boolean drawsBefore(GuardLabel a, GuardLabel b) {
@@ -484,13 +524,26 @@ public final class GuardDebugRenderer {
 		Font font = client.font;
 		label.lineCount = 0;
 		int level = guard.getLevel();
-		String role = guard.getRole() == GuardRole.BOWMAN ? "Bowman" : "Swordsman";
-		label.add(font, role + "  Lv " + level, RGB_HEADER);
+		GuardRole role = guard.getRole();
+		if (label.header == null || label.level != level || label.role != role) {
+			label.level = level;
+			label.role = role;
+			label.header = (role == GuardRole.BOWMAN ? "Bowman" : "Swordsman") + "  Lv " + level;
+		}
+		label.add(font, label.header, RGB_HEADER);
 
 		float maxHealth = Math.max(1.0F, guard.getMaxHealth());
-		float ratio = Mth.clamp(guard.getHealth() / maxHealth, 0.0F, 1.0F);
+		float health = guard.getHealth();
+		float ratio = Mth.clamp(health / maxHealth, 0.0F, 1.0F);
 		int hpColor = ratio > 0.6F ? RGB_HP_HIGH : ratio > 0.3F ? RGB_HP_MID : RGB_HP_LOW;
-		label.add(font, "HP " + Mth.ceil(guard.getHealth()) + "/" + Mth.ceil(maxHealth), hpColor);
+		int hp = Mth.ceil(health);
+		int maxHp = Mth.ceil(maxHealth);
+		if (label.health == null || label.hp != hp || label.maxHp != maxHp) {
+			label.hp = hp;
+			label.maxHp = maxHp;
+			label.health = "HP " + hp + "/" + maxHp;
+		}
+		label.add(font, label.health, hpColor);
 
 		if (target != null) {
 			label.add(font, "Target: " + target.getName().getString(), RGB_TARGET);
@@ -571,6 +624,7 @@ public final class GuardDebugRenderer {
 
 	/** Reusable per-guard label buffer so the overlay does not allocate label containers every frame. */
 	private static final class GuardLabel {
+		private final String[] strings = new String[LABEL_LINE_COUNT];
 		private final FormattedCharSequence[] texts = new FormattedCharSequence[LABEL_LINE_COUNT];
 		private final int[] widths = new int[LABEL_LINE_COUNT];
 		private final int[] colors = new int[LABEL_LINE_COUNT];
@@ -585,6 +639,12 @@ public final class GuardDebugRenderer {
 		private double screenY;
 		private double halfW;
 		private double halfH;
+		private String header;
+		private String health;
+		private int level;
+		private GuardRole role;
+		private int hp;
+		private int maxHp;
 
 		private int maxWidth() {
 			int max = 0;
@@ -598,9 +658,12 @@ public final class GuardDebugRenderer {
 			if (this.lineCount >= LABEL_LINE_COUNT) {
 				return;
 			}
-			FormattedCharSequence sequence = FormattedCharSequence.forward(text, Style.EMPTY);
-			this.texts[this.lineCount] = sequence;
-			this.widths[this.lineCount] = font.width(sequence);
+			if (!text.equals(this.strings[this.lineCount])) {
+				this.strings[this.lineCount] = text;
+				FormattedCharSequence sequence = FormattedCharSequence.forward(text, Style.EMPTY);
+				this.texts[this.lineCount] = sequence;
+				this.widths[this.lineCount] = font.width(sequence);
+			}
 			this.colors[this.lineCount] = rgb & 0xFFFFFF;
 			this.lineCount++;
 		}
@@ -608,6 +671,7 @@ public final class GuardDebugRenderer {
 		private void clear() {
 			for (int i = 0; i < LABEL_LINE_COUNT; i++) {
 				this.texts[i] = null;
+				this.strings[i] = null;
 			}
 			this.lineCount = 0;
 			this.guardId = -1;
