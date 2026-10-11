@@ -129,7 +129,8 @@ public final class GuardCommandState extends SavedData {
 				UUIDUtil.STRING_CODEC.optionalFieldOf("pinnedCommander").forGetter(command -> Optional.ofNullable(command.pinnedCommander)),
 				CAPTAIN_CODEC.listOf(0, MAX_CAPTAINS).optionalFieldOf("captains", List.of()).forGetter(OwnerCommand::captainList),
 				UUIDUtil.STRING_CODEC.listOf(0, MAX_CAPTAINS).optionalFieldOf("pinnedCaptains", List.of())
-						.forGetter(command -> List.copyOf(command.pinnedCaptains)),
+						.forGetter(command -> command.pinnedCaptains.stream()
+								.filter(guard -> !command.pinnedCaptainByGroup.containsValue(guard)).toList()),
 				Codec.BOOL.optionalFieldOf("autoCommand", true).forGetter(OwnerCommand::autoCommand),
 				SavedOrder.CODEC.listOf(0, OrderBook.MAX_ACTIVE).optionalFieldOf("orders", List.of()).forGetter(command -> command.orders),
 				Codec.BOOL.optionalFieldOf("voiceConsent").forGetter(command -> Optional.ofNullable(command.voiceConsent)),
