@@ -168,10 +168,15 @@ public final class VillageManagerHandler {
 	}
 
 	public static Optional<VillageDescriptor> findVillageDescriptor(ServerLevel world, BlockPos origin) {
+		return lookupVillage(world, origin).descriptor();
+	}
+
+	private static VillageLookup lookupVillage(ServerLevel world, BlockPos origin) {
 		LevelChunk chunk = world.getChunkSource().getChunkNow(SectionPos.blockToSectionCoord(origin.getX()), SectionPos.blockToSectionCoord(origin.getZ()));
 		if (chunk == null) {
-			return Optional.empty();
+			return new VillageLookup(Optional.empty(), true);
 		}
+		boolean incomplete = false;
 		var structures = world.registryAccess().lookupOrThrow(Registries.STRUCTURE);
 		for (var entry : chunk.getAllReferences().entrySet()) {
 			if (!structures.get(structures.getId(entry.getKey())).map(holder -> holder.is(StructureTags.VILLAGE)).orElse(false)) {
@@ -181,15 +186,16 @@ public final class VillageManagerHandler {
 				ChunkPos pos = ChunkPos.unpack(reference);
 				LevelChunk startChunk = world.getChunkSource().getChunkNow(pos.x(), pos.z());
 				if (startChunk == null) {
+					incomplete = true;
 					continue;
 				}
 				StructureStart start = startChunk.getStartForStructure(entry.getKey());
 				if (start != null && start.isValid() && world.structureManager().structureHasPieceAt(origin, start)) {
-					return describeVillage(world, start);
+					return new VillageLookup(describeVillage(world, start), false);
 				}
 			}
 		}
-		return Optional.empty();
+		return new VillageLookup(Optional.empty(), incomplete);
 	}
 
 	private static Optional<VillageDescriptor> describeVillage(ServerLevel world, StructureStart start) {
@@ -222,7 +228,12 @@ public final class VillageManagerHandler {
 		Map<String, VillageAggregation> villages = new HashMap<>();
 
 		for (Villager villager : villagers) {
-			Optional<VillageDescriptor> descriptor = findVillageDescriptor(world, villager.blockPosition());
+			VillageLookup lookup = lookupVillage(world, villager.blockPosition());
+			// An unavailable structure start must not create a second, POI-based identity for the same village.
+			if (lookup.incomplete()) {
+				continue;
+			}
+			Optional<VillageDescriptor> descriptor = lookup.descriptor();
 			if (descriptor.isEmpty()) {
 				descriptor = findFallbackVillageDescriptor(world, villager.blockPosition());
 			}
@@ -488,5 +499,8 @@ public final class VillageManagerHandler {
 	}
 
 	private record DoorCountCache(int count, long sampleTick) {
+	}
+
+	private record VillageLookup(Optional<VillageDescriptor> descriptor, boolean incomplete) {
 	}
 }
