@@ -1,5 +1,6 @@
 package com.guardvillagers.entity.ai;
 
+import com.guardvillagers.GuardReputationManager;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.goal.GuardMeleeAttackGoal;
@@ -20,6 +21,7 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.animal.golem.IronGolem;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.monster.RangedAttackMob;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.raid.Raid;
 import net.minecraft.world.entity.raid.Raider;
 import net.minecraft.world.item.Items;
@@ -104,6 +106,8 @@ public final class GuardAiController {
 	private LivingEntity scannedRaidTarget;
 	private Raid cachedRaid;
 	private boolean scanInitialized;
+	private int hostileScanCursor;
+	private int raidScanCursor;
 	private boolean statusInitialized;
 	private ServerPlayer followLeashOwner;
 
@@ -309,20 +313,26 @@ public final class GuardAiController {
 	 * Peel order from an ally. The caller (the guard that was hit) enforces the group peel cap, so
 	 * this no longer runs its own entity scan per recipient.
 	 */
-	public void receiveUrgentPeel(LivingEntity urgentThreat, ServerLevel world) {
-		this.ingestAlert(urgentThreat, AlertReason.URGENT_PEEL, world.getGameTime(), false);
+	public boolean receiveUrgentPeel(LivingEntity urgentThreat, ServerLevel world) {
+		return this.ingestAlert(urgentThreat, AlertReason.URGENT_PEEL, world.getGameTime(), false);
+	}
+
+	/** Accepted alerts reserve a slot immediately, before target selection runs on the next tick. */
+	public boolean hasAcceptedPeel(ServerLevel world) {
+		long now = world.getGameTime();
+		for (GuardAlert alert : this.alerts) {
+			if (alert.reason().urgent() && alert.expiresAt() > now
+					&& !this.isSuppressed(alert.targetUuid(), now)
+					&& this.isTargetStillTrackable(this.resolveEntity(world, alert.targetUuid()), false)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public void receiveDamageAlert(LivingEntity attacker, long alertTick) {
-		if (attacker == null) {
-			return;
-		}
-		boolean differentFromMain = this.mainTargetUuid != null && !attacker.getUUID().equals(this.mainTargetUuid);
-		boolean closeThreat = this.guard.distanceToSqr(attacker) <= CLOSE_COMBAT_DISTANCE_SQUARED;
-		// Only a nearby attacker pulls the guard off its current fight; a distant archer is left to
-		// the peel squad and normal scoring.
-		AlertReason reason = differentFromMain && closeThreat ? AlertReason.URGENT_PEEL : AlertReason.DIRECT_DAMAGE;
-		this.ingestAlert(attacker, reason, alertTick, true);
+		// The hit guard's rally allocates urgent self-defense and allied peels from one group budget.
+		this.ingestAlert(attacker, AlertReason.DIRECT_DAMAGE, alertTick, true);
 	}
 
 	private LivingEntity selectTargets(ServerLevel world, long now) {
@@ -516,7 +526,9 @@ public final class GuardAiController {
 		if (this.lastEngagementReportTick == Long.MIN_VALUE
 				|| now - this.lastEngagementReportTick >= ENGAGEMENT_REPORT_INTERVAL_TICKS) {
 			this.lastEngagementReportTick = now;
-			this.engagementRank = ENGAGEMENTS.report(targetUuid, this.guard.getUUID(), this.guard.distanceToSqr(target), now);
+			this.engagementRank = ENGAGEMENTS.report(targetUuid, this.guard.getUUID(), this.guard.distanceToSqr(target),
+					!this.guard.getMainHandItem().is(Items.BOW)
+							&& (!this.guard.isHoldingPosition() || this.guard.isWithinMeleeAttackRange(target)), now);
 		}
 	}
 
@@ -574,7 +586,7 @@ public final class GuardAiController {
 	}
 
 	/**
-	 * Entity scans, staggered by entity id. Line of sight is checked here (nearest first, a bounded
+	 * Entity scans, staggered by entity id. Line of sight rotates through distance-sorted candidates (a bounded
 	 * number of raycasts) instead of for every hostile on every tick.
 	 */
 	private void refreshScans(ServerLevel world, long now) {
@@ -593,11 +605,9 @@ public final class GuardAiController {
 					this.guard.getBoundingBox().inflate(RAID_SCAN_RANGE),
 					entity -> this.isTargetStillTrackable(entity, false) && !this.isSuppressed(entity.getUUID(), now));
 			raiders.sort((a, b) -> Double.compare(this.guard.distanceToSqr(a), this.guard.distanceToSqr(b)));
-			int checks = 0;
-			for (Raider raider : raiders) {
-				if (checks++ >= MAX_SCAN_SIGHT_CHECKS) {
-					break;
-				}
+			for (int checks = 0; checks < Math.min(MAX_SCAN_SIGHT_CHECKS, raiders.size()); checks++) {
+				this.raidScanCursor = Math.floorMod(this.raidScanCursor, raiders.size());
+				Raider raider = raiders.get(this.raidScanCursor++);
 				if (this.guard.getSensing().hasLineOfSight(raider)) {
 					this.scannedRaidTarget = raider;
 					break;
@@ -605,19 +615,21 @@ public final class GuardAiController {
 			}
 		}
 
-		List<Monster> hostiles = world.getEntitiesOfClass(
-				Monster.class,
+		List<LivingEntity> hostiles = world.getEntitiesOfClass(
+				LivingEntity.class,
 				this.guard.getBoundingBox().inflate(HOSTILE_SCAN_RANGE),
-				entity -> this.isTargetStillTrackable(entity, false) && !this.isSuppressed(entity.getUUID(), now));
+				entity -> (entity instanceof Monster
+						|| (!this.guard.hasOwner() && entity instanceof Player
+								&& GuardReputationManager.shouldGuardsTurnHostile(world, entity.getUUID(), this.guard.blockPosition())))
+						&& this.isTargetStillTrackable(entity, false) && !this.isSuppressed(entity.getUUID(), now));
 		if (hostiles.isEmpty()) {
 			return;
 		}
 		hostiles.sort((a, b) -> Double.compare(this.guard.distanceToSqr(a), this.guard.distanceToSqr(b)));
-		int checks = 0;
-		for (Monster hostile : hostiles) {
-			if (this.scannedHostiles.size() >= MAX_SCANNED_HOSTILES || checks++ >= MAX_SCAN_SIGHT_CHECKS) {
-				break;
-			}
+		for (int checks = 0; checks < Math.min(MAX_SCAN_SIGHT_CHECKS, hostiles.size())
+				&& this.scannedHostiles.size() < MAX_SCANNED_HOSTILES; checks++) {
+			this.hostileScanCursor = Math.floorMod(this.hostileScanCursor, hostiles.size());
+			LivingEntity hostile = hostiles.get(this.hostileScanCursor++);
 			if (this.guard.getSensing().hasLineOfSight(hostile)) {
 				this.scannedHostiles.add(hostile);
 			}
@@ -721,18 +733,18 @@ public final class GuardAiController {
 		}
 	}
 
-	private void ingestAlert(LivingEntity target, AlertReason reason, long alertTick, boolean clearSuppression) {
+	private boolean ingestAlert(LivingEntity target, AlertReason reason, long alertTick, boolean clearSuppression) {
 		if (!this.isTargetStillTrackable(target, reason.ownerDirected())) {
-			return;
+			return false;
 		}
 		if (reason.ownerDirected() && alertTick < this.lastAcceptedOwnerAlertTick) {
-			return;
+			return false;
 		}
 		UUID targetUuid = target.getUUID();
 		if (clearSuppression) {
 			this.suppressedTargets.remove(targetUuid);
 		} else if (this.isSuppressed(targetUuid, alertTick)) {
-			return;
+			return false;
 		}
 
 		long expiresAt = alertTick + reason.ttlTicks();
@@ -744,10 +756,11 @@ public final class GuardAiController {
 			GuardAlert existing = this.alerts.get(i);
 			if (existing.targetUuid().equals(targetUuid) && existing.reason() == reason) {
 				this.alerts.set(i, new GuardAlert(targetUuid, reason, alertTick, Math.max(existing.expiresAt(), expiresAt)));
-				return;
+				return true;
 			}
 		}
 		this.alerts.add(new GuardAlert(targetUuid, reason, alertTick, expiresAt));
+		return true;
 	}
 
 	private void addCandidate(LivingEntity entity, AlertReason reason, long tick, boolean sticky) {
@@ -971,10 +984,12 @@ public final class GuardAiController {
 			this.latestTick = Math.max(this.latestTick, tick);
 		}
 
-		/** Higher score wins; ties go to the nearer, then the more recent, then the lower UUID. */
+		/** Urgent, then owner-directed, then score; ties go to distance, recency and UUID. */
 		private boolean isBetterThan(TargetAccumulator other) {
-			if (this.score != other.score) {
-				return this.score > other.score;
+			int priority = TargetScoring.compare(this.urgent, this.ownerDirected, this.score,
+					other.urgent, other.ownerDirected, other.score);
+			if (priority != 0) {
+				return priority > 0;
 			}
 			if (this.distanceSq != other.distanceSq) {
 				return this.distanceSq < other.distanceSq;
