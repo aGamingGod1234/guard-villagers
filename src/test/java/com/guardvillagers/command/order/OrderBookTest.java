@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.guardvillagers.entity.FormationType;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
 import org.junit.jupiter.api.Test;
@@ -127,4 +129,104 @@ final class OrderBookTest {
 		assertEquals(2, cleared.size(), "Alpha's own order and the everyone order");
 		assertEquals(List.of(Action.STAY), this.book.active().stream().map(order -> order.order().action()).toList());
 	}
+	@Test
+	void recipientSnapshotsSurviveScopeChangesAndExcludeUnaddressedGuards() {
+		UUID original = new UUID(10, 1);
+		UUID otherDimension = new UUID(10, 2);
+		ActiveOrder order = this.book.issue(Order.of(Action.HOLD, Scope.group("Alpha")), OrderSource.VOICE,
+				Set.of(original)).order().orElseThrow();
+		assertEquals(Optional.of(order), this.book.effectiveForGuard(original, scope -> false));
+		assertTrue(this.book.effectiveForGuard(otherDimension, scope -> true).isEmpty());
+	}
+
+	@Test
+	void replacementPreservesUnaddressedRecipientsEvenWhenScopeIsAll() {
+		UUID here = new UUID(11, 1);
+		UUID elsewhere = new UUID(11, 2);
+		this.book.issue(Order.of(Action.HOLD, Scope.ALL), OrderSource.VOICE, Set.of(here, elsewhere));
+		var replacement = this.book.issue(Order.of(Action.FOLLOW, Scope.ALL), OrderSource.VOICE, Set.of(here));
+		assertEquals(Set.of(here), replacement.removed().getFirst().recipients().orElseThrow());
+		assertEquals(Action.HOLD, this.book.effectiveForGuard(elsewhere, scope -> false).orElseThrow().order().action());
+		assertEquals(Action.FOLLOW, this.book.effectiveForGuard(here, scope -> false).orElseThrow().order().action());
+	}
+
+	@Test
+	void typedCleanupSplitsIntersectingRoleOrdersAndReturnsOnlyAffectedGuards() {
+		UUID alpha = new UUID(12, 1);
+		UUID beta = new UUID(12, 2);
+		ActiveOrder attack = this.book.issue(Order.attack(Scope.role(Scope.Role.BOWMEN), TargetRef.MY_TARGET),
+				OrderSource.VOICE, Set.of(alpha, beta)).order().orElseThrow();
+		assertEquals(List.of(attack.withRecipients(Set.of(alpha))), this.book.removeRecipients(Set.of(alpha)));
+		assertEquals(List.of(attack.withRecipients(Set.of(beta))), this.book.active());
+		assertTrue(this.book.effectiveForGuard(alpha, scope -> true).isEmpty());
+	}
+
+	@Test
+	void scopedClearUsesRecipientsAndAllClearIncludesUnloadedRecipients() {
+		UUID alpha = new UUID(13, 1);
+		UUID beta = new UUID(13, 2);
+		this.book.issue(Order.of(Action.HOLD, Scope.ALL), OrderSource.VOICE, Set.of(alpha, beta));
+		var scoped = this.book.issue(Order.of(Action.AS_YOU_WERE, Scope.group("renamed")), OrderSource.VOICE, Set.of(alpha));
+		assertEquals(Set.of(alpha), scoped.removed().getFirst().recipients().orElseThrow());
+		var all = this.book.issue(Order.of(Action.AS_YOU_WERE, Scope.ALL), OrderSource.VOICE, Set.of());
+		assertEquals(Set.of(beta), all.removed().getFirst().recipients().orElseThrow());
+		assertTrue(this.book.active().isEmpty());
+	}
+
+	@Test
+	void issuingAfterExpiryKeepsCleanupAvailableExactlyOnce() {
+		ActiveOrder form = this.book.issue(Order.form(Scope.group("Alpha"), FormationType.LINE), OrderSource.VOICE).order().orElseThrow();
+		this.now.set(form.expiresAtTick());
+		this.book.issue(Order.of(Action.HOLD, Scope.group("Beta")), OrderSource.VOICE);
+		assertEquals(List.of(form), this.book.expire());
+		assertTrue(this.book.expire().isEmpty());
+	}
+
+	@Test
+	void configuredExpiryChangesNewOrdersAndPreservesExistingDeadlines() {
+		ActiveOrder before = this.book.issue(Order.of(Action.COME_HERE, Scope.group("Alpha")), OrderSource.VOICE).order().orElseThrow();
+		this.book.setTimedExpiryTicks(60);
+		ActiveOrder after = this.book.issue(Order.of(Action.COME_HERE, Scope.group("Beta")), OrderSource.VOICE).order().orElseThrow();
+		assertEquals(2200, before.expiresAtTick());
+		assertEquals(1060, after.expiresAtTick());
+	}
+
+	@Test
+	void capacityDoesNotEvictStrongerOrdersForWeakerIncomingSource() {
+		for (int i = 0; i < OrderBook.MAX_ACTIVE; i++) {
+			this.book.issue(Order.of(Action.HOLD, Scope.guard("g" + i)), OrderSource.TYPED);
+		}
+		List<ActiveOrder> before = this.book.active();
+		var rejected = this.book.issue(Order.of(Action.FOLLOW, Scope.guard("new")), OrderSource.VOICE);
+		assertEquals(OrderBook.Status.OUTRANKED, rejected.status());
+		assertTrue(rejected.removed().isEmpty());
+		assertEquals(before, this.book.active());
+	}
+
+	@Test
+	void capacityRejectionLeavesPartiallyOverlappingRecipientsUntouched() {
+		UUID addressed = new UUID(20, 1);
+		for (int i = 0; i < OrderBook.MAX_ACTIVE; i++) {
+			this.book.issue(Order.of(Action.HOLD, Scope.guard("g" + i)), OrderSource.VOICE,
+					Set.of(addressed, new UUID(21, i)));
+		}
+		List<ActiveOrder> before = this.book.active();
+		var rejected = this.book.issue(Order.of(Action.FOLLOW, Scope.ALL), OrderSource.VOICE, Set.of(addressed));
+		assertEquals(OrderBook.Status.OUTRANKED, rejected.status());
+		assertTrue(rejected.removed().isEmpty());
+		assertEquals(before, this.book.active());
+	}
+
+	@Test
+	void capacityAdmitsStrongerIncomingAndReportsTheWeakestVictim() {
+		for (int i = 0; i < OrderBook.MAX_ACTIVE; i++) {
+			this.book.issue(Order.of(Action.HOLD, Scope.guard("g" + i)), OrderSource.VOICE);
+		}
+		ActiveOrder oldest = this.book.active().getFirst();
+		var accepted = this.book.issue(Order.of(Action.FOLLOW, Scope.guard("new")), OrderSource.TYPED);
+		assertEquals(OrderBook.Status.STORED, accepted.status());
+		assertEquals(List.of(oldest), accepted.removed());
+		assertEquals(OrderBook.MAX_ACTIVE, this.book.active().size());
+	}
+
 }

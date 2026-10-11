@@ -7,6 +7,16 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import com.guardvillagers.entity.GuardBehavior;
 import com.mojang.serialization.JsonOps;
 import java.util.UUID;
+import java.util.List;
+import java.util.Set;
+import java.util.Optional;
+import com.google.gson.JsonObject;
+import com.guardvillagers.command.order.Action;
+import com.guardvillagers.command.order.ActiveOrder;
+import com.guardvillagers.command.order.Order;
+import com.guardvillagers.command.order.OrderSource;
+import com.guardvillagers.command.order.Scope;
+import net.minecraft.core.BlockPos;
 import org.junit.jupiter.api.Test;
 
 final class GuardCommandStateTest {
@@ -55,4 +65,53 @@ final class GuardCommandStateTest {
 		assertEquals(new GuardCommandState.RaidBehavior(GuardBehavior.PERIMETER, GuardBehavior.OFFENSIVE),
 				loaded.peek(owner).raidBehaviors().get(guard));
 	}
+	@Test
+	void recipientsAndPendingUnloadedCleanupSurviveSavingAndCopying() {
+		var owner = new GuardCommandState.OwnerCommand();
+		UUID guard = new UUID(8, 1);
+		var active = new ActiveOrder(1, Order.of(Action.HOLD, Scope.group("Alpha")), OrderSource.VOICE, 10, ActiveOrder.NEVER)
+				.withRecipients(Set.of(guard));
+		owner.setOrders(List.of(active));
+		owner.queueCleanup(active);
+		owner.queueCleanup(active);
+		var json = GuardCommandState.OwnerCommand.CODEC.encodeStart(JsonOps.INSTANCE, owner.copy()).getOrThrow();
+		var loaded = GuardCommandState.OwnerCommand.CODEC.parse(JsonOps.INSTANCE, json).getOrThrow();
+		assertEquals(List.of(active), loaded.orders());
+		assertEquals(List.of(active), loaded.pendingCleanup());
+		loaded.setPendingCleanup(List.of());
+		assertEquals(List.of(), loaded.pendingCleanup());
+		assertEquals(List.of(active), owner.pendingCleanup());
+	}
+
+	@Test
+	void legacyOrdersRemainReadableAndUnspecifiedAutoCommandRemainsUnset() {
+		var owner = new GuardCommandState.OwnerCommand();
+		var legacy = new ActiveOrder(1, Order.of(Action.HOLD, Scope.ALL), OrderSource.VOICE, 10, ActiveOrder.NEVER);
+		owner.setOrders(List.of(legacy));
+		var json = GuardCommandState.OwnerCommand.CODEC.encodeStart(JsonOps.INSTANCE, owner).getOrThrow();
+		var loaded = GuardCommandState.OwnerCommand.CODEC.parse(JsonOps.INSTANCE, json).getOrThrow();
+		assertEquals(Optional.empty(), loaded.autoCommandChoice());
+		assertEquals(List.of(legacy), loaded.orders());
+		owner.setAutoCommand(true);
+		json = GuardCommandState.OwnerCommand.CODEC.encodeStart(JsonOps.INSTANCE, owner).getOrThrow();
+		loaded = GuardCommandState.OwnerCommand.CODEC.parse(JsonOps.INSTANCE, json).getOrThrow();
+		assertEquals(Optional.of(true), loaded.autoCommandChoice());
+		assertEquals(Optional.empty(), GuardCommandState.OwnerCommand.CODEC.parse(JsonOps.INSTANCE, new JsonObject())
+				.getOrThrow().autoCommandChoice());
+	}
+
+	@Test
+	void raidSourceAndManualChoiceSurviveRepeatedAssignmentsAndSaving() {
+		var owner = new GuardCommandState.OwnerCommand();
+		UUID guard = new UUID(9, 1);
+		BlockPos center = new BlockPos(10, 64, 20);
+		owner.recordRaidBehavior(guard, GuardBehavior.PERIMETER, GuardBehavior.DEFENSIVE, "minecraft:overworld", center);
+		owner.markRaidBehaviorManual(guard);
+		owner.recordRaidBehavior(guard, GuardBehavior.DEFENSIVE, GuardBehavior.OFFENSIVE, "minecraft:the_nether", BlockPos.ZERO);
+		var json = GuardCommandState.OwnerCommand.CODEC.encodeStart(JsonOps.INSTANCE, owner).getOrThrow();
+		var loaded = GuardCommandState.OwnerCommand.CODEC.parse(JsonOps.INSTANCE, json).getOrThrow();
+		assertEquals(new GuardCommandState.RaidBehavior(GuardBehavior.PERIMETER, GuardBehavior.OFFENSIVE,
+				"minecraft:overworld", center, true), loaded.raidBehaviors().get(guard));
+	}
+
 }

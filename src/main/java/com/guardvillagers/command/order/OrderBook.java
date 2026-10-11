@@ -4,6 +4,9 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.UUID;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -30,7 +33,7 @@ public final class OrderBook {
 		INSTANT,
 		/** "As you were": {@link IssueResult#removed()} lists what was cleared. */
 		CLEARED,
-		/** A higher-priority order covers this scope; nothing changed. */
+		/** A stronger order blocks the scope or admission at capacity; nothing changed. */
 		OUTRANKED
 	}
 
@@ -46,7 +49,8 @@ public final class OrderBook {
 			.thenComparingLong(ActiveOrder::id);
 
 	private final LongSupplier clock;
-	private final long timedExpiryTicks;
+	private long timedExpiryTicks;
+	private final List<ActiveOrder> expiredAwaitingCleanup = new ArrayList<>();
 	private final List<ActiveOrder> entries = new ArrayList<>();
 	private long nextId = 1L;
 
@@ -60,34 +64,57 @@ public final class OrderBook {
 	}
 
 	public synchronized IssueResult issue(Order order, OrderSource source) {
+		return issue(order, source, Optional.empty());
+	}
+
+	public synchronized IssueResult issue(Order order, OrderSource source, Set<UUID> recipients) {
+		return issue(order, source, Optional.of(Set.copyOf(recipients)));
+	}
+
+	private IssueResult issue(Order order, OrderSource source, Optional<Set<UUID>> recipients) {
 		Objects.requireNonNull(order, "order");
 		Objects.requireNonNull(source, "source");
 		long now = this.clock.getAsLong();
-		purgeExpired(now);
+		this.expiredAwaitingCleanup.addAll(purgeExpired(now));
 		Scope scope = order.scope();
 
 		if (order.action() == Action.AS_YOU_WERE) {
-			List<ActiveOrder> removed = removeIf(entry -> entry.priority() <= source.priority()
-					&& (scope.kind() == Scope.Kind.ALL || entry.order().scope().sameAs(scope)));
+			List<ActiveOrder> removed = removeRecipientsMatching(
+					entry -> entry.priority() <= source.priority()
+							&& (recipients.isPresent() || scope.kind() == Scope.Kind.ALL || entry.order().scope().sameAs(scope)),
+					scope.kind() == Scope.Kind.ALL ? Optional.empty() : recipients);
 			return new IssueResult(Status.CLEARED, Optional.empty(), removed);
 		}
 		if (order.action().persistence() == Action.Persistence.INSTANT) {
 			return new IssueResult(Status.INSTANT, Optional.empty(), List.of());
 		}
 		for (ActiveOrder entry : this.entries) {
-			if (entry.order().scope().sameAs(scope) && entry.priority() > source.priority()) {
+			if (entry.order().scope().sameAs(scope) && entry.priority() > source.priority()
+					&& intersects(entry, recipients)) {
 				return new IssueResult(Status.OUTRANKED, Optional.empty(), List.of());
 			}
 		}
-		List<ActiveOrder> removed = removeIf(entry -> entry.priority() <= source.priority()
-				&& (entry.order().scope().sameAs(scope) || scope.kind() == Scope.Kind.ALL));
+		long expires = order.action().persistence() == Action.Persistence.TIMED ? now + this.timedExpiryTicks : ActiveOrder.NEVER;
+		ActiveOrder candidate = new ActiveOrder(this.nextId, order, source, now, expires, recipients);
+		Predicate<ActiveOrder> replaces = entry -> entry.priority() <= source.priority()
+				&& (entry.order().scope().sameAs(scope) || scope.kind() == Scope.Kind.ALL);
+		// Partial recipient replacement does not free a slot. Check admission before changing those entries.
+		boolean freesSlot = this.entries.stream().anyMatch(entry -> replaces.test(entry) && intersects(entry, recipients)
+				&& (recipients.isEmpty() || entry.recipients().isEmpty() || recipients.get().containsAll(entry.recipients().get())));
+		if (this.entries.size() >= MAX_ACTIVE && !freesSlot) {
+			ActiveOrder weakest = this.entries.stream().min(EFFECTIVE_ORDER).orElseThrow();
+			if (EFFECTIVE_ORDER.compare(candidate, weakest) < 0) {
+				return new IssueResult(Status.OUTRANKED, Optional.empty(), List.of());
+			}
+		}
+		List<ActiveOrder> removed = removeRecipientsMatching(replaces, recipients);
 		if (this.entries.size() >= MAX_ACTIVE) {
 			ActiveOrder weakest = this.entries.stream().min(EFFECTIVE_ORDER).orElseThrow();
 			this.entries.remove(weakest);
 			removed = concat(removed, weakest);
 		}
-		long expires = order.action().persistence() == Action.Persistence.TIMED ? now + this.timedExpiryTicks : ActiveOrder.NEVER;
-		ActiveOrder stored = new ActiveOrder(this.nextId++, order, source, now, expires);
+		ActiveOrder stored = candidate;
+		this.nextId++;
 		this.entries.add(stored);
 		return new IssueResult(Status.STORED, Optional.of(stored), removed);
 	}
@@ -103,6 +130,20 @@ public final class OrderBook {
 				.max(EFFECTIVE_ORDER);
 	}
 
+	/** Recipient snapshots are authoritative even after renames, rank changes, or dimension changes. */
+	public synchronized Optional<ActiveOrder> effectiveForGuard(UUID guard, Predicate<Scope> coversGuard) {
+		long now = this.clock.getAsLong();
+		return this.entries.stream()
+				.filter(entry -> !entry.isExpired(now)
+						&& entry.recipients().map(ids -> ids.contains(guard)).orElseGet(() -> coversGuard.test(entry.order().scope())))
+				.max(EFFECTIVE_ORDER);
+	}
+
+	/** Removes only the addressed members, leaving other recipients' orders intact. */
+	public synchronized List<ActiveOrder> removeRecipients(Set<UUID> recipients) {
+		return removeRecipientsMatching(entry -> true, Optional.of(Set.copyOf(recipients)));
+	}
+
 	/** Live orders, oldest first. */
 	public synchronized List<ActiveOrder> active() {
 		long now = this.clock.getAsLong();
@@ -111,7 +152,10 @@ public final class OrderBook {
 
 	/** Removes and returns orders whose time is up. Call from the owner's tick to announce or undo them. */
 	public synchronized List<ActiveOrder> expire() {
-		return purgeExpired(this.clock.getAsLong());
+		List<ActiveOrder> expired = new ArrayList<>(this.expiredAwaitingCleanup);
+		this.expiredAwaitingCleanup.clear();
+		expired.addAll(purgeExpired(this.clock.getAsLong()));
+		return List.copyOf(expired);
 	}
 
 	/** Ends an order early (target died, formation reached). */
@@ -149,6 +193,36 @@ public final class OrderBook {
 
 	public long timedExpiryTicks() {
 		return this.timedExpiryTicks;
+	}
+
+	public synchronized void setTimedExpiryTicks(long ticks) {
+		this.timedExpiryTicks = Math.max(1L, ticks);
+	}
+
+	private static boolean intersects(ActiveOrder entry, Optional<Set<UUID>> recipients) {
+		return recipients.isEmpty() || (!recipients.get().isEmpty() && (entry.recipients().isEmpty()
+				|| entry.recipients().get().stream().anyMatch(recipients.get()::contains)));
+	}
+
+	private List<ActiveOrder> removeRecipientsMatching(Predicate<ActiveOrder> filter, Optional<Set<UUID>> recipients) {
+		List<ActiveOrder> removed = new ArrayList<>();
+		for (var it = this.entries.listIterator(); it.hasNext();) {
+			ActiveOrder entry = it.next();
+			if (!filter.test(entry) || !intersects(entry, recipients)) continue;
+			if (recipients.isEmpty() || entry.recipients().isEmpty()) {
+				it.remove();
+				removed.add(entry);
+				continue;
+			}
+			Set<UUID> affected = new HashSet<>(entry.recipients().get());
+			affected.retainAll(recipients.get());
+			Set<UUID> surviving = new HashSet<>(entry.recipients().get());
+			surviving.removeAll(affected);
+			removed.add(entry.withRecipients(affected));
+			if (surviving.isEmpty()) it.remove();
+			else it.set(entry.withRecipients(surviving));
+		}
+		return removed;
 	}
 
 	private List<ActiveOrder> purgeExpired(long now) {

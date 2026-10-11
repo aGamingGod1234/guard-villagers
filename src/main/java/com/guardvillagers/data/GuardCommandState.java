@@ -26,6 +26,7 @@ import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 import net.minecraft.core.UUIDUtil;
+import net.minecraft.core.BlockPos;
 import net.minecraft.util.datafix.DataFixTypes;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.saveddata.SavedDataType;
@@ -134,11 +135,12 @@ public final class GuardCommandState extends SavedData {
 				CAPTAIN_CODEC.listOf(0, MAX_CAPTAINS).optionalFieldOf("captains", List.of()).forGetter(OwnerCommand::captainList),
 				UUIDUtil.STRING_CODEC.listOf(0, MAX_CAPTAINS).optionalFieldOf("pinnedCaptains", List.of())
 						.forGetter(command -> List.copyOf(command.pinnedCaptains)),
-				Codec.BOOL.optionalFieldOf("autoCommand", true).forGetter(OwnerCommand::autoCommand),
+				Codec.BOOL.optionalFieldOf("autoCommand").forGetter(OwnerCommand::autoCommandChoice),
 				SavedOrder.CODEC.listOf(0, OrderBook.MAX_ACTIVE).optionalFieldOf("orders", List.of()).forGetter(command -> command.orders),
 				Codec.BOOL.optionalFieldOf("voiceConsent").forGetter(command -> Optional.ofNullable(command.voiceConsent)),
 				RaidEntry.CODEC.listOf(0, MAX_RAID_BEHAVIORS).optionalFieldOf("raidBehaviors", List.of())
-						.forGetter(OwnerCommand::raidEntryList)
+						.forGetter(OwnerCommand::raidEntryList),
+				SavedOrder.CODEC.listOf().optionalFieldOf("pendingCleanup", List.of()).forGetter(command -> command.pendingCleanup)
 		).apply(instance, OwnerCommand::new));
 
 
@@ -146,7 +148,8 @@ public final class GuardCommandState extends SavedData {
 		private UUID pinnedCommander;
 		private final Map<Integer, UUID> captainByGroup = new HashMap<>();
 		private final Set<UUID> pinnedCaptains = new HashSet<>();
-		private boolean autoCommand = true;
+		private Boolean autoCommand;
+		private List<SavedOrder> pendingCleanup = List.of();
 		private List<SavedOrder> orders = List.of();
 		/** Null until the player chooses; then the config default no longer applies. */
 		private Boolean voiceConsent;
@@ -157,15 +160,16 @@ public final class GuardCommandState extends SavedData {
 		}
 
 		private OwnerCommand(Optional<UUID> commander, Optional<UUID> pinnedCommander, List<CaptainEntry> captains,
-				List<UUID> pinnedCaptains, boolean autoCommand, List<SavedOrder> orders, Optional<Boolean> voiceConsent,
-				List<RaidEntry> raidEntries) {
+				List<UUID> pinnedCaptains, Optional<Boolean> autoCommand, List<SavedOrder> orders, Optional<Boolean> voiceConsent,
+				List<RaidEntry> raidEntries, List<SavedOrder> pendingCleanup) {
 			this.commander = commander.orElse(null);
 			this.pinnedCommander = pinnedCommander.orElse(null);
 			for (CaptainEntry entry : captains) {
 				this.captainByGroup.put(entry.group(), entry.guard());
 			}
 			this.pinnedCaptains.addAll(pinnedCaptains);
-			this.autoCommand = autoCommand;
+			this.autoCommand = autoCommand.orElse(null);
+			this.pendingCleanup = List.copyOf(pendingCleanup);
 			this.orders = List.copyOf(orders);
 			this.voiceConsent = voiceConsent.orElse(null);
 			for (RaidEntry entry : raidEntries) {
@@ -181,6 +185,7 @@ public final class GuardCommandState extends SavedData {
 			copy.pinnedCaptains.addAll(this.pinnedCaptains);
 			copy.autoCommand = this.autoCommand;
 			copy.orders = this.orders;
+			copy.pendingCleanup = this.pendingCleanup;
 			copy.voiceConsent = this.voiceConsent;
 			copy.raidBehaviors.putAll(this.raidBehaviors);
 			return copy;
@@ -188,8 +193,9 @@ public final class GuardCommandState extends SavedData {
 
 		/** True when the row carries something only the player can set (rank fields are recomputed by elections). */
 		boolean holdsPlayerChoices() {
-			return this.voiceConsent != null || !this.autoCommand || this.pinnedCommander != null
-					|| !this.pinnedCaptains.isEmpty() || !this.orders.isEmpty() || !this.raidBehaviors.isEmpty();
+			return this.voiceConsent != null || this.autoCommand != null || this.pinnedCommander != null
+					|| !this.pinnedCaptains.isEmpty() || !this.orders.isEmpty() || !this.raidBehaviors.isEmpty()
+					|| !this.pendingCleanup.isEmpty();
 		}
 
 		public UUID commander() {
@@ -258,7 +264,11 @@ public final class GuardCommandState extends SavedData {
 		}
 
 		public boolean autoCommand() {
-			return this.autoCommand;
+			return this.autoCommand == null || this.autoCommand;
+		}
+
+		public Optional<Boolean> autoCommandChoice() {
+			return Optional.ofNullable(this.autoCommand);
 		}
 
 		public void setAutoCommand(boolean autoCommand) {
@@ -284,6 +294,22 @@ public final class GuardCommandState extends SavedData {
 			this.orders = List.copyOf(saved);
 		}
 
+		public List<ActiveOrder> pendingCleanup() {
+			return this.pendingCleanup.stream().flatMap(saved -> saved.toActive().stream()).toList();
+		}
+
+		public void queueCleanup(ActiveOrder order) {
+			SavedOrder saved = SavedOrder.of(order);
+			if (this.pendingCleanup.contains(saved)) return;
+			List<SavedOrder> pending = new ArrayList<>(this.pendingCleanup);
+			pending.add(saved);
+			this.pendingCleanup = List.copyOf(pending);
+		}
+
+		public void setPendingCleanup(List<ActiveOrder> pending) {
+			this.pendingCleanup = pending.stream().map(SavedOrder::of).toList();
+		}
+
 		public Map<UUID, RaidBehavior> raidBehaviors() {
 			return Collections.unmodifiableMap(this.raidBehaviors);
 		}
@@ -293,19 +319,31 @@ public final class GuardCommandState extends SavedData {
 		 * calls and raids, so the guard goes back to what the player had chosen.
 		 */
 		public boolean recordRaidBehavior(UUID guard, GuardBehavior original, GuardBehavior applied) {
+			return recordRaidBehavior(guard, original, applied, null, null);
+		}
+
+		public boolean recordRaidBehavior(UUID guard, GuardBehavior original, GuardBehavior applied, String dimension, BlockPos raidCenter) {
 			RaidBehavior existing = this.raidBehaviors.get(guard);
 			if (existing != null) {
 				if (existing.applied() == applied) {
 					return false;
 				}
-				this.raidBehaviors.put(guard, new RaidBehavior(existing.original(), applied));
+				this.raidBehaviors.put(guard, new RaidBehavior(existing.original(), applied, existing.dimension(), existing.raidCenter(), existing.manuallyChanged()));
 				return true;
 			}
 			if (this.raidBehaviors.size() >= MAX_RAID_BEHAVIORS) {
 				this.raidBehaviors.remove(this.raidBehaviors.keySet().iterator().next());
 			}
-			this.raidBehaviors.put(guard, new RaidBehavior(original, applied));
+			this.raidBehaviors.put(guard, new RaidBehavior(original, applied, dimension, raidCenter, false));
 			return true;
+		}
+
+		public void markRaidBehaviorManual(UUID guard) {
+			RaidBehavior existing = this.raidBehaviors.get(guard);
+			if (existing != null && !existing.manuallyChanged()) {
+				this.raidBehaviors.put(guard, new RaidBehavior(existing.original(), existing.applied(),
+						existing.dimension(), existing.raidCenter(), true));
+			}
 		}
 
 		public void clearRaidBehavior(UUID guard) {
@@ -315,7 +353,9 @@ public final class GuardCommandState extends SavedData {
 		private List<RaidEntry> raidEntryList() {
 			List<RaidEntry> list = new ArrayList<>(this.raidBehaviors.size());
 			for (Map.Entry<UUID, RaidBehavior> entry : this.raidBehaviors.entrySet()) {
-				list.add(new RaidEntry(entry.getKey(), entry.getValue().original().name(), entry.getValue().applied().name()));
+				list.add(new RaidEntry(entry.getKey(), entry.getValue().original().name(), entry.getValue().applied().name(),
+						Optional.ofNullable(entry.getValue().dimension()), Optional.ofNullable(entry.getValue().raidCenter()),
+						entry.getValue().manuallyChanged()));
 			}
 			return list;
 		}
@@ -333,19 +373,26 @@ public final class GuardCommandState extends SavedData {
 	}
 
 	/** A guard's behavior before a raid response changed it, and what the raid set. */
-	public record RaidBehavior(GuardBehavior original, GuardBehavior applied) {
+	public record RaidBehavior(GuardBehavior original, GuardBehavior applied, String dimension, BlockPos raidCenter, boolean manuallyChanged) {
+		public RaidBehavior(GuardBehavior original, GuardBehavior applied) {
+			this(original, applied, null, null, false);
+		}
 	}
 
-	private record RaidEntry(UUID guard, String original, String applied) {
+	private record RaidEntry(UUID guard, String original, String applied, Optional<String> dimension, Optional<BlockPos> raidCenter, boolean manuallyChanged) {
 		static final Codec<RaidEntry> CODEC = RecordCodecBuilder.create(instance -> instance.group(
 				UUIDUtil.STRING_CODEC.fieldOf("guard").forGetter(RaidEntry::guard),
 				Codec.string(1, 32).fieldOf("original").forGetter(RaidEntry::original),
-				Codec.string(1, 32).fieldOf("applied").forGetter(RaidEntry::applied)
+				Codec.string(1, 32).fieldOf("applied").forGetter(RaidEntry::applied),
+				Codec.STRING.optionalFieldOf("dimension").forGetter(RaidEntry::dimension),
+				BlockPos.CODEC.optionalFieldOf("raidCenter").forGetter(RaidEntry::raidCenter),
+				Codec.BOOL.optionalFieldOf("manuallyChanged", false).forGetter(RaidEntry::manuallyChanged)
 		).apply(instance, RaidEntry::new));
 
 		Optional<RaidBehavior> toBehavior() {
 			try {
-				return Optional.of(new RaidBehavior(GuardBehavior.valueOf(this.original), GuardBehavior.valueOf(this.applied)));
+				return Optional.of(new RaidBehavior(GuardBehavior.valueOf(this.original), GuardBehavior.valueOf(this.applied),
+						this.dimension.orElse(null), this.raidCenter.orElse(null), this.manuallyChanged));
 			} catch (IllegalArgumentException unknown) {
 				return Optional.empty();
 			}
@@ -354,7 +401,7 @@ public final class GuardCommandState extends SavedData {
 
 	/** Flat, codec-friendly form of an {@link ActiveOrder}; unknown wire names are dropped on load. */
 	record SavedOrder(long id, String action, String scopeKind, Optional<String> scopeName, Optional<String> formation,
-			Optional<String> target, Optional<Integer> radius, String source, long issuedAt, long expiresAt) {
+			Optional<String> target, Optional<Integer> radius, String source, long issuedAt, long expiresAt, Optional<List<UUID>> recipients) {
 		static final Codec<SavedOrder> CODEC = RecordCodecBuilder.create(instance -> instance.group(
 				Codec.LONG.fieldOf("id").forGetter(SavedOrder::id),
 				Codec.string(1, 32).fieldOf("action").forGetter(SavedOrder::action),
@@ -365,7 +412,8 @@ public final class GuardCommandState extends SavedData {
 				Codec.intRange(Order.MIN_RADIUS, Order.MAX_RADIUS).optionalFieldOf("radius").forGetter(SavedOrder::radius),
 				Codec.string(1, 32).fieldOf("source").forGetter(SavedOrder::source),
 				Codec.LONG.fieldOf("issuedAt").forGetter(SavedOrder::issuedAt),
-				Codec.LONG.fieldOf("expiresAt").forGetter(SavedOrder::expiresAt)
+				Codec.LONG.fieldOf("expiresAt").forGetter(SavedOrder::expiresAt),
+				UUIDUtil.STRING_CODEC.listOf().optionalFieldOf("recipients").forGetter(SavedOrder::recipients)
 		).apply(instance, SavedOrder::new));
 
 		static SavedOrder of(ActiveOrder active) {
@@ -375,7 +423,7 @@ public final class GuardCommandState extends SavedData {
 					order.formation().map(type -> type.name().toLowerCase(Locale.ROOT)),
 					order.target().map(TargetRef::wireName),
 					order.radius().isPresent() ? Optional.of(order.radius().getAsInt()) : Optional.empty(),
-					active.source().name(), active.issuedAtTick(), active.expiresAtTick());
+					active.source().name(), active.issuedAtTick(), active.expiresAtTick(), active.recipients().map(List::copyOf));
 		}
 
 		Optional<ActiveOrder> toActive() {
@@ -390,7 +438,7 @@ public final class GuardCommandState extends SavedData {
 				Optional<TargetRef> parsedTarget = this.target.flatMap(TargetRef::fromWireName);
 				OptionalInt parsedRadius = this.radius.map(OptionalInt::of).orElse(OptionalInt.empty());
 				Order order = new Order(parsedAction.get(), scope, parsedFormation, parsedTarget, parsedRadius);
-				return Optional.of(new ActiveOrder(this.id, order, OrderSource.valueOf(this.source), this.issuedAt, this.expiresAt));
+				return Optional.of(new ActiveOrder(this.id, order, OrderSource.valueOf(this.source), this.issuedAt, this.expiresAt, this.recipients.map(Set::copyOf)));
 			} catch (IllegalArgumentException exception) {
 				return Optional.empty();
 			}
