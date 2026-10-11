@@ -55,6 +55,7 @@ public class GuardNavigation extends GroundPathNavigation {
 	private static final Map<MinecraftServer, PathRequestBudget> PATH_BUDGETS = new WeakHashMap<>();
 	private static final int MOVEMENT_REQUESTS_PER_TICK = 64;
 	private final PathRequestBudget.Ticket pathTicket = new PathRequestBudget.Ticket();
+	private final PathRequestBudget.Ticket recomputeTicket = new PathRequestBudget.Ticket();
 	private boolean deferredMove;
 	private Entity deferredEntity;
 	private final GuardEntity guard;
@@ -188,7 +189,7 @@ public class GuardNavigation extends GroundPathNavigation {
 		if (target == null) {
 			return;
 		}
-		if (!this.acquireMovementBudget()) {
+		if (!this.acquireMovementBudget(this.recomputeTicket)) {
 			this.hasDelayedRecomputation = true;
 			return;
 		}
@@ -226,7 +227,7 @@ public class GuardNavigation extends GroundPathNavigation {
 		this.deferredEntity = entity;
 		Vec3 targetPos = entity.position();
 		if (!this.shouldIssueMove(targetPos, speed, RouteMode.DYNAMIC, 1)) {
-			return !this.isDone();
+			return this.deferredMove || !this.isDone();
 		}
 		this.routeMode = RouteMode.DYNAMIC;
 		this.lastTargetPos = entity.blockPosition().immutable();
@@ -265,7 +266,7 @@ public class GuardNavigation extends GroundPathNavigation {
 		this.deferredEntity = null;
 		Vec3 targetPos = new Vec3(x, y, z);
 		if (!this.shouldIssueMove(targetPos, speed, RouteMode.STATIC, reachRange)) {
-			return !this.isDone();
+			return this.deferredMove || !this.isDone();
 		}
 		this.routeMode = RouteMode.STATIC;
 		this.lastTargetPos = BlockPos.containing(x, y, z);
@@ -278,7 +279,7 @@ public class GuardNavigation extends GroundPathNavigation {
 		}
 		this.deferredEntity = null;
 		if (!this.shouldIssueMove(targetPos, speed, RouteMode.DYNAMIC, 1)) {
-			return !this.isDone();
+			return this.deferredMove || !this.isDone();
 		}
 		this.routeMode = RouteMode.DYNAMIC;
 		this.lastTargetPos = BlockPos.containing(targetPos.x, targetPos.y, targetPos.z);
@@ -345,6 +346,7 @@ public class GuardNavigation extends GroundPathNavigation {
 		this.deferredMove = false;
 		this.deferredEntity = null;
 		this.pathTicket.cancel();
+		this.recomputeTicket.cancel();
 		super.stop();
 		this.followTarget = null;
 		this.lastRequestedTargetPos = null;
@@ -455,7 +457,7 @@ public class GuardNavigation extends GroundPathNavigation {
 			// Reusing the current path does not run A*. Keep walking it while new requests wait.
 			boolean reuse = this.path != null && !this.path.isDone()
 					&& this.path.getTarget().equals(BlockPos.containing(targetPos)) && this.followReach <= reachRange;
-			if (!reuse && !this.acquireMovementBudget()) {
+			if (!reuse && !this.acquireMovementBudget(this.pathTicket)) {
 				this.deferredMove = true;
 				return false;
 			}
@@ -470,13 +472,13 @@ public class GuardNavigation extends GroundPathNavigation {
 		return shouldIssue;
 	}
 
-	private boolean acquireMovementBudget() {
+	private boolean acquireMovementBudget(PathRequestBudget.Ticket ticket) {
 		// Survival probes must remain immediate. The quota governs normal movement/recompute
 		// requests, not direct reachability probes or emergency air/water escape searches.
 		if (!(this.level instanceof ServerLevel world) || this.guard.getAirSupply() < 80 || this.guard.isInWater()) return true;
 		MinecraftServer server = world.getServer();
 		return PATH_BUDGETS.computeIfAbsent(server, ignored -> new PathRequestBudget(MOVEMENT_REQUESTS_PER_TICK))
-				.tryAcquire(this.pathTicket, server.getTickCount());
+				.tryAcquire(ticket, server.getTickCount());
 	}
 
 	private boolean hasNearbyGuardCrowding() {

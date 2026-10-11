@@ -10,6 +10,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.core.SectionPos;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.entity.boss.enderdragon.EnderDragonPart;
 import net.minecraft.world.phys.AABB;
 
@@ -70,11 +71,19 @@ public final class GuardCollisionQueries {
 						&& (entity.getBlockX() >> 4) >= minX && (entity.getBlockX() >> 4) <= maxX
 						&& (entity.getBlockY() >> 4) >= minY && (entity.getBlockY() >> 4) <= maxY
 						&& (entity.getBlockZ() >> 4) >= minZ && (entity.getBlockZ() >> 4) <= maxZ
-						&& selector.test(entity), result);
+						&& selector.test(entity)
+						&& isAccessible(level, entity, box), result);
 		// Parts have their own bounds and are not in the level's regular entity storage.
 		for (EnderDragonPart part : level.dragonParts()) {
 			if (part != except && part.parentMob != except && selector.test(part) && box.intersects(part.getBoundingBox())) result.add(part);
 		}
 		return result;
+	}
+
+	private static boolean isAccessible(ServerLevel level, Entity entity, AABB box) {
+		// Always-ticking entities (players, for example) stay visible even in hidden sections.
+		// Their native class-specific query preserves section visibility without scanning guards.
+		return !entity.isAlwaysTicking() || level.hasEntities(
+				EntityTypeTest.forClass(entity.getClass()), box, candidate -> candidate == entity);
 	}
 }
