@@ -8,6 +8,7 @@ import com.guardvillagers.entity.GuardEntity;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.UUID;
+import java.lang.management.ManagementFactory;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
 import net.minecraft.client.DeltaTracker;
@@ -68,8 +69,16 @@ final class GuardScaleClientBenchmark {
 			for (boolean debug : new boolean[]{false, true}) {
 				context.runOnClient(client -> ClientDebugState.update(debug, 96));
 				measure(context, debug);
+				context.runOnClient(client -> {
+					// Keep idle arm animation at the same phase in before/after screenshots.
+					for (var entity : client.level.entitiesForRendering()) {
+						if (entity instanceof GuardEntity) entity.tickCount = 100;
+					}
+				});
 				context.takeScreenshot("scale_300_debug_" + (debug ? "on" : "off"));
 			}
+			context.runOnClient(client -> GuardDebugLayoutChecks.run());
+			GuardRenderCacheChecks.run(context, world, feet);
 		} finally {
 			context.runOnClient(client -> ClientDebugState.reset());
 		}
@@ -81,26 +90,40 @@ final class GuardScaleClientBenchmark {
 
 	private static void measure(ClientGameTestContext context, boolean debug) {
 		long[] nanos = new long[FRAMES];
+		long[] extraction = new long[FRAMES];
+		long[] allocation = new long[FRAMES];
+		long[] sample = new long[2];
+		var threadBean = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
 		for (int frame = -WARMUP; frame < FRAMES; frame++) {
 			// Three rendered frames per game tick exercises both cached and changed state at about 60 FPS.
 			if (frame % 3 == 0) context.waitTick();
 			long elapsed = context.computeOnClient(client -> {
 				GL11.glFinish();
+				long threadId = Thread.currentThread().threadId();
+				long allocated = threadBean.getThreadAllocatedBytes(threadId);
 				long start = System.nanoTime();
 				client.gameRenderer.extract(DeltaTracker.ONE, true);
+				sample[0] = System.nanoTime() - start;
 				long guards = client.gameRenderer.getGameRenderState().levelRenderState.entityRenderStates.stream()
 						.filter(state -> state instanceof GuardRenderState).count();
 				client.gameRenderer.render(DeltaTracker.ONE, true);
 				GL11.glFinish();
 				long duration = System.nanoTime() - start;
+				sample[1] = threadBean.getThreadAllocatedBytes(threadId) - allocated;
 				if (guards != GUARDS) throw new AssertionError("Expected 300 guards in view, rendered " + guards);
 				return duration;
 			});
-			if (frame >= 0) nanos[frame] = elapsed;
+			if (frame >= 0) {
+				nanos[frame] = elapsed;
+				extraction[frame] = sample[0];
+				allocation[frame] = sample[1];
+			}
 		}
 		Arrays.sort(nanos);
-		System.out.printf(Locale.ROOT, "GUARD_CLIENT_PERF guards=%d debug=%s frames=%d mean_ms=%.3f median_ms=%.3f p95_ms=%.3f%n",
+		Arrays.sort(extraction);
+		System.out.printf(Locale.ROOT, "GUARD_CLIENT_PERF guards=%d debug=%s frames=%d mean_ms=%.3f median_ms=%.3f p95_ms=%.3f extract_median_ms=%.3f allocated_kib=%.1f%n",
 				GUARDS, debug, FRAMES, Arrays.stream(nanos).average().orElseThrow() / 1e6,
-				nanos[FRAMES / 2] / 1e6, nanos[(int) (FRAMES * .95)] / 1e6);
+				nanos[FRAMES / 2] / 1e6, nanos[(int) (FRAMES * .95)] / 1e6, extraction[FRAMES / 2] / 1e6,
+				Arrays.stream(allocation).average().orElseThrow() / 1024);
 	}
 }
