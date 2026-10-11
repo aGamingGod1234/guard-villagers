@@ -103,6 +103,16 @@ All guards retreat to heal at low health (toward a cleric, a bed, or home) and f
 | Hold | `/guards hold`, "hold the line" | Stands on its block, fights only what it can reach (bowmen shoot from position), never walks away. Follow, stay and home orders clear it. |
 | Home zone | Whistle on the guard, `/guards zone <radius>`, "patrol here" | Patrols around a home point and walks back if it strays out. |
 
+### Group hunts
+
+Punch a mob, in Survival or Creative, to send nearby personal guards after its group. Guards join within their alert range (`max(8, FOLLOW_RANGE)` blocks from the hit), spread across targets, and keep choosing another when one dies. Further punches merge mob hunts and refresh the whole order to 30 seconds (600 ticks) after the last punch. The commander leaves hunters under your direction. Stay, hold, ?as you were?, and `/guards cleartargets` cancel your hunt; logout, changing dimension, and server shutdown clear it too.
+
+The hunt includes the hit mob, matching entity types within 24 blocks, and a breadth-first chain of matching types within 6 blocks of each member. It also includes eligible members of the hit mob's active raid or scoreboard team, connected vehicles/passengers, public llama caravan head links and nearby followers, piglins in its `NEARBY_ADULT_PIGLINS` memory, and hoglins in its `NEAREST_VISIBLE_ADULT_HOGLINS` memory. Wolves have no exposed pack identity, and fish school leaders are private in 26.1.2; both use the proximity rule. No chunks are loaded to find members.
+
+Expansion skips players, allies (including villagers, golems and your guards), any animal with an owner reference even if that owner is offline, armor stands, unattackable entities, and entities in another dimension. The directly punched entity keeps the existing ally and attackability checks. Punching a player creates a separate, single-player target order, subject to PvP, team, trust, Creative and Spectator protection. Stay guards never join; hold reach, retreat, suspended combat and patrol-zone restrictions still apply.
+
+Each owner has at most 96 hunt targets, preferring nearer candidates within each breadth layer. Expansion and pruning run once per five ticks, with one queued punch expanded per refresh, at most 512 entities per local query and 4,096 candidate inspections per expansion. Crowded scenes can reach those limits before every member is found. Guards reuse that roster and the existing engagement tracker; they scan it at most once per ten ticks when they need a new target, with no hunt world scan per guard.
+
 ### Formations
 
 `FOLLOW` is the default ring around you. Orders can put guards in a `LINE`, `SQUARE` or `CIRCLE` in front of you for a limited time (60 s by default): swordsmen take the front posts, bowmen the back.

@@ -1,5 +1,12 @@
 # Changelog
 
+## Group hunts
+
+- Owner punches and owner damage, including Creative-mode punches, start a shared hunt: matching types within 24 blocks, transitive 6-block clusters, active raids, scoreboard teams, vehicles/passengers, exposed llama caravan links and piglin/hoglin social memories.
+- Hunts merge further mob punches, keep up to 96 targets, spread guards using engagement counts, and expire 600 ticks after the last punch. Player punches stay isolated and obey PvP and ally rules. Expansion protects owned animals, allies, players, armor stands and invalid targets.
+- Commander AI leaves active hunters alone. Stay, hold, as-you-were and clear-target orders cancel the owner hunt; logout, dimension changes and server shutdown clear session state. Existing zone, hold, retreat and stay restrictions remain in force.
+- Shared five-tick refreshes and bounded expansion avoid world scans per hunting guard. Added pure BFS/cap tests and server regressions for combat, protection, mixed groups, cancellation, expiry, cap selection and logout.
+
 ## Unlimited personal guards
 
 - Added `/gamerule guardvillagers:max_personal_guards`, integer default `0` (unlimited). Positive values cap purchases and emerald claims, including unloaded guards; existing guards are retained.
