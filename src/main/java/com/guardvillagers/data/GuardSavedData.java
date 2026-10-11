@@ -6,6 +6,8 @@ import java.io.UncheckedIOException;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
@@ -25,9 +27,6 @@ public final class GuardSavedData {
 		"DIM-1", "dimensions/minecraft/the_nether",
 		"DIM1", "dimensions/minecraft/the_end"
 	);
-
-	/** {@code dimensions/<ns>/<path...>/data/<file>}; a datapack dimension path can have several segments. */
-	private static final int MAX_DIMENSION_DEPTH = 8;
 
 	private GuardSavedData() {
 	}
@@ -67,22 +66,24 @@ public final class GuardSavedData {
 		}
 
 		// Datapack dimensions already lived under dimensions/<ns>/<path>/; only the file name changed. The path can
-		// contain slashes (dimensions/<ns>/a/b/data), so walk a few levels instead of assuming one.
+		// contain arbitrarily many slashes, including in dimensions from disabled datapacks.
 		Path dimensionsRoot = worldRoot.resolve("dimensions");
-		if (!Files.isDirectory(dimensionsRoot)) {
+		if (Files.notExists(dimensionsRoot)) {
 			return;
 		}
 		String legacyName = legacyFileName(VILLAGE_STATE);
 		List<Path> legacyDataDirs;
-		try (Stream<Path> paths = Files.walk(dimensionsRoot, MAX_DIMENSION_DEPTH)) {
+		try (Stream<Path> paths = Files.walk(dimensionsRoot)) {
+			if (!Files.isDirectory(dimensionsRoot)) {
+				throw new IOException("Not a dimension directory: " + dimensionsRoot);
+			}
 			legacyDataDirs = paths
 					.filter(path -> path.getFileName().toString().equals(legacyName))
 					.map(Path::getParent)
 					.filter(parent -> parent.getFileName().toString().equals("data"))
 					.toList();
 		} catch (IOException | UncheckedIOException e) {
-			LOGGER.error("Failed to scan {} for legacy guard village data", dimensionsRoot, e);
-			return;
+			throw new IllegalStateException("Cannot scan legacy guard village data in " + dimensionsRoot, e);
 		}
 		for (Path data : legacyDataDirs) {
 			moveVillageState(data, data);
@@ -98,8 +99,14 @@ public final class GuardSavedData {
 	}
 
 	private static void moveIfPresent(Path legacy, Path target) {
-		if (!Files.isRegularFile(legacy)) {
+		try {
+			if (!Files.readAttributes(legacy, BasicFileAttributes.class).isRegularFile()) {
+				throw new IOException("Not a regular saved-data file: " + legacy);
+			}
+		} catch (NoSuchFileException e) {
 			return;
+		} catch (IOException e) {
+			throw new UncheckedIOException("Cannot inspect legacy guard data " + legacy, e);
 		}
 		if (Files.exists(target)) {
 			LOGGER.warn("Both legacy guard data {} and migrated {} exist; keeping the migrated file", legacy, target);
@@ -110,7 +117,8 @@ public final class GuardSavedData {
 			Files.move(legacy, target);
 			LOGGER.info("Migrated legacy guard data {} -> {}", legacy, target);
 		} catch (IOException e) {
-			LOGGER.error("Failed to migrate legacy guard data {}", legacy, e);
+			// Continuing would let SavedDataStorage save a default over the pending migration.
+			throw new UncheckedIOException("Cannot migrate legacy guard data " + legacy, e);
 		}
 	}
 

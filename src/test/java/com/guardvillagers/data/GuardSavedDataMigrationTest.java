@@ -3,6 +3,8 @@ package com.guardvillagers.data;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import java.io.UncheckedIOException;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -52,14 +54,14 @@ final class GuardSavedDataMigrationTest {
 	void movesVillageStateForNestedDatapackDimensionPaths() throws IOException {
 		String legacyVillage = GuardSavedData.legacyFileName(GuardSavedData.VILLAGE_STATE);
 		write(this.world.resolve("dimensions/custom/realms/sky/data").resolve(legacyVillage), "nested");
-		write(this.world.resolve("dimensions/custom/a/b/c/data").resolve(legacyVillage), "deeper");
+		write(this.world.resolve("dimensions/custom/a/b/c/d/e/f/g/data").resolve(legacyVillage), "deeper");
 		// Not a data folder: must stay put.
 		write(this.world.resolve("dimensions/custom/sky/region").resolve(legacyVillage), "stray");
 
 		GuardSavedData.migrateLegacyFiles(this.world);
 
 		assertEquals("nested", Files.readString(this.world.resolve("dimensions/custom/realms/sky/data/guardvillagers/village_state.dat")));
-		assertEquals("deeper", Files.readString(this.world.resolve("dimensions/custom/a/b/c/data/guardvillagers/village_state.dat")));
+		assertEquals("deeper", Files.readString(this.world.resolve("dimensions/custom/a/b/c/d/e/f/g/data/guardvillagers/village_state.dat")));
 		assertFalse(Files.exists(this.world.resolve("dimensions/custom/realms/sky/data").resolve(legacyVillage)));
 		assertTrue(Files.exists(this.world.resolve("dimensions/custom/sky/region").resolve(legacyVillage)));
 	}
@@ -79,6 +81,26 @@ final class GuardSavedDataMigrationTest {
 	@Test
 	void missingWorldFoldersAreANoOp() {
 		GuardSavedData.migrateLegacyFiles(this.world.resolve("does-not-exist"));
+	}
+
+	@Test
+	void migrationFailureStopsBeforeDefaultsCanBeCreatedAndCanResume() throws IOException {
+		Path legacy = this.world.resolve("data/guardvillagers_reputation.dat");
+		Path blocker = this.world.resolve("data/guardvillagers");
+		write(legacy, "legacy reputation");
+		write(blocker, "blocks destination directory creation");
+		assertThrows(UncheckedIOException.class, () -> GuardSavedData.migrateLegacyFiles(this.world));
+		assertEquals("legacy reputation", Files.readString(legacy));
+		Files.delete(blocker);
+		GuardSavedData.migrateLegacyFiles(this.world);
+		assertEquals("legacy reputation", Files.readString(blocker.resolve("reputation.dat")));
+		assertFalse(Files.exists(legacy));
+	}
+
+	@Test
+	void invalidDimensionRootStopsMigration() throws IOException {
+		write(this.world.resolve("dimensions"), "not a directory");
+		assertThrows(IllegalStateException.class, () -> GuardSavedData.migrateLegacyFiles(this.world));
 	}
 
 	private static void write(Path path, String content) throws IOException {
