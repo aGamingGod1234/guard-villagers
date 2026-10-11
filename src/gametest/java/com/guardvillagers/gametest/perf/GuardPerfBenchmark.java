@@ -1,5 +1,12 @@
 package com.guardvillagers.gametest.perf;
 
+import com.guardvillagers.GuardVillagersMod;
+import java.util.HashSet;
+import java.util.function.Predicate;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.level.entity.EntityTypeTest;
+import net.minecraft.world.phys.Vec3;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 
@@ -21,5 +28,33 @@ public class GuardPerfBenchmark {
 		}
 		PerfRunner runner = PerfRunner.start(helper);
 		helper.succeedWhen(() -> helper.assertTrue(runner.isDone(), "benchmark still running"));
+	}
+
+	@GameTest(structure = "guardvillagers-gametest:arena", environment = "guardvillagers-gametest:arena")
+	public void collisionIndexTracksLiveBoundsAndRemoval(GameTestHelper helper) {
+		var level = helper.getLevel();
+		var guard = helper.spawn(GuardVillagersMod.GUARD_ENTITY_TYPE, new Vec3(8, 2, 8));
+		var other = helper.spawn(EntityType.HUSK, new Vec3(9, 2, 8));
+		guard.setNoAi(true);
+		other.setNoAi(true);
+		var box = guard.getBoundingBox().inflate(4);
+		Predicate<Entity> predicate = e -> e != guard;
+		Runnable compare = () -> {
+			var vanilla = level.getEntities(EntityTypeTest.forClass(Entity.class), box, predicate);
+			var indexed = level.getEntities(guard, box, predicate);
+			helper.assertTrue(new HashSet<>(vanilla).equals(new HashSet<>(indexed)), "indexed query differs from native query");
+		};
+		compare.run();
+		other.setPos(other.getX() + 30, other.getY(), other.getZ());
+		compare.run();
+		other.setPos(guard.getX(), guard.getY(), guard.getZ());
+		compare.run();
+		other.setBoundingBox(other.getBoundingBox().move(30, 0, 0));
+		compare.run();
+		other.discard();
+		compare.run();
+		helper.spawn(EntityType.HUSK, new Vec3(9, 2, 8));
+		compare.run();
+		helper.succeed();
 	}
 }
