@@ -2009,6 +2009,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		if (this.hasStoredShieldUpgrade() && activelyBlockingWithShield) {
 			amount *= 0.55F;
 		}
+		float healthBefore = this.getHealth();
+		float absorptionBefore = this.getAbsorptionAmount();
 		boolean damaged = super.hurtServer(world, source, amount);
 		if (!damaged) {
 			return false;
@@ -2029,8 +2031,11 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 				return true;
 			}
 			// A forgiven accidental hit from a player triggers neither retaliation nor a group rally.
+			// Absorbed damage counts as damage dealt; armor, resistance and cooldown reductions do not.
+			float damageDealt = Math.max(0.0F, healthBefore - this.getHealth())
+					+ Math.max(0.0F, absorptionBefore - this.getAbsorptionAmount());
 			boolean retaliate = !(attacker instanceof Player player)
-					|| GuardReputationManager.onGuardHitByPlayer(world, player.getUUID(), amount);
+					|| GuardReputationManager.onGuardHitByPlayer(world, player, this, damageDealt);
 			if (retaliate && !this.isAlly(attacker)) {
 				this.aiController.receiveDamageAlert(attacker, world.getGameTime());
 				this.rallyNearbyGuards(world, attacker);

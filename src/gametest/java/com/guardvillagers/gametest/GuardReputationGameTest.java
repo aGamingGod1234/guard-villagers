@@ -7,13 +7,16 @@ import static com.guardvillagers.gametest.GuardTestSupport.ENV;
 import com.guardvillagers.GuardReputationManager;
 import com.guardvillagers.entity.GuardEntity;
 import java.util.UUID;
-import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
+import com.mojang.serialization.JsonOps;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.projectile.arrow.Arrow;
+import net.minecraft.world.entity.raid.Raid;
 import net.minecraft.world.entity.monster.illager.Pillager;
 import net.minecraft.world.entity.monster.zombie.Zombie;
 import net.minecraft.world.entity.npc.villager.Villager;
@@ -61,7 +64,7 @@ public class GuardReputationGameTest {
 		helper.succeed();
 	}
 
-	/** Villager harm is recorded from the attack callback (fired by the real attack packet handler). */
+	/** A real melee hit must charge once, while a rejected attack must not charge. */
 	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
 	public void hittingVillagerLowersReputation(GameTestHelper helper) {
 		GuardTestSupport.floor(helper);
@@ -69,10 +72,162 @@ public class GuardReputationGameTest {
 		Villager villager = helper.spawn(EntityType.VILLAGER, new Vec3(CENTER + 0.5, 1, CENTER + 0.5));
 
 		double before = rep(helper, player.getUUID());
-		AttackEntityCallback.EVENT.invoker().interact(player, helper.getLevel(), InteractionHand.MAIN_HAND, villager, null);
+		player.attack(villager);
 		double after = rep(helper, player.getUUID());
 
+		helper.assertTrue(villager.getHealth() < villager.getMaxHealth(), "setup: melee hit dealt no damage");
 		assertDelta(helper, before, after, -8 / 400.0D, "attacking a villager");
+		villager.setInvulnerable(true);
+		player.attack(villager);
+		assertDelta(helper, after, rep(helper, player.getUUID()), 0.0D, "rejected melee hit");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void projectileAndLethalVillageHarmChargeOnce(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerLevel level = helper.getLevel();
+		ServerPlayer player = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 2.5);
+		Villager villager = helper.spawn(EntityType.VILLAGER, new Vec3(CENTER + 0.5, 1, CENTER + 0.5));
+		Arrow arrow = new Arrow(level, player, new ItemStack(Items.ARROW), null);
+		double before = rep(helper, player.getUUID());
+		helper.assertTrue(villager.hurtServer(level, level.damageSources().arrow(arrow, player), 2.0F), "arrow hit rejected");
+		assertDelta(helper, before, rep(helper, player.getUUID()), -0.02D, "nonlethal arrow");
+		before = rep(helper, player.getUUID());
+		villager.hurtServer(level, level.damageSources().arrow(arrow, player), 1000.0F);
+		helper.assertTrue(villager.isDeadOrDying(), "lethal arrow did not kill villager");
+		assertDelta(helper, before, rep(helper, player.getUUID()), -0.02D, "lethal arrow");
+		var golem = helper.spawn(EntityType.IRON_GOLEM, new Vec3(CENTER + 4.5, 1, CENTER + 0.5));
+		before = rep(helper, player.getUUID());
+		golem.hurtServer(level, level.damageSources().arrow(arrow, player), 1000.0F);
+		assertDelta(helper, before, rep(helper, player.getUUID()), -0.02D, "lethal arrow against golem");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 80)
+	public void forgivenArmoredHitDoesNotStartSquadFight(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerLevel level = helper.getLevel();
+		ServerPlayer player = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 4.5);
+		GuardEntity personal = GuardTestSupport.ownedGuard(helper, CENTER + 0.5, 1, CENTER + 2.5, player);
+		personal.setFollowOverride(true);
+		GuardEntity victim = GuardTestSupport.swordsman(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		victim.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.DIAMOND_HELMET));
+		victim.setItemSlot(EquipmentSlot.CHEST, new ItemStack(Items.DIAMOND_CHESTPLATE));
+		victim.setItemSlot(EquipmentSlot.LEGS, new ItemStack(Items.DIAMOND_LEGGINGS));
+		victim.setItemSlot(EquipmentSlot.FEET, new ItemStack(Items.DIAMOND_BOOTS));
+		player.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(6.0D);
+		// Wait for equipment attributes and a fully charged attack, then exercise both Fabric hooks.
+		helper.runAfterDelay(12, () -> {
+			float health = victim.getHealth();
+			double before = rep(helper, player.getUUID());
+			player.attack(victim);
+			float dealt = health - victim.getHealth();
+			helper.assertTrue(dealt > 0 && dealt <= 4, "setup: armor should reduce six raw damage to at most four, got " + dealt);
+			assertDelta(helper, before, rep(helper, player.getUUID()), 0.0D, "mitigated first hit");
+		});
+		GuardTestSupport.onEachTick(helper, () -> {
+			helper.assertTrue(personal.getTarget() == null, "owner's guard attacked after a forgiven hit");
+			helper.assertTrue(victim.getTarget() == null, "victim retaliated after a forgiven hit");
+		});
+		helper.runAfterDelay(35, helper::succeed);
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 60)
+	public void repeatedHitAlertsBothSquads(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerLevel level = helper.getLevel();
+		ServerPlayer player = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 6.5);
+		GuardEntity personal = GuardTestSupport.ownedGuard(helper, CENTER + 0.5, 1, CENTER + 4.5, player);
+		personal.setFollowOverride(true);
+		GuardEntity victim = GuardTestSupport.swordsman(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		double before = rep(helper, player.getUUID());
+		victim.hurtServer(level, level.damageSources().playerAttack(player), 1.0F);
+		assertDelta(helper, before, rep(helper, player.getUUID()), 0.0D, "first hit");
+		victim.hurtServer(level, level.damageSources().playerAttack(player), 3.0F);
+		assertDelta(helper, before, rep(helper, player.getUUID()), -0.015D, "second hit charged exactly once");
+		helper.succeedWhen(() -> {
+			helper.assertTrue(personal.getTarget() == victim, "owner's guard did not receive the non-forgiven attack");
+			helper.assertTrue(victim.getTarget() != null, "victim did not retaliate");
+		});
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void cooldownReductionCountsTowardGraceThreshold(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerLevel level = helper.getLevel();
+		ServerPlayer player = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 2.5);
+		GuardEntity victim = GuardTestSupport.swordsman(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		victim.hurtServer(level, level.damageSources().generic(), 4.0F);
+		float health = victim.getHealth();
+		double before = rep(helper, player.getUUID());
+		helper.assertTrue(victim.hurtServer(level, level.damageSources().playerAttack(player), 6.0F), "second hit rejected");
+		helper.assertTrue(health - victim.getHealth() > 0 && health - victim.getHealth() <= 4, "setup: cooldown did not reduce damage");
+		assertDelta(helper, before, rep(helper, player.getUUID()), 0.0D, "cooldown-reduced first player hit");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void absorbedDamageCountsTowardGraceThreshold(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerLevel level = helper.getLevel();
+		ServerPlayer player = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 2.5);
+		GuardEntity victim = GuardTestSupport.swordsman(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		victim.getAttribute(Attributes.MAX_ABSORPTION).setBaseValue(20.0D);
+		victim.setAbsorptionAmount(20.0F);
+		float health = victim.getHealth();
+		double before = rep(helper, player.getUUID());
+		victim.hurtServer(level, level.damageSources().playerAttack(player), 6.0F);
+		helper.assertValueEqual(victim.getHealth(), health, "health protected by absorption");
+		helper.assertTrue(20.0F - victim.getAbsorptionAmount() > 4.0F, "setup: absorbed damage exceeds threshold");
+		assertDelta(helper, before, rep(helper, player.getUUID()), -0.015D, "heavy absorbed hit");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void passiveAndPlayerKillsDoNotRewardOwner(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerLevel level = helper.getLevel();
+		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 4.5);
+		GuardEntity guard = GuardTestSupport.ownedGuard(helper, CENTER + 0.5, 1, CENTER + 0.5, owner);
+		var chicken = helper.spawn(EntityType.CHICKEN, new Vec3(CENTER + 2.5, 1, CENTER + 0.5));
+		double before = rep(helper, owner.getUUID());
+		chicken.hurtServer(level, level.damageSources().mobAttack(guard), 1000.0F);
+		helper.assertTrue(chicken.isDeadOrDying(), "setup: chicken survived");
+		assertDelta(helper, before, rep(helper, owner.getUUID()), 0.0D, "passive kill");
+		ServerPlayer victim = GuardTestSupport.survivalPlayer(helper, CENTER + 4.5, 1, CENTER + 0.5);
+		victim.hurtServer(level, level.damageSources().mobAttack(guard), 1000.0F);
+		helper.assertTrue(victim.isDeadOrDying(), "setup: player survived");
+		assertDelta(helper, before, rep(helper, owner.getUUID()), 0.0D, "player kill");
+		// Phantom is an Enemy but not a Monster; legitimate hostile rewards must be preserved.
+		var phantom = helper.spawn(EntityType.PHANTOM, new Vec3(CENTER + 6.5, 1, CENTER + 0.5));
+		phantom.hurtServer(level, level.damageSources().mobAttack(guard), 1000.0F);
+		helper.assertTrue(phantom.isDeadOrDying(), "setup: phantom survived");
+		assertDelta(helper, before, rep(helper, owner.getUUID()), 0.005D, "phantom kill");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void raidDefenseRequiresOngoingBattle(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerLevel level = helper.getLevel();
+		UUID owner = UUID.randomUUID();
+		Pillager raider = helper.spawn(EntityType.PILLAGER, new Vec3(CENTER + 0.5, 1, CENTER + 0.5));
+		for (String status : new String[] {"ongoing", "victory", "loss", "stopped"}) {
+			var saved = Raid.MAP_CODEC.codec().encodeStart(JsonOps.INSTANCE, new Raid(raider.blockPosition(), level.getDifficulty()))
+					.getOrThrow().getAsJsonObject();
+			saved.addProperty("status", status);
+			Raid raid = Raid.MAP_CODEC.codec().parse(JsonOps.INSTANCE, saved).getOrThrow();
+			raider.setCurrentRaid(raid);
+			double before = rep(helper, owner);
+			GuardReputationManager.recordHostileKill(level, owner, raider);
+			GuardReputationManager.recordRaidDefense(level, owner);
+			assertDelta(helper, before, rep(helper, owner), status.equals("ongoing") ? 0.02D : 0.01D, status + " raid kill");
+			before = rep(helper, owner);
+			GuardReputationManager.recordRaidDefense(level, owner, raider);
+			assertDelta(helper, before, rep(helper, owner), status.equals("ongoing") ? 0.01D : 0.0D, status + " explicit bonus");
+		}
+		raider.setCurrentRaid(null);
 		helper.succeed();
 	}
 

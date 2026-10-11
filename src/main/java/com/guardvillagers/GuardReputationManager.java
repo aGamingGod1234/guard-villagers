@@ -1,6 +1,7 @@
 package com.guardvillagers;
 
 import com.guardvillagers.data.GuardReputationState;
+import com.guardvillagers.entity.GuardEntity;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Map;
@@ -12,7 +13,9 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.raid.Raid;
 import net.minecraft.world.entity.raid.Raider;
 
@@ -125,6 +128,15 @@ public final class GuardReputationManager {
 		return true;
 	}
 
+	/** Share the single forgiveness decision with both squads, after the guard has taken damage. */
+	public static boolean onGuardHitByPlayer(ServerLevel world, Player player, GuardEntity victim, float damage) {
+		boolean retaliate = onGuardHitByPlayer(world, player.getUUID(), damage);
+		if (retaliate && player instanceof ServerPlayer owner) {
+			GuardEvents.alertGuardsOfAttackingOwner(owner, victim);
+		}
+		return retaliate;
+	}
+
 	/**
 	 * Legacy hook without the damage amount (GuardEntity#hurtServer still calls this after rallying). Applies the
 	 * time-based part of the grace rule so an accidental first hit costs no reputation.
@@ -162,15 +174,20 @@ public final class GuardReputationManager {
 	 * around where it died.
 	 */
 	static boolean isDuringActiveRaid(ServerLevel world, Raider raider) {
-		if (raider.hasActiveRaid()) {
-			return true;
+		Raid currentRaid = raider.getCurrentRaid();
+		if (currentRaid != null) {
+			return isOngoingRaid(currentRaid);
 		}
-		Raid raid = world.getRaidAt(raider.blockPosition());
-		return raid != null && raid.isActive();
+		return isOngoingRaid(world.getRaidAt(raider.blockPosition()));
+	}
+
+	private static boolean isOngoingRaid(Raid raid) {
+		return raid != null && raid.isActive() && !raid.isOver() && !raid.isStopped();
 	}
 
 	public static void recordHostileKill(ServerLevel world, UUID playerUuid, LivingEntity target) {
-		if (target == null) {
+		if (!(target instanceof Enemy)) {
+			PENDING_RAID_DEFENSE.remove(playerUuid);
 			return;
 		}
 		double delta = target instanceof Raider ? RAIDER_KILL_DELTA : HOSTILE_KILL_DELTA;
