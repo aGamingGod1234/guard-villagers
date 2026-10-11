@@ -131,7 +131,8 @@ public class GuardEntityRenderer
 		if (marker != null) {
 			label.append(marker);
 		}
-		if (name != null && entity.hasCustomName()) {
+		if (name != null && entity.hasCustomName()
+				&& super.shouldShowName(entity, this.entityRenderDispatcher.distanceToSqr(entity))) {
 			label.append(name).append(Component.literal("  "));
 		}
 		label.append(Component.literal("Lv " + entity.getLevel()).withStyle(ChatFormatting.YELLOW));

@@ -27,8 +27,7 @@ public class GuardTacticsClientGameTest implements FabricClientGameTest {
 			int[][] offsets = {{6, 4}, {-8, 3}, {12, -10}, {-14, -12}, {3, 18}, {-20, 9}, {22, 2}};
 			List<UUID> guards = new ArrayList<>();
 			for (int i = 0; i < offsets.length; i++) {
-				// Every slot the roster packet sends is filled: an empty armor slot currently kicks the owner
-				// (see GuardRosterSyncClientGameTest).
+				// Fill equipment slots for the visual fixture; empty slots are covered by GuardRosterSyncClientGameTest.
 				Map<EquipmentSlot, Item> gear = Map.of(
 						EquipmentSlot.MAINHAND, i % 2 == 0 ? Items.IRON_SWORD : Items.BOW,
 						EquipmentSlot.HEAD, Items.IRON_HELMET,
@@ -121,6 +120,10 @@ public class GuardTacticsClientGameTest implements FabricClientGameTest {
 			context.waitTicks(10);
 			ClientTestSupport.clearOverlays(context);
 			context.takeScreenshot("groups_view");
+			context.runOnClient(client -> checkPendingEdits((GuardTacticsScreen) client.screen, client));
+			singleplayer.getServer().runOnServer(server ->
+					com.guardvillagers.tactics.GuardTacticsMenus.syncOwnedGuardRoster(ClientTestSupport.player(server)));
+			context.waitTicks(3);
 
 			// Hover the first guard card area to surface any hover state/tooltip.
 			int[] hover = context.computeOnClient(client -> new int[] {
@@ -134,7 +137,10 @@ public class GuardTacticsClientGameTest implements FabricClientGameTest {
 			boolean defaultWindow = context.computeOnClient(client ->
 					client.getWindow().getWidth() == 854 && client.getWindow().getHeight() == 480
 							&& client.getWindow().getGuiScale() == 2);
-			if (defaultWindow) {
+			if (!defaultWindow) {
+				throw new AssertionError("Rank click fixture requires 854x480 at GUI scale 2; update its coordinates for this window");
+			}
+			{
 				input.setCursorPos(566, 110);
 				context.waitTicks(3);
 				context.takeScreenshot("groups_rank_badge_tooltip");
@@ -153,9 +159,21 @@ public class GuardTacticsClientGameTest implements FabricClientGameTest {
 				context.waitTicks(2);
 				context.takeScreenshot("groups_rank_menu_hover");
 				input.pressMouse(0);
-				context.waitTicks(15);
+				for (int tick = 0; tick < 100; tick++) {
+					boolean appointed = singleplayer.getServer().computeOnServer(server ->
+							com.guardvillagers.command.hierarchy.GuardHierarchy.isPinned(server, owner, guards.get(3)));
+					if (appointed) break;
+					context.waitTick();
+				}
 				input.setCursorPos(300, 20);
 				context.waitTicks(2);
+				singleplayer.getServer().runOnServer(server -> {
+					com.guardvillagers.entity.GuardEntity appointed = (com.guardvillagers.entity.GuardEntity) server.overworld().getEntity(guards.get(3));
+					if (appointed == null || appointed.getRank() != com.guardvillagers.command.hierarchy.GuardRank.CAPTAIN
+							|| !com.guardvillagers.command.hierarchy.GuardHierarchy.isPinned(server, owner, appointed.getUUID())) {
+						throw new AssertionError("Click must appoint Isabella as captain and persist her appointment pin");
+					}
+				});
 				context.takeScreenshot("groups_captain_appointed");
 
 				// Collapse Vanguard to chips: the commander's star sits at the chip's right edge.
@@ -182,4 +200,86 @@ public class GuardTacticsClientGameTest implements FabricClientGameTest {
 			context.takeScreenshot("nameplate_captain");
 		}
 	}
+	/** Exercise refresh races against the actual screen/store state before taking interaction screenshots. */
+	@SuppressWarnings("unchecked")
+	private static void checkPendingEdits(GuardTacticsScreen screen, net.minecraft.client.Minecraft client) {
+		try {
+			var world = com.guardvillagers.client.ClientTacticsDataStore.resolveContext(client, client.level);
+			var store = com.guardvillagers.client.ClientTacticsDataStore.getInstance();
+			var roster = com.guardvillagers.client.ClientGuardRosterStore.getInstance();
+			List<String> names = new ArrayList<>();
+			for (int row = 0; row < store.groupCount(world); row++) names.add(store.getGroupName(world, row));
+			store.expectGroup(world, names.size());
+			store.replaceGroupNames(world, names);
+			if (store.groupCount(world) != names.size() + 1) throw new AssertionError("Older roster discarded a queued group add");
+			store.applyGroupResult(world, new com.guardvillagers.network.GuardGroupResultPayload(
+					com.guardvillagers.network.GuardGroupResultPayload.Action.ADD, -1, 0, 1, "test.rejected"));
+			if (store.groupCount(world) != names.size()) throw new AssertionError("Rejected group add was not rolled back");
+			store.expectGroup(world, names.size());
+			store.replaceGroupNames(world, names);
+			List<String> acceptedNames = new ArrayList<>(names);
+			acceptedNames.add("New row");
+			store.replaceGroupNames(world, acceptedNames);
+			store.applyGroupResult(world, new com.guardvillagers.network.GuardGroupResultPayload(
+					com.guardvillagers.network.GuardGroupResultPayload.Action.ADD, names.size(), 1, 0, ""));
+			if (store.groupCount(world) != acceptedNames.size()) throw new AssertionError("Accepted group add disappeared");
+			store.replaceGroupNames(world, names);
+
+			var snapshot = roster.roster(world).stream().filter(guard -> guard.groupIndex() == 0).findFirst().orElseThrow();
+			for (net.minecraft.world.entity.Entity entity : client.level.entitiesForRendering()) {
+				if (entity.getUUID().equals(snapshot.guardUuid()) && entity instanceof com.guardvillagers.entity.GuardEntity guard) {
+					var dispatcher = client.getEntityRenderDispatcher();
+					var previousPick = dispatcher.crosshairPickEntity;
+					var scoreboard = client.level.getScoreboard();
+					var hidden = scoreboard.addPlayerTeam("gv_hidden_test");
+					hidden.setNameTagVisibility(net.minecraft.world.scores.Team.Visibility.NEVER);
+					scoreboard.addPlayerToTeam(guard.getScoreboardName(), hidden);
+					try {
+						dispatcher.crosshairPickEntity = guard;
+						var nameTag = com.guardvillagers.client.GuardEntityRenderer.class.getDeclaredMethod("getNameTag", com.guardvillagers.entity.GuardEntity.class);
+						nameTag.setAccessible(true);
+						var label = (net.minecraft.network.chat.Component) nameTag.invoke(dispatcher.getRenderer(guard), guard);
+						if (label == null || label.getString().contains(guard.getName().getString())) {
+							throw new AssertionError("Crosshair stats exposed a team-hidden custom name");
+						}
+					} finally {
+						dispatcher.crosshairPickEntity = previousPick;
+						scoreboard.removePlayerTeam(hidden);
+					}
+					break;
+				}
+			}
+			var pendingField = GuardTacticsScreen.class.getDeclaredField("pendingAssignments");
+			var awaitingField = GuardTacticsScreen.class.getDeclaredField("awaitingConfirmation");
+			var drop = GuardTacticsScreen.class.getDeclaredMethod("setPendingAssignment",
+					com.guardvillagers.client.ClientGuardRosterStore.GuardRosterEntry.class, int.class);
+			pendingField.setAccessible(true);
+			awaitingField.setAccessible(true);
+			drop.setAccessible(true);
+			Map<UUID, Integer> pending = (Map<UUID, Integer>) pendingField.get(screen);
+			Map<UUID, Integer> awaiting = (Map<UUID, Integer>) awaitingField.get(screen);
+			awaiting.put(snapshot.guardUuid(), 1);
+			drop.invoke(screen, snapshot, 0);
+			if (!Integer.valueOf(0).equals(pending.get(snapshot.guardUuid())) || !awaiting.containsKey(snapshot.guardUuid())) {
+				throw new AssertionError("Return drop must compensate for a saved move still in flight");
+			}
+			pending.clear();
+			awaiting.clear();
+			roster.applyPayload(world, new com.guardvillagers.network.GuardRosterSyncPayload(names, List.of(
+					com.guardvillagers.network.GuardRosterSyncPayload.GuardSummary.unloaded(snapshot.guardUuid(), snapshot.displayName(), 1, names.get(1)))));
+			drop.invoke(screen, snapshot, 0);
+			if (!Integer.valueOf(0).equals(pending.get(snapshot.guardUuid()))) throw new AssertionError("Drop used stale drag snapshot instead of latest roster");
+			pending.clear();
+
+			var identity = com.guardvillagers.client.ClientTacticsDataStore.class.getDeclaredMethod("singleplayerId", java.nio.file.Path.class);
+			identity.setAccessible(true);
+			Object first = identity.invoke(null, java.nio.file.Path.of("saves", "New World"));
+			Object second = identity.invoke(null, java.nio.file.Path.of("saves", "New World (1)"));
+			Object normalized = identity.invoke(null, java.nio.file.Path.of("saves", "New World", "."));
+			if (first.equals(second) || !first.equals(normalized)) throw new AssertionError("Save identity must use normalized folders, not display names");
+		} catch (ReflectiveOperationException error) {
+			throw new AssertionError("Client regression fixture no longer matches the screen", error);
+		}
+	}
+
 }

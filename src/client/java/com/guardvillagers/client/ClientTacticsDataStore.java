@@ -16,6 +16,11 @@ import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import com.guardvillagers.data.SafeFiles;
+import com.guardvillagers.network.GuardGroupResultPayload;
+import net.minecraft.world.level.storage.LevelResource;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.UUID;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -51,6 +56,9 @@ public final class ClientTacticsDataStore {
 	private static final ClientTacticsDataStore INSTANCE = new ClientTacticsDataStore();
 
 	private final Map<String, WorldData> worlds = new LinkedHashMap<>(16, 0.75F, true);
+
+	private final Map<String, ArrayDeque<Integer>> pendingGroups = new HashMap<>();
+	private final Map<String, List<String>> confirmedGroupNames = new HashMap<>();
 
 	private boolean dirty;
 	private long dirtyAtMillis;
@@ -224,14 +232,40 @@ public final class ClientTacticsDataStore {
 		List<String> sanitizedNames = groupNames == null
 				? List.of()
 				: groupNames.stream().limit(MAX_GROUPS).map(ClientTacticsDataStore::sanitizeGroupName).toList();
+		this.confirmedGroupNames.put(context.worldId(), sanitizedNames);
+		List<String> visibleNames = new ArrayList<>(sanitizedNames);
+		for (int row : this.pendingGroups.getOrDefault(context.worldId(), new ArrayDeque<>())) {
+			while (visibleNames.size() <= row) visibleNames.add("Group " + (visibleNames.size() + 1));
+		}
 		WorldData worldData = this.world(context);
-		if (worldData.groupNames.equals(sanitizedNames)) {
+		if (worldData.groupNames.equals(visibleNames)) {
 			return;
 		}
 
 		worldData.groupNames.clear();
-		worldData.groupNames.addAll(sanitizedNames);
+		worldData.groupNames.addAll(visibleNames);
 		this.markDirty();
+	}
+
+	/** Keeps dependent drops visible until the server accepts or rejects the add, across older roster snapshots. */
+	public void expectGroup(WorldContext context, int row) {
+		this.pendingGroups.computeIfAbsent(context.worldId(), ignored -> new ArrayDeque<>()).addLast(row);
+		this.ensureGroupCount(context, row + 1);
+	}
+
+	public void applyGroupResult(WorldContext context, GuardGroupResultPayload result) {
+		if (result.action() != GuardGroupResultPayload.Action.ADD) return;
+		ArrayDeque<Integer> pending = this.pendingGroups.get(context.worldId());
+		if (pending != null) pending.pollFirst();
+		this.replaceGroupNames(context, this.confirmedGroupNames.getOrDefault(context.worldId(), List.of()));
+	}
+
+	public void clearPendingGroups() {
+		this.pendingGroups.clear();
+		for (Map.Entry<String, List<String>> entry : this.confirmedGroupNames.entrySet()) {
+			this.replaceGroupNames(new WorldContext(entry.getKey(), ""), entry.getValue());
+		}
+		this.confirmedGroupNames.clear();
 	}
 
 	public RegionColor getGroupColor(WorldContext context, int row) {
@@ -558,13 +592,28 @@ public final class ClientTacticsDataStore {
 	private static String resolveWorldId(Minecraft client) {
 		if (client.isLocalServer() && client.getSingleplayerServer() != null) {
 			String levelName = client.getSingleplayerServer().getWorldData().getLevelName();
-			return "singleplayer:" + safeKey(levelName);
+			String worldId = singleplayerId(client.getSingleplayerServer().getWorldPath(LevelResource.ROOT));
+			String legacyId = "singleplayer:" + safeKey(levelName);
+			// Claim a legacy display-name entry once. Another save with that name must start independently.
+			if (!INSTANCE.worlds.containsKey(worldId)) {
+				WorldData legacy = INSTANCE.worlds.remove(legacyId);
+				if (legacy != null) {
+					INSTANCE.worlds.put(worldId, legacy);
+					INSTANCE.markDirty();
+				}
+			}
+			return worldId;
 		}
 		ServerData serverInfo = client.getCurrentServer();
 		if (serverInfo != null && serverInfo.ip != null && !serverInfo.ip.isBlank()) {
 			return "multiplayer:" + safeKey(serverInfo.ip.toLowerCase(Locale.ROOT));
 		}
 		return "session:default";
+	}
+
+	static String singleplayerId(Path saveRoot) {
+		String path = saveRoot.toAbsolutePath().normalize().toString();
+		return "singleplayer-save:" + UUID.nameUUIDFromBytes(path.getBytes(StandardCharsets.UTF_8));
 	}
 
 	private static String safeKey(String value) {

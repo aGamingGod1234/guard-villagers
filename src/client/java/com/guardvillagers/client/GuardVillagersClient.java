@@ -25,6 +25,8 @@ public class GuardVillagersClient implements ClientModInitializer {
 
 	@Override
 	public void onInitializeClient() {
+		ClientPlayNetworking.registerGlobalReceiver(com.guardvillagers.network.GuardTacticsAckPayload.ID, (payload, context) ->
+			context.client().execute(GuardCommandQueue::acknowledge));
 		ClientPlayNetworking.registerGlobalReceiver(GuardRosterSyncPayload.ID, (payload, context) ->
 			context.client().execute(() -> {
 				Minecraft client = context.client();
@@ -37,7 +39,13 @@ public class GuardVillagersClient implements ClientModInitializer {
 			})
 		);
 		ClientPlayNetworking.registerGlobalReceiver(GuardGroupResultPayload.ID, (payload, context) ->
-			context.client().execute(() -> ClientGuardRosterStore.getInstance().pushGroupResult(payload))
+			context.client().execute(() -> {
+				Minecraft client = context.client();
+				if (client.level != null) {
+					ClientTacticsDataStore.getInstance().applyGroupResult(ClientTacticsDataStore.resolveContext(client, client.level), payload);
+				}
+				ClientGuardRosterStore.getInstance().pushGroupResult(payload);
+			})
 		);
 		ClientPlayNetworking.registerGlobalReceiver(GuardDebugSyncPayload.ID, (payload, context) ->
 			context.client().execute(() -> {
@@ -75,6 +83,8 @@ public class GuardVillagersClient implements ClientModInitializer {
 
 		ClientTickEvents.END_CLIENT_TICK.register(client -> ClientTacticsDataStore.getInstance().tickSave());
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+			GuardCommandQueue.clear();
+			ClientTacticsDataStore.getInstance().clearPendingGroups();
 			ClientTacticsDataStore.getInstance().flush();
 			TERRAIN_CACHE.clearAll();
 			ClientGuardRosterStore.getInstance().clear();
@@ -83,6 +93,8 @@ public class GuardVillagersClient implements ClientModInitializer {
 			GuardDebugRenderer.reset();
 		});
 		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
+			GuardCommandQueue.clear();
+			ClientTacticsDataStore.getInstance().clearPendingGroups();
 			ClientTacticsDataStore.getInstance().flush();
 			ClientGuardRosterStore.getInstance().clear();
 			ClientDebugState.reset();
