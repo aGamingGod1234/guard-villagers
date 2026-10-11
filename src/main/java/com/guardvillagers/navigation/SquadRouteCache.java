@@ -1,119 +1,135 @@
 package com.guardvillagers.navigation;
 
-import net.minecraft.entity.ai.pathing.Path;
-import net.minecraft.entity.ai.pathing.PathNode;
-import net.minecraft.registry.RegistryKey;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.World;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import net.minecraft.core.BlockPos;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.pathfinder.Node;
+import net.minecraft.world.level.pathfinder.Path;
 
-public class SquadRouteCache {
-    /**
-     * Accessed from pathfinder callbacks on each world's tick thread, so multiple
-     * loaded dimensions can write here concurrently. ConcurrentHashMap prevents
-     * the HashMap corruption seen under that pattern while keeping reads lock-free.
-     */
-    private static final Map<CacheKey, CachedRoute> SQUAD_ROUTES = new ConcurrentHashMap<>();
-    private static final int MAX_CACHE_AGE_TICKS = 40; // 2 seconds
-    private static final int MAX_CACHE_ENTRIES = 256;
-    private static final double MAX_TARGET_DRIFT_SQR = 0.0; // exact static target only
-    private static final double MAX_ORIGIN_DRIFT_SQR = 144.0; // 12 blocks
+/**
+ * Shares reachable static routes between guards of the same squad heading to the same block.
+ *
+ * <p>A cached route is only handed to a guard that is standing on one of its
+ * nodes; the copy starts at that node. The previous version handed out routes whose first node
+ * could be up to 12 blocks away, which made the receiving guard walk straight (unpathed) to
+ * another guard's start position. The cache is LRU-bounded and entries age out after
+ * {@link #MAX_CACHE_AGE_TICKS}.
+ */
+public final class SquadRouteCache {
+	static final int MAX_CACHE_AGE_TICKS = 40;
+	static final int MAX_CACHE_ENTRIES = 256;
 
-    /**
-     * Tries to find a valid cached route for a squad/owner given a target position.
-     * Starts from the guard's current position and ensures validity.
-     * Returns a DEFENSIVE COPY so consumers don't mutate each other's Path state.
-     */
-    public static Path getSquadRoute(RegistryKey<World> worldKey, UUID groupId, BlockPos origin, BlockPos target, long currentTick) {
-        if (worldKey == null || groupId == null || target == null) {
-            return null;
-        }
+	private static final Map<CacheKey, CachedRoute> SQUAD_ROUTES = new LinkedHashMap<>(64, 0.75F, true) {
+		@Override
+		protected boolean removeEldestEntry(Map.Entry<CacheKey, CachedRoute> eldest) {
+			return this.size() > MAX_CACHE_ENTRIES;
+		}
+	};
 
-        CacheKey key = new CacheKey(worldKey, groupId, quantize(target));
-        CachedRoute entry = SQUAD_ROUTES.get(key);
+	private SquadRouteCache() {
+	}
 
-        if (entry == null) {
-            return null;
-        }
+	/**
+	 * Returns a private copy of a cached route to {@code target} that the guard at {@code origin}
+	 * can join, already advanced to the join node, or {@code null}.
+	 */
+	public static Path getSquadRoute(ResourceKey<Level> worldKey, UUID groupId, BlockPos origin, BlockPos target,
+			int reachRange, long currentTick) {
+		if (worldKey == null || groupId == null || target == null || origin == null) {
+			return null;
+		}
+		CacheKey key = new CacheKey(worldKey, groupId, target.immutable(), reachRange);
+		Path cachedPath;
+		synchronized (SQUAD_ROUTES) {
+			CachedRoute entry = SQUAD_ROUTES.get(key);
+			if (entry == null) {
+				return null;
+			}
+			if (currentTick - entry.computeTick() > MAX_CACHE_AGE_TICKS || currentTick < entry.computeTick()) {
+				SQUAD_ROUTES.remove(key);
+				return null;
+			}
+			cachedPath = entry.path();
+		}
 
-        // Validity checks
-        if (currentTick - entry.computeTick > MAX_CACHE_AGE_TICKS) {
-            SQUAD_ROUTES.remove(key);
-            return null;
-        }
+		int joinIndex = findJoinIndex(cachedPath, origin);
+		if (joinIndex < 0) {
+			return null;
+		}
+		Path copy = copyPath(cachedPath);
+		copy.setNextNodeIndex(joinIndex);
+		return copy;
+	}
 
-        if (entry.targetPos.getSquaredDistance(target) > MAX_TARGET_DRIFT_SQR) {
-            SQUAD_ROUTES.remove(key);
-            return null;
-        }
+	/** Caches a route. Only reachable routes are worth sharing; partial routes are origin specific. */
+	public static void cacheSquadRoute(ResourceKey<Level> worldKey, UUID groupId, BlockPos target, Path path,
+			int reachRange, long currentTick) {
+		if (worldKey == null || groupId == null || target == null || path == null || !path.canReach()
+				|| path.getNodeCount() == 0) {
+			return;
+		}
+		CacheKey key = new CacheKey(worldKey, groupId, target.immutable(), reachRange);
+		Path stored = copyPath(path);
+		synchronized (SQUAD_ROUTES) {
+			SQUAD_ROUTES.put(key, new CachedRoute(stored, currentTick));
+		}
+	}
 
-        if (origin.getSquaredDistance(entry.originPos) > MAX_ORIGIN_DRIFT_SQR) {
-            // Not invalidated globally, but invalid for this specific guard's distance
-            return null;
-        }
+	public static void invalidateSquadRoute(ResourceKey<Level> worldKey, UUID groupId, BlockPos target) {
+		if (worldKey == null || groupId == null || target == null) {
+			return;
+		}
+		synchronized (SQUAD_ROUTES) {
+			SQUAD_ROUTES.keySet().removeIf(key -> key.worldKey().equals(worldKey)
+					&& key.groupId().equals(groupId) && key.target().equals(target));
+		}
+	}
 
-        // Defensive copy to prevent concurrent index mutation
-        return copyPath(entry.path);
-    }
+	static int size() {
+		synchronized (SQUAD_ROUTES) {
+			return SQUAD_ROUTES.size();
+		}
+	}
 
-    /**
-     * Caches a successfully computed route for a squad.
-     */
-    public static void cacheSquadRoute(RegistryKey<World> worldKey, UUID groupId, BlockPos origin, BlockPos target, Path path, long currentTick) {
-        if (worldKey == null || groupId == null || target == null || path == null) {
-            return;
-        }
+	/** Also called when the server stops so the next world starts clean. */
+	public static void clear() {
+		synchronized (SQUAD_ROUTES) {
+			SQUAD_ROUTES.clear();
+		}
+	}
 
-        CacheKey key = new CacheKey(worldKey, groupId, quantize(target));
-        // Path is only read from cache via copyPath() on retrieval, so we can store
-        // the original directly and avoid a redundant copy on insert.
-        SQUAD_ROUTES.put(key, new CachedRoute(path, currentTick, origin, target));
+	/**
+	 * Joining from a different block needs a connector search: proximity alone cannot establish
+	 * that an edge is traversable (in particular around blocked diagonal corners).
+	 */
+	static int findJoinIndex(Path path, BlockPos origin) {
+		for (int i = 0; i < path.getNodeCount(); i++) {
+			Node node = path.getNode(i);
+			if (node.x == origin.getX() && node.y == origin.getY() && node.z == origin.getZ()) {
+				return i;
+			}
+		}
+		return -1;
+	}
 
-        // Bounded eviction: if the cache has grown past the soft cap (which can
-        // happen on long-running servers with many distinct squad/target pairs),
-        // drop any entry older than MAX_CACHE_AGE_TICKS. This prevents an
-        // unbounded retention loop without adding a dedicated tick subscriber.
-        if (SQUAD_ROUTES.size() > MAX_CACHE_ENTRIES) {
-            SQUAD_ROUTES.values().removeIf(route -> currentTick - route.computeTick > MAX_CACHE_AGE_TICKS);
-        }
-    }
+	/** Node objects are immutable once a path is built; only the list and the cursor are per-copy. */
+	private static Path copyPath(Path original) {
+		int length = original.getNodeCount();
+		List<Node> nodes = new ArrayList<>(length);
+		for (int i = 0; i < length; i++) {
+			nodes.add(original.getNode(i));
+		}
+		return new Path(nodes, original.getTarget(), original.canReach());
+	}
 
-    public static void invalidateSquadRoute(RegistryKey<World> worldKey, UUID groupId, BlockPos target) {
-        if (worldKey == null || groupId == null || target == null) {
-            return;
-        }
-        SQUAD_ROUTES.remove(new CacheKey(worldKey, groupId, quantize(target)));
-    }
+	private record CacheKey(ResourceKey<Level> worldKey, UUID groupId, BlockPos target, int reachRange) {
+	}
 
-    /**
-     * Creates a safe defensive copy of a path. PathNode instances are read-only
-     * structurally so sharing them is safe; only the Path wrapper (with its
-     * mutable currentNodeIndex) needs to be fresh.
-     */
-    private static Path copyPath(Path original) {
-        if (original == null) {
-            return null;
-        }
-
-        int length = original.getLength();
-        List<PathNode> nodes = new ArrayList<>(length);
-        for (int i = 0; i < length; i++) {
-            nodes.add(original.getNode(i));
-        }
-        return new Path(nodes, original.getTarget(), original.reachesTarget());
-    }
-
-    private static BlockPos quantize(BlockPos pos) {
-        return pos.toImmutable();
-    }
-
-    private record CacheKey(RegistryKey<World> worldKey, UUID groupId, BlockPos quantizedTarget) {
-    }
-
-    private record CachedRoute(Path path, long computeTick, BlockPos originPos, BlockPos targetPos) {
-    }
+	private record CachedRoute(Path path, long computeTick) {
+	}
 }

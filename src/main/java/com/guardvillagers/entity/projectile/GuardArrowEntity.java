@@ -1,51 +1,54 @@
 package com.guardvillagers.entity.projectile;
 
 import com.guardvillagers.entity.GuardEntity;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.projectile.ArrowEntity;
-import net.minecraft.item.ItemStack;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.hit.EntityHitResult;
-import net.minecraft.world.World;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.projectile.arrow.Arrow;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.EntityHitResult;
 
-public class GuardArrowEntity extends ArrowEntity {
-	public GuardArrowEntity(EntityType<? extends ArrowEntity> type, World world) {
+public class GuardArrowEntity extends Arrow {
+	public GuardArrowEntity(EntityType<? extends Arrow> type, Level world) {
 		super(type, world);
 	}
 
-	public GuardArrowEntity(World world, LivingEntity owner, ItemStack stack, ItemStack shotFrom) {
+	public GuardArrowEntity(Level world, LivingEntity owner, ItemStack stack, ItemStack shotFrom) {
 		super(world, owner, stack, shotFrom);
 	}
 
 	@Override
-	protected void onEntityHit(EntityHitResult entityHitResult) {
+	protected void onHitEntity(EntityHitResult entityHitResult) {
 		Entity hitEntity = entityHitResult.getEntity();
 		Entity owner = this.getOwner();
 		if (owner instanceof GuardEntity shooterGuard
-				&& shooterGuard.isAlly(hitEntity)
-				&& !this.isActiveHostileOwnerTarget(shooterGuard, hitEntity)) {
-			if (this.getEntityWorld() instanceof ServerWorld) {
+				&& (shooterGuard.isAlly(hitEntity) || this.isBystanderPlayer(shooterGuard, hitEntity))) {
+			if (this.level() instanceof ServerLevel) {
 				this.discard();
 			}
 			return;
 		}
-		super.onEntityHit(entityHitResult);
+		super.onHitEntity(entityHitResult);
 	}
 
-	private boolean isActiveHostileOwnerTarget(GuardEntity shooterGuard, Entity hitEntity) {
-		return hitEntity instanceof ServerPlayerEntity player
-				&& shooterGuard.getOwnerUuid() != null
-				&& shooterGuard.getOwnerUuid().equals(player.getUuid())
-				&& shooterGuard.getTarget() == hitEntity;
+	/**
+	 * A player the guard is not fighting. Unowned village guards treat every player as a non-ally
+	 * for targeting purposes, so without this a village bowman could hit a bystander standing in
+	 * the line of fire.
+	 */
+	private boolean isBystanderPlayer(GuardEntity shooterGuard, Entity hitEntity) {
+		return hitEntity instanceof Player && shooterGuard.getTarget() != hitEntity;
 	}
+
 
 	@Override
-	protected void onHit(LivingEntity target) {
-		super.onHit(target);
-		if (this.getEntityWorld() instanceof ServerWorld) {
+	protected void doPostHurtEffects(LivingEntity target) {
+		super.doPostHurtEffects(target);
+		if (this.level() instanceof ServerLevel) {
 			this.discard();
 		}
 	}

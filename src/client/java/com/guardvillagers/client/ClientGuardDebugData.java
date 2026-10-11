@@ -3,13 +3,12 @@ package com.guardvillagers.client;
 import com.guardvillagers.GuardSecurityLimits;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.network.GuardDebugDataPayload;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.util.math.BlockPos;
-
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.BlockPos;
 
 public final class ClientGuardDebugData {
 	private static final Map<Integer, GuardDebugSnapshot> SNAPSHOTS = new LinkedHashMap<>(16, 0.75F, true);
@@ -18,7 +17,7 @@ public final class ClientGuardDebugData {
 	private ClientGuardDebugData() {
 	}
 
-	public static void applyPayload(GuardDebugDataPayload payload, ClientWorld world) {
+	public static void applyPayload(GuardDebugDataPayload payload, ClientLevel world) {
 		if (!ClientDebugState.isEnabled() || world == null) {
 			clear();
 			return;
@@ -28,7 +27,7 @@ public final class ClientGuardDebugData {
 				removeSnapshot(entry.entityId());
 				continue;
 			}
-			if (!(world.getEntityById(entry.entityId()) instanceof GuardEntity)) {
+			if (!(world.getEntity(entry.entityId()) instanceof GuardEntity)) {
 				continue;
 			}
 			putSnapshot(entry.entityId(), new GuardDebugSnapshot(entry.pathNodes(), entry.currentPathIndex(), entry.targetEntityId()));
@@ -40,7 +39,7 @@ public final class ClientGuardDebugData {
 		return SNAPSHOTS.get(entityId);
 	}
 
-	public static void pruneMissing(ClientWorld world) {
+	public static void pruneMissing(ClientLevel world) {
 		if (world == null) {
 			clear();
 			return;
@@ -48,7 +47,7 @@ public final class ClientGuardDebugData {
 		Iterator<Map.Entry<Integer, GuardDebugSnapshot>> iterator = SNAPSHOTS.entrySet().iterator();
 		while (iterator.hasNext()) {
 			Map.Entry<Integer, GuardDebugSnapshot> entry = iterator.next();
-			if (world.getEntityById(entry.getKey()) == null) {
+			if (world.getEntity(entry.getKey()) == null) {
 				totalPathNodes -= entry.getValue().pathNodes().size();
 				iterator.remove();
 			}

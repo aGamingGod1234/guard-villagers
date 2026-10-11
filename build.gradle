@@ -1,5 +1,5 @@
 plugins {
-	id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
 	id 'maven-publish'
 }
 
@@ -17,6 +17,27 @@ repositories {
 	// See https://docs.gradle.org/current/userguide/declaring_repositories.html
 	// for more information about repositories.
 	mavenCentral()
+	// Simple Voice Chat plugin API (compile only; players install SVC themselves).
+	maven {
+		url = 'https://maven.maxhenkel.de/repository/public'
+		mavenContent { releasesOnly() }
+		content { includeGroup 'de.maxhenkel.voicechat' }
+	}
+	// Simple Voice Chat mod jar for dev runs only (runServer/runClient), never bundled.
+	maven {
+		name = 'Modrinth'
+		url = 'https://api.modrinth.com/maven'
+		content { includeGroup 'maven.modrinth' }
+	}
+}
+
+configurations {
+	// SVC is All Rights Reserved: it lives only on the dev run classpath, not in the jar or the gametest run.
+	voicechatDevRuntime {
+		canBeConsumed = false
+		canBeResolved = true
+		transitive = false
+	}
 }
 
 loom {
@@ -31,22 +52,64 @@ loom {
 
 }
 
+fabricApi {
+	configureTests {
+		createSourceSet = true
+		modId = "guardvillagers-gametest"
+		enableGameTests = true
+		enableClientGameTests = true
+		eula = true
+	}
+}
+
+// Opt-in server benchmark (src/gametest/.../perf). Off unless -Pperf is passed:
+//   ./gradlew runGameTest -Pperf                       all scenarios, results in build/perf/
+//   -PperfOnly=combat_128,follow_64                    run only scenarios with these name prefixes
+//   -PperfSizes=16,64,128 -PperfMeasure=600 -PperfWarmup=100 -PperfJitWarmup=200
+//   -PperfJfr                                          also record build/perf/guard-perf.jfr
+if (project.hasProperty('perf')) {
+	tasks.matching { it.name == 'runGameTest' }.configureEach {
+		def outDir = file('build/perf')
+		doFirst { outDir.mkdirs() }
+		systemProperty 'guardvillagers.perf', 'true'
+		systemProperty 'guardvillagers.perf.out', outDir.absolutePath
+		systemProperty 'fabric-api.gametest.filter', 'guardvillagers-gametest:guard_perf_benchmark*'
+		[perfOnly: 'only', perfSizes: 'sizes', perfMeasure: 'measure', perfWarmup: 'warmup', perfJitWarmup: 'jitwarmup'].each { prop, key ->
+			if (project.hasProperty(prop)) {
+				systemProperty "guardvillagers.perf.${key}", project.property(prop).toString()
+			}
+		}
+		if (project.hasProperty('perfJfr')) {
+			jvmArgs "-XX:StartFlightRecording=filename=${outDir.absolutePath}/guard-perf.jfr,settings=profile,dumponexit=true"
+		}
+	}
+}
+
 dependencies {
 	// To change the versions see the gradle.properties file
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
-	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 	testImplementation platform("org.junit:junit-bom:5.14.4")
 	testImplementation "org.junit.jupiter:junit-jupiter"
 	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
-	
+
+	// Optional Simple Voice Chat integration (com.guardvillagers.compat.voicechat only).
+	compileOnly "de.maxhenkel.voicechat:voicechat-api:2.6.20"
+	testImplementation "de.maxhenkel.voicechat:voicechat-api:2.6.20"
+	// voicechat-fabric 2.6.21+26.1.2 (Modrinth project 9eGKb6K1, version BvX8YEGO).
+	voicechatDevRuntime "maven.modrinth:9eGKb6K1:BvX8YEGO"
+
 }
 
 test {
 	useJUnitPlatform()
+}
+
+tasks.matching { it.name == 'runServer' || it.name == 'runClient' }.configureEach {
+	classpath(configurations.voicechatDevRuntime)
 }
 
 processResources {
@@ -58,7 +121,7 @@ processResources {
 }
 
 tasks.withType(JavaCompile).configureEach {
-	it.options.release = 21
+	it.options.release = 25
 }
 
 java {
@@ -67,8 +130,8 @@ java {
 	// If you remove this line, sources will not be generated.
 	withSourcesJar()
 
-	sourceCompatibility = JavaVersion.VERSION_21
-	targetCompatibility = JavaVersion.VERSION_21
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
 }
 
 jar {

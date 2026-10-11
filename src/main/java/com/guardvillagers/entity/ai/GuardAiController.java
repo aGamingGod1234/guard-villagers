@@ -3,98 +3,177 @@ package com.guardvillagers.entity.ai;
 import com.guardvillagers.GuardReputationManager;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.ai.RangedAttackMob;
-import net.minecraft.entity.attribute.EntityAttributes;
-import net.minecraft.entity.mob.HostileEntity;
-import net.minecraft.entity.passive.IronGolemEntity;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.entity.raid.RaiderEntity;
-import net.minecraft.item.Items;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.village.raid.Raid;
-
+import com.guardvillagers.entity.goal.GuardMeleeAttackGoal;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.EnumMap;
+import java.util.function.Predicate;
+import net.minecraft.world.level.entity.EntityTypeTest;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.animal.golem.IronGolem;
+import net.minecraft.world.entity.monster.Monster;
+import net.minecraft.world.entity.monster.Enemy;
+import net.minecraft.world.entity.monster.RangedAttackMob;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.raid.Raid;
+import net.minecraft.world.entity.raid.Raider;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
+/**
+ * Single authority for a guard's high-level decisions: which target to fight, and which intent
+ * (air, retreat, engage, rally, follow, return-to-land, behavior, idle) is active. Goals only
+ * execute the chosen intent.
+ *
+ * <p>Cost model (runs every tick for every guard): world entity scans happen every
+ * {@link #SCAN_INTERVAL_TICKS} ticks, staggered by entity id, and line-of-sight raycasts for scan
+ * candidates happen only at scan time. Per-tick work is validating a handful of cached candidates
+ * and scoring them, with reused collections.
+ */
 public final class GuardAiController {
 	private static final float RETREAT_ENTER_HEALTH_RATIO = 0.25F;
 	private static final float RETREAT_EXIT_HEALTH_RATIO = 0.40F;
 	private static final float ALERT_REJECTION_HEALTH_RATIO = 0.30F;
-	private static final int MIN_OWNER_ALERT_RANGE = 8;
+	private static final int MIN_ALLY_ALERT_RANGE = 8;
+	private static final double MAX_ALLY_ALERT_RANGE = 24.0D;
 	private static final int HOSTILE_SCAN_RANGE = 20;
 	private static final int RAID_SCAN_RANGE = 48;
+	private static final int SCAN_INTERVAL_TICKS = 10;
+	private static final int STATUS_INTERVAL_TICKS = 20;
+	private static final int MAX_SCANNED_HOSTILES = 4;
+	private static final int MAX_SCAN_SIGHT_CHECKS = 8;
 	private static final int TARGET_LOS_GRACE_TICKS = 40;
-	private static final int TARGET_STUCK_GRACE_TICKS = 60;
-	private static final double TARGET_PROGRESS_MIN_SQUARED = 0.01D;
-	private static final double TARGET_PROGRESS_RESET_DISTANCE_SQUARED = 9.0D;
+	private static final int TARGET_LOS_GRACE_MOVING_TICKS = 100;
+	private static final int PROGRESS_WINDOW_TICKS = 20;
+	private static final int TARGET_STUCK_WINDOWS = 4;
+	private static final double PROGRESS_MIN_DISTANCE = 0.5D;
+	private static final double CLOSE_COMBAT_DISTANCE_SQUARED = 9.0D;
+	private static final double BOW_HOLD_DISTANCE_SQUARED = 18.0D * 18.0D;
 	private static final int TARGET_SUPPRESSION_TICKS = 40;
-	private static final int OWNER_HOSTILITY_CHECK_RANGE_SQUARED = 256;
 	private static final int FOLLOW_HOME_EXIT_BUFFER = 8;
+	private static final int HOME_ANCHOR_SETTLE_MIN = 4;
+	private static final double FOLLOW_COMBAT_LEASH = 24.0D;
+	private static final double STAY_COMBAT_LEASH = 16.0D;
+	private static final int BROADCAST_INTERVAL_TICKS = 40;
+	private static final int ENGAGEMENT_REPORT_INTERVAL_TICKS = 10;
+	private static final double GOLEM_ALERT_RANGE = 24.0D;
+	private static final int CORNERED_TICKS = 40;
+	private static final double HOLD_MELEE_REACH = 3.0D;
+	private static final double HOLD_BOW_REACH = 16.0D;
+	private static final int CORNERED_FIGHT_TICKS = 100;
+	private static final double CROWD_EXCUSE_DISTANCE_SQUARED = 6.0D * 6.0D;
+	private static final int MAX_CROWD_EXCUSE_TICKS = 100;
 
-	private static final Comparator<TargetCandidate> TARGET_COMPARATOR = Comparator
-			.comparing(TargetCandidate::urgent)
-			.reversed()
-			.thenComparingInt(TargetCandidate::sourcePriority)
-			.reversed()
-			.thenComparingInt(TargetCandidate::threatPriority)
-			.reversed()
-			.thenComparing(TargetCandidate::sticky)
-			.reversed()
-			.thenComparingLong(TargetCandidate::latestTick)
-			.reversed()
-			.thenComparingDouble(TargetCandidate::distanceSq)
-			.thenComparing(candidate -> candidate.entity().getUuid());
+	/** Shared across all guards; entries expire so unloaded guards cannot leak. */
+	public static final GuardEngagementTracker ENGAGEMENTS = new GuardEngagementTracker(30, 4096);
 
 	private final GuardEntity guard;
 	private final List<GuardAlert> alerts = new ArrayList<>();
+	private final Map<AlertReason, Map<UUID, GuardAlert>> alertsByReason = new EnumMap<>(AlertReason.class);
+	private final Map<LivingEntity, TargetAccumulator> candidatesByEntity = new IdentityHashMap<>();
+	private final List<LivingEntity> hostileScanBuffer = new ArrayList<>();
+	private final List<Raider> raidScanBuffer = new ArrayList<>();
+	private final List<GuardEntity> broadcastBuffer = new ArrayList<>();
 	private final Map<UUID, Long> suppressedTargets = new HashMap<>();
+	private final List<TargetAccumulator> candidates = new ArrayList<>();
+	private final List<TargetAccumulator> accumulatorPool = new ArrayList<>();
+	private final List<LivingEntity> scannedHostiles = new ArrayList<>(MAX_SCANNED_HOSTILES);
 
 	private GuardAiIntent currentIntent = GuardAiIntent.IDLE;
 	private GuardBehaviorExecutor behaviorExecutor = GuardBehaviorExecutor.NONE;
+	private GuardHuntManager.Hunt huntOrder;
+	private LivingEntity huntTarget;
+	private long huntPickTick = Long.MIN_VALUE / 2;
 	private UUID mainTargetUuid;
 	private UUID urgentTargetUuid;
 	private int combatCooldown;
 	private int noSightTicks;
-	private int stuckTargetTicks;
-	private Vec3d lastProgressPos = Vec3d.ZERO;
+	private int progressWindowTicks;
+	private int stuckWindows;
+	private int crowdExcusedTicks;
+	private Vec3 progressSamplePos;
+	private double progressSampleTargetDistance = Double.MAX_VALUE;
 	private long lastAcceptedOwnerAlertTick = Long.MIN_VALUE;
 	private boolean combatSuspended;
 	private boolean retreating;
+	private boolean homeAnchorActive;
 	private BlockPos rallyPoint;
 	private int rallyTicks;
+	private boolean rallyExact;
+	private long rallyGeneration;
+	private boolean commanderRecovery;
+	private int corneredTicks;
+	private long retreatSuppressedUntil = Long.MIN_VALUE;
+
+	private LivingEntity scannedRaidTarget;
+	private Raid cachedRaid;
+	private boolean scanInitialized;
+	private int hostileScanCursor;
+	private int raidScanCursor;
+	private boolean statusInitialized;
+	private ServerPlayer followLeashOwner;
+
+	private UUID engagedTargetUuid;
+	private long lastEngagementReportTick = Long.MIN_VALUE;
+	private int engagementRank;
+	private UUID lastBroadcastTargetUuid;
+	private long lastBroadcastTick = Long.MIN_VALUE;
+
+	/** Drops shared state on server stop so the next world starts clean. */
+	public static void clearSessionState() {
+		ENGAGEMENTS.clear();
+	}
 
 	public GuardAiController(GuardEntity guard) {
 		this.guard = guard;
 	}
 
-	public void tick(ServerWorld world) {
-		this.tickTimers(world);
-		this.tickCombatTracking(world);
+	public void tick(ServerLevel world) {
+		long now = world.getGameTime();
+		if (this.commanderRecovery && (this.guard.getHealth() > this.guard.getMaxHealth() * 0.5F
+				|| this.guard.getOwnerUuid() == null
+				|| world.getServer().getPlayerList().getPlayer(this.guard.getOwnerUuid()) == null)) {
+			this.commanderRecovery = false;
+		}
+		this.tickTimers(world, now);
+		this.refreshStatus(world, now);
+		this.refreshScans(world, now);
+		this.tickCombatTracking(world, now);
 
-		Decision decision = this.computeDecision(world);
-		this.currentIntent = decision.intent();
-		this.behaviorExecutor = decision.behaviorExecutor();
-		this.mainTargetUuid = decision.mainTargetUuid();
-		this.urgentTargetUuid = decision.urgentTargetUuid();
-		this.retreating = decision.intent() == GuardAiIntent.RETREAT;
-		this.applyActiveTarget(decision.combatTarget());
+		LivingEntity combatTarget = this.selectTargets(world, now);
+		GuardAiIntent intent = this.selectIntent(world, combatTarget);
+		this.currentIntent = intent;
+		this.behaviorExecutor = intent == GuardAiIntent.BEHAVIOR_PATROL_OR_ANCHOR
+				? this.selectBehaviorExecutor()
+				: GuardBehaviorExecutor.NONE;
+		if (this.behaviorExecutor != GuardBehaviorExecutor.HOME_ANCHOR) {
+			this.homeAnchorActive = false;
+		}
+		this.retreating = intent == GuardAiIntent.RETREAT;
+		LivingEntity activeTarget = intent == GuardAiIntent.ENGAGE_TARGET ? combatTarget : null;
+		this.applyActiveTarget(activeTarget);
+		this.updateEngagement(activeTarget, now);
 
-		if (decision.intent() == GuardAiIntent.ENGAGE_TARGET && decision.combatTarget() != null) {
+		if (activeTarget != null) {
 			this.combatCooldown = Math.max(this.combatCooldown, 80);
-			if (this.guard.age % 20 == 0) {
-				this.broadcastToAlliedGuards(world, decision.combatTarget(), AlertReason.ALLY_BROADCAST, world.getTime());
+			if (!activeTarget.getUUID().equals(this.lastBroadcastTargetUuid)
+					|| now - this.lastBroadcastTick >= BROADCAST_INTERVAL_TICKS) {
+				this.lastBroadcastTargetUuid = activeTarget.getUUID();
+				this.lastBroadcastTick = now;
+				this.broadcastToAlliedGuards(world, activeTarget, now);
 			}
 		}
 	}
@@ -123,6 +202,17 @@ public final class GuardAiController {
 		return this.urgentTargetUuid;
 	}
 
+	/** How many other guards engaging the same target are closer to it (0 = closest). */
+	public int getEngagementRank() {
+		return this.engagementRank;
+	}
+
+	/** Forces owner/follow status to be recomputed next tick (after an order changes it). */
+	public void invalidateStatus() {
+		this.statusInitialized = false;
+		this.homeAnchorActive = false;
+	}
+
 	public boolean isCombatSuspended() {
 		return this.combatSuspended;
 	}
@@ -144,13 +234,13 @@ public final class GuardAiController {
 		return target != null && target.isAlive();
 	}
 
-	public LivingEntity getTrackedCombatTarget(ServerWorld world) {
+	public LivingEntity getTrackedCombatTarget(ServerLevel world) {
 		LivingEntity urgent = this.resolveEntity(world, this.urgentTargetUuid);
-		if (this.isTargetStillTrackable(urgent)) {
+		if (this.isTargetStillTrackable(urgent, true)) {
 			return urgent;
 		}
 		LivingEntity main = this.resolveEntity(world, this.mainTargetUuid);
-		return this.isTargetStillTrackable(main) ? main : null;
+		return this.isTargetStillTrackable(main, true) ? main : null;
 	}
 
 	public boolean isRetreating() {
@@ -162,15 +252,46 @@ public final class GuardAiController {
 	}
 
 	public void rallyTo(BlockPos rallyPoint, int ticks) {
+		this.rallyTo(rallyPoint, ticks, false);
+	}
+
+	/** @param exact stand on the rally block itself (index 0 of its own anchor) rather than a ring slot around it */
+	public void rallyTo(BlockPos rallyPoint, int ticks, boolean exact) {
 		if (rallyPoint == null) {
 			return;
 		}
-		this.rallyPoint = rallyPoint.toImmutable();
+		this.rallyGeneration++;
+		this.commanderRecovery = false;
+		this.rallyPoint = ticks > 0 ? rallyPoint.immutable() : null;
 		this.rallyTicks = Math.max(0, ticks);
+		this.rallyExact = exact;
+	}
+
+	public long getRallyGeneration() {
+		return this.rallyGeneration;
+	}
+
+	public void setCommanderRecovery(boolean recovering) {
+		if (recovering && !this.commanderRecovery) {
+			this.clearCombatTarget();
+		}
+		this.commanderRecovery = recovering;
+	}
+
+	public boolean isCommanderRecovering() {
+		return this.commanderRecovery;
+	}
+
+	public boolean isTargetSuppressed(UUID target) {
+		return this.isSuppressed(target, this.currentWorldTime());
 	}
 
 	public Optional<BlockPos> getRallyPoint() {
 		return Optional.ofNullable(this.rallyPoint);
+	}
+
+	public boolean isRallyExact() {
+		return this.rallyExact;
 	}
 
 	public boolean canExecuteBehaviorGoals() {
@@ -191,15 +312,37 @@ public final class GuardAiController {
 
 	public void clearCombatTarget() {
 		this.alerts.clear();
+		this.alertsByReason.clear();
 		this.suppressedTargets.clear();
+		this.scannedHostiles.clear();
+		this.scannedRaidTarget = null;
 		this.mainTargetUuid = null;
 		this.urgentTargetUuid = null;
 		this.combatCooldown = 0;
-		this.noSightTicks = 0;
-		this.stuckTargetTicks = 0;
-		this.lastProgressPos = this.guard.getEntityPos();
+		this.resetCombatTracking();
+		this.releaseEngagement();
 		this.guard.setTarget(null);
 		this.guard.getNavigation().stop();
+	}
+
+	/** Withdraw only the command's alert; damage, owner protection and hostile scans remain independent. */
+	public void clearPriorityTarget(UUID target) {
+		if (target == null) {
+			return;
+		}
+		this.removeAlerts(alert -> alert.targetUuid().equals(target) && alert.reason() == AlertReason.DIRECTIVE_PRIORITY);
+		boolean independentlyTracked = this.alerts.stream().anyMatch(alert -> alert.targetUuid().equals(target)
+				&& alert.expiresAt() > this.currentWorldTime());
+		if (!independentlyTracked) {
+			if (target.equals(this.mainTargetUuid)) this.mainTargetUuid = null;
+			if (target.equals(this.urgentTargetUuid)) this.urgentTargetUuid = null;
+			if (this.guard.getTarget() != null && target.equals(this.guard.getTarget().getUUID())) {
+				this.guard.setTarget(null);
+				this.guard.getNavigation().stop();
+				this.resetCombatTracking();
+				this.releaseEngagement();
+			}
+		}
 	}
 
 	public void setMainTarget(LivingEntity target) {
@@ -207,8 +350,7 @@ public final class GuardAiController {
 	}
 
 	public void setPriorityTarget(LivingEntity target) {
-		long alertTick = this.currentWorldTime();
-		this.ingestAlert(target, AlertReason.DIRECTIVE_PRIORITY, alertTick, true);
+		this.ingestAlert(target, AlertReason.DIRECTIVE_PRIORITY, this.currentWorldTime(), true);
 	}
 
 	public void receiveOwnerAttackAlert(LivingEntity target, long alertTick) {
@@ -229,84 +371,134 @@ public final class GuardAiController {
 		this.ingestAlert(target, AlertReason.ALLY_BROADCAST, alertTick, false);
 	}
 
-	public void receiveUrgentPeel(LivingEntity urgentThreat, ServerWorld world) {
-		if (!this.isValidCombatTarget(urgentThreat, false) || this.hasReachedPeelCap(world)) {
-			return;
+	/**
+	 * Peel order from an ally. The caller (the guard that was hit) enforces the group peel cap, so
+	 * this no longer runs its own entity scan per recipient.
+	 */
+	public boolean receiveUrgentPeel(LivingEntity urgentThreat, ServerLevel world) {
+		return this.ingestAlert(urgentThreat, AlertReason.URGENT_PEEL, world.getGameTime(), false);
+	}
+
+	/** Accepted alerts reserve a slot immediately, before target selection runs on the next tick. */
+	public boolean hasAcceptedPeel(ServerLevel world) {
+		long now = world.getGameTime();
+		for (GuardAlert alert : this.alerts) {
+			if (alert.reason().urgent() && alert.expiresAt() > now
+					&& !this.isSuppressed(alert.targetUuid(), now)
+					&& this.isTargetStillTrackable(this.resolveEntity(world, alert.targetUuid()), false)) {
+				return true;
+			}
 		}
-		this.ingestAlert(urgentThreat, AlertReason.URGENT_PEEL, world.getTime(), false);
+		return false;
 	}
 
 	public void receiveDamageAlert(LivingEntity attacker, long alertTick) {
-		if (!this.isValidCombatTarget(attacker, false)) {
+		// The hit guard's rally allocates urgent self-defense and allied peels from one group budget.
+		this.ingestAlert(attacker, AlertReason.DIRECT_DAMAGE, alertTick, true);
+	}
+
+	/** The commander must leave the entire live order alone, including gaps between kills. */
+	public boolean hasActiveHunt() {
+		return this.canAcceptOwnerAlert() && GuardHuntManager.get(this.guard) != null;
+	}
+
+	private void refreshHunt(long now) {
+		GuardHuntManager.Hunt order = this.canAcceptOwnerAlert() ? GuardHuntManager.get(this.guard) : null;
+		if (this.huntTarget != null && (order != this.huntOrder || !order.allows(this.huntTarget, this.guard)
+				|| !this.isTargetStillTrackable(this.huntTarget, true) || this.isSuppressed(this.huntTarget.getUUID(), now))) {
+			this.clearHuntTarget();
+		}
+		this.huntOrder = order;
+		if (order == null) return;
+		boolean betterOrder = this.alerts.stream().anyMatch(alert -> alert.expiresAt() > now
+				&& alert.reason().ownerDirected() && alert.reason().priority() > AlertReason.OWNER_ATTACK.priority());
+		if (betterOrder) {
+			this.clearHuntTarget();
 			return;
 		}
-		AlertReason reason = this.mainTargetUuid != null && !attacker.getUuid().equals(this.mainTargetUuid)
-				? AlertReason.URGENT_PEEL
-				: AlertReason.DIRECT_DAMAGE;
-		this.ingestAlert(attacker, reason, alertTick, true);
+		if (this.huntTarget != null || now - this.huntPickTick < SCAN_INTERVAL_TICKS) return;
+		this.huntPickTick = now;
+		double best = Double.MAX_VALUE;
+		for (LivingEntity target : order.targets()) {
+			if (!order.allows(target, this.guard) || !this.isTargetStillTrackable(target, true)
+					|| this.isSuppressed(target.getUUID(), now)) continue;
+			int engaged = ENGAGEMENTS.count(target.getUUID(), this.guard.getUUID(), now);
+			double score = engaged * 64.0D + this.guard.distanceTo(target);
+			if (score < best) { best = score; this.huntTarget = target; }
+		}
 	}
 
-	private Decision computeDecision(ServerWorld world) {
-		Map<UUID, TargetAccumulator> candidates = new HashMap<>();
+	private void clearHuntTarget() {
+		if (this.huntTarget == null) return;
+		UUID id = this.huntTarget.getUUID();
+		boolean independent = this.alerts.stream().anyMatch(alert -> alert.targetUuid().equals(id)
+				&& alert.expiresAt() > this.currentWorldTime());
+		if (!independent && this.guard.getTarget() == this.huntTarget) {
+			this.guard.setTarget(null);
+			this.guard.getNavigation().stop();
+			this.resetCombatTracking();
+			this.releaseEngagement();
+		}
+		if (id.equals(this.mainTargetUuid)) this.mainTargetUuid = null;
+		this.huntTarget = null;
+	}
+
+	private LivingEntity selectTargets(ServerLevel world, long now) {
+		this.releaseCandidates();
+		this.refreshHunt(now);
 		LivingEntity currentTarget = this.guard.getTarget();
-		this.addCandidate(candidates, currentTarget, AlertReason.CURRENT_TARGET, world.getTime(), true);
-
-		for (GuardAlert alert : this.alerts) {
-			LivingEntity entity = this.resolveEntity(world, alert.targetUuid());
-			this.addCandidate(candidates, entity, alert.reason(), alert.alertTick(), false);
+		this.addCandidate(currentTarget, AlertReason.CURRENT_TARGET, now, true);
+		if (this.huntTarget != null) this.addCandidate(this.huntTarget, AlertReason.OWNER_ATTACK, now, false);
+		for (int i = 0; i < this.alerts.size(); i++) {
+			GuardAlert alert = this.alerts.get(i);
+			this.addCandidate(this.resolveEntity(world, alert.targetUuid()), alert.reason(), alert.alertTick(), false);
+		}
+		this.addCandidate(this.scannedRaidTarget, AlertReason.RAID_TARGET, now, false);
+		for (int i = 0; i < this.scannedHostiles.size(); i++) {
+			this.addCandidate(this.scannedHostiles.get(i), AlertReason.HOSTILE_SCAN, now, false);
 		}
 
-		Raid raid = this.getActiveRaid(world);
-		this.addCandidate(candidates, this.findNearestRaidTarget(world), AlertReason.RAID_TARGET, world.getTime(), false);
-		this.addCandidate(candidates, this.findNearbyHostile(world), AlertReason.HOSTILE_SCAN, world.getTime(), false);
-		this.addCandidate(candidates, this.resolveOwnerHostilityTarget(world), AlertReason.OWNER_HOSTILE, world.getTime(), false);
-
-		List<TargetCandidate> sorted = new ArrayList<>(candidates.size());
-		for (TargetAccumulator accumulator : candidates.values()) {
-			sorted.add(accumulator.freeze());
-		}
-		sorted.sort(TARGET_COMPARATOR);
-
-		TargetCandidate selected = sorted.isEmpty() ? null : sorted.getFirst();
-		TargetCandidate urgent = null;
-		TargetCandidate primary = null;
-		for (TargetCandidate candidate : sorted) {
-			if (urgent == null && candidate.urgent()) {
-				urgent = candidate;
+		UUID self = this.guard.getUUID();
+		TargetAccumulator best = null;
+		TargetAccumulator bestUrgent = null;
+		TargetAccumulator bestPrimary = null;
+		for (int i = 0; i < this.candidates.size(); i++) {
+			TargetAccumulator candidate = this.candidates.get(i);
+			int engaged = ENGAGEMENTS.count(candidate.entity.getUUID(), self, now);
+			candidate.score = TargetScoring.score(candidate.urgent, candidate.ownerDirected, candidate.sourcePriority,
+					candidate.threatPriority,
+					candidate.sticky, candidate.distanceSq, engaged);
+			if (best == null || candidate.isBetterThan(best)) {
+				best = candidate;
 			}
-			if (primary == null && !candidate.urgent()) {
-				primary = candidate;
-			}
-			if (urgent != null && primary != null) {
-				break;
+			if (candidate.urgent) {
+				if (bestUrgent == null || candidate.isBetterThan(bestUrgent)) {
+					bestUrgent = candidate;
+				}
+			} else if (bestPrimary == null || candidate.isBetterThan(bestPrimary)) {
+				bestPrimary = candidate;
 			}
 		}
-		if (primary == null) {
-			primary = selected;
+		if (bestPrimary == null) {
+			bestPrimary = best;
 		}
-
-		LivingEntity combatTarget = selected == null || this.combatSuspended ? null : selected.entity();
-		GuardAiIntent intent = this.selectIntent(world, combatTarget, raid);
-		GuardBehaviorExecutor executor = intent == GuardAiIntent.BEHAVIOR_PATROL_OR_ANCHOR
-				? this.selectBehaviorExecutor(world, raid)
-				: GuardBehaviorExecutor.NONE;
-
-		return new Decision(
-				intent,
-				executor,
-				combatTarget,
-				primary == null ? null : primary.entity().getUuid(),
-				urgent == null ? null : urgent.entity().getUuid());
+		this.mainTargetUuid = bestPrimary == null ? null : bestPrimary.entity.getUUID();
+		this.urgentTargetUuid = bestUrgent == null ? null : bestUrgent.entity.getUUID();
+		return best == null || this.combatSuspended ? null : best.entity;
 	}
 
-	private GuardAiIntent selectIntent(ServerWorld world, LivingEntity combatTarget, Raid raid) {
+	private GuardAiIntent selectIntent(ServerLevel world, LivingEntity combatTarget) {
 		if (this.shouldSeekAir()) {
 			return GuardAiIntent.SEEK_AIR;
 		}
-		if (this.shouldReturnToLand()) {
-			return GuardAiIntent.RETURN_TO_LAND;
+		if (this.commanderRecovery) {
+			return this.rallyPoint != null && this.rallyTicks > 0 ? GuardAiIntent.RALLY : GuardAiIntent.IDLE;
 		}
-		if (this.shouldRetreat(combatTarget)) {
+		if (this.guard.isHoldingPosition()) {
+			// Hold: fight what is in reach, otherwise stand (IDLE re-centres on the hold block).
+			return combatTarget != null ? GuardAiIntent.ENGAGE_TARGET : GuardAiIntent.IDLE;
+		}
+		if (this.shouldRetreat(combatTarget, world.getGameTime())) {
 			return GuardAiIntent.RETREAT;
 		}
 		if (combatTarget != null) {
@@ -318,27 +510,47 @@ public final class GuardAiController {
 		if (this.shouldFollowOwner(world)) {
 			return GuardAiIntent.FOLLOW_OWNER;
 		}
-		if (this.selectBehaviorExecutor(world, raid) != GuardBehaviorExecutor.NONE) {
+		// Below follow/engage on purpose: a guard crossing a river behind its owner, or chasing a
+		// target through water, must not be dragged back to the bank it came from.
+		if (this.shouldReturnToLand()) {
+			return GuardAiIntent.RETURN_TO_LAND;
+		}
+		if (this.peekBehaviorExecutor() != GuardBehaviorExecutor.NONE) {
 			return GuardAiIntent.BEHAVIOR_PATROL_OR_ANCHOR;
 		}
 		return GuardAiIntent.IDLE;
 	}
 
-	private GuardBehaviorExecutor selectBehaviorExecutor(ServerWorld world, Raid raid) {
+	private GuardBehaviorExecutor peekBehaviorExecutor() {
+		boolean wasAnchoring = this.homeAnchorActive;
+		GuardBehaviorExecutor executor = this.selectBehaviorExecutor();
+		this.homeAnchorActive = wasAnchoring;
+		return executor;
+	}
+
+	private GuardBehaviorExecutor selectBehaviorExecutor() {
 		if (this.guard.isStaying()) {
 			return GuardBehaviorExecutor.NONE;
 		}
 
 		Optional<BlockPos> home = this.guard.getHome();
 		if (home.isPresent() && this.guard.getPatrolRadius() > 0 && !this.guard.hasFollowOverride()) {
-			int tetherRange = this.guard.getPatrolRadius() + FOLLOW_HOME_EXIT_BUFFER;
-			if (home.get().getSquaredDistance(this.guard.getBlockPos()) > (double) tetherRange * tetherRange) {
+			double distanceSq = home.get().distSqr(this.guard.blockPosition());
+			int radius = this.guard.getPatrolRadius();
+			// Hysteresis: start anchoring past radius + buffer, keep going until well inside, so a
+			// patrol point near the border cannot bounce the guard in and out every tick.
+			int threshold = this.homeAnchorActive
+					? Math.max(HOME_ANCHOR_SETTLE_MIN, radius / 2)
+					: radius + FOLLOW_HOME_EXIT_BUFFER;
+			if (distanceSq > (double) threshold * threshold) {
+				this.homeAnchorActive = true;
 				return GuardBehaviorExecutor.HOME_ANCHOR;
 			}
 		}
+		this.homeAnchorActive = false;
 
 		GuardBehavior behavior = this.guard.getBehavior();
-		if (raid != null) {
+		if (this.cachedRaid != null && this.cachedRaid.isActive()) {
 			if (behavior == GuardBehavior.OFFENSIVE) {
 				return GuardBehaviorExecutor.RAID_OFFENSIVE;
 			}
@@ -346,7 +558,6 @@ public final class GuardAiController {
 				return GuardBehaviorExecutor.RAID_DEFENSIVE;
 			}
 		}
-
 		if (behavior == GuardBehavior.PERIMETER) {
 			return GuardBehaviorExecutor.PERIMETER;
 		}
@@ -357,54 +568,92 @@ public final class GuardAiController {
 	}
 
 	private boolean shouldSeekAir() {
-		return this.guard.isSubmergedInWater() && this.guard.getAir() < 60;
+		return this.guard.isUnderWater() && this.guard.getAirSupply() < 60;
 	}
 
 	private boolean shouldReturnToLand() {
-		return this.guard.getLastLandPos() != null
-				&& this.guard.isTouchingWater()
-				&& (this.guard.isSubmergedInWater() || !this.guard.isOnGround());
+		return this.guard.isInWater() && (this.guard.isUnderWater() || !this.guard.onGround());
 	}
 
-	private boolean shouldRetreat(LivingEntity combatTarget) {
+	/**
+	 * Retreat at low health, except when cornered: if a threat stays within reach for
+	 * {@link #CORNERED_TICKS} while retreating, the guard turns and fights for a while instead of
+	 * dying with its back turned.
+	 */
+	private boolean shouldRetreat(LivingEntity combatTarget, long now) {
+		if (now < this.retreatSuppressedUntil) {
+			return false;
+		}
 		float currentHealth = this.guard.getHealth();
 		float maxHealth = this.guard.getMaxHealth();
-		if (this.currentIntent == GuardAiIntent.RETREAT) {
-			return currentHealth < maxHealth * RETREAT_EXIT_HEALTH_RATIO && (combatTarget != null || this.combatCooldown > 0);
+		boolean inDanger = combatTarget != null || this.combatCooldown > 0;
+		if (this.currentIntent != GuardAiIntent.RETREAT) {
+			this.corneredTicks = 0;
+			return currentHealth <= maxHealth * RETREAT_ENTER_HEALTH_RATIO && inDanger;
 		}
-		return currentHealth <= maxHealth * RETREAT_ENTER_HEALTH_RATIO && (combatTarget != null || this.combatCooldown > 0);
+		if (combatTarget != null && this.guard.distanceToSqr(combatTarget) <= CLOSE_COMBAT_DISTANCE_SQUARED) {
+			if (++this.corneredTicks > CORNERED_TICKS) {
+				this.corneredTicks = 0;
+				this.retreatSuppressedUntil = now + CORNERED_FIGHT_TICKS;
+				return false;
+			}
+		} else {
+			this.corneredTicks = 0;
+		}
+		return currentHealth < maxHealth * RETREAT_EXIT_HEALTH_RATIO && inDanger;
 	}
 
-	private boolean shouldFollowOwner(ServerWorld world) {
-		if (!this.guard.hasOwner() || this.guard.isStaying()) {
+	private boolean shouldFollowOwner(ServerLevel world) {
+		// Owned guards always follow their owner; reputation only gates hiring and village guards.
+		if (!this.guard.hasOwner() || this.guard.isStaying() || this.guard.isHoldingPosition()) {
 			return false;
 		}
-		ServerPlayerEntity owner = this.guard.resolveOnlineOwner(world);
+		ServerPlayer owner = this.guard.resolveOnlineOwner(world);
 		if (owner == null || owner.isSpectator()) {
-			return false;
-		}
-		if (!GuardReputationManager.isTrustedByGuards(world, this.guard.getOwnerUuid(), this.guard.getBlockPos())) {
 			return false;
 		}
 		return this.guard.hasFollowOverride() || this.guard.getHome().isEmpty();
 	}
 
 	private void applyActiveTarget(LivingEntity target) {
-		if (this.currentIntent != GuardAiIntent.ENGAGE_TARGET || target == null) {
-			this.guard.setTarget(null);
+		if (target == null) {
+			if (this.guard.getTarget() != null) {
+				this.guard.setTarget(null);
+			}
 			return;
 		}
-		if (this.isHostileOwnerTarget(target)) {
-			this.guard.setHostileOwnerTarget(target);
-		} else {
-			this.guard.setTarget(target);
+		this.guard.setTarget(target);
+	}
+
+	private void updateEngagement(LivingEntity target, long now) {
+		if (target == null) {
+			this.releaseEngagement();
+			return;
 		}
-		if (this.lastProgressPos == Vec3d.ZERO) {
-			this.lastProgressPos = this.guard.getEntityPos();
+		UUID targetUuid = target.getUUID();
+		if (!targetUuid.equals(this.engagedTargetUuid)) {
+			this.releaseEngagement();
+			this.engagedTargetUuid = targetUuid;
+			this.lastEngagementReportTick = Long.MIN_VALUE;
+		}
+		if (this.lastEngagementReportTick == Long.MIN_VALUE
+				|| now - this.lastEngagementReportTick >= ENGAGEMENT_REPORT_INTERVAL_TICKS) {
+			this.lastEngagementReportTick = now;
+			this.engagementRank = ENGAGEMENTS.report(targetUuid, this.guard.getUUID(), this.guard.distanceToSqr(target),
+					!this.guard.getMainHandItem().is(Items.BOW)
+							&& (!this.guard.isHoldingPosition() || this.guard.isWithinMeleeAttackRange(target)), now);
 		}
 	}
 
-	private void tickTimers(ServerWorld world) {
+	private void releaseEngagement() {
+		if (this.engagedTargetUuid != null) {
+			ENGAGEMENTS.release(this.engagedTargetUuid, this.guard.getUUID());
+			this.engagedTargetUuid = null;
+		}
+		this.engagementRank = 0;
+	}
+
+	private void tickTimers(ServerLevel world, long now) {
 		if (this.combatCooldown > 0) {
 			this.combatCooldown--;
 		}
@@ -416,62 +665,171 @@ public final class GuardAiController {
 			this.rallyPoint = null;
 		}
 
-		long now = world.getTime();
-		this.alerts.removeIf(alert -> alert.expiresAt() <= now || !this.isTargetStillTrackable(this.resolveEntity(world, alert.targetUuid())));
+		for (int i = this.alerts.size() - 1; i >= 0; i--) {
+			GuardAlert alert = this.alerts.get(i);
+			if (alert.expiresAt() <= now
+					|| !this.isTargetStillTrackable(this.resolveEntity(world, alert.targetUuid()), alert.reason().ownerDirected())) {
+				this.removeAlert(i);
+			}
+		}
 
-		Iterator<Map.Entry<UUID, Long>> iterator = this.suppressedTargets.entrySet().iterator();
-		while (iterator.hasNext()) {
-			if (iterator.next().getValue() <= now) {
-				iterator.remove();
+		if (!this.suppressedTargets.isEmpty()) {
+			Iterator<Map.Entry<UUID, Long>> iterator = this.suppressedTargets.entrySet().iterator();
+			while (iterator.hasNext()) {
+				if (iterator.next().getValue() <= now) {
+					iterator.remove();
+				}
 			}
 		}
 	}
 
-	private void tickCombatTracking(ServerWorld world) {
-		LivingEntity target = this.guard.getTarget();
-		if (!this.isTargetStillTrackable(target)) {
-			this.noSightTicks = 0;
-			this.stuckTargetTicks = 0;
-			this.lastProgressPos = this.guard.getEntityPos();
+	/** Owner trust / hostility / follow-leash anchor change slowly; refresh them once a second. */
+	private void refreshStatus(ServerLevel world, long now) {
+		if (this.statusInitialized && Math.floorMod(now + this.guard.getId(), STATUS_INTERVAL_TICKS) != 0) {
 			return;
 		}
-
-		if (this.guard.canSee(target) || this.guard.getGuardNavigation().isCrowdBlocked()) {
-			this.noSightTicks = 0;
-		} else if (++this.noSightTicks > TARGET_LOS_GRACE_TICKS) {
-			this.suppressTarget(target.getUuid(), world.getTime());
-			this.guard.setTarget(null);
-			this.noSightTicks = 0;
-			this.stuckTargetTicks = 0;
-			this.lastProgressPos = this.guard.getEntityPos();
+		this.statusInitialized = true;
+		UUID ownerUuid = this.guard.getOwnerUuid();
+		if (ownerUuid == null) {
+			this.followLeashOwner = null;
 			return;
 		}
+		boolean followMode = !this.guard.isStaying() && !this.guard.isHoldingPosition() && (this.guard.hasFollowOverride() || this.guard.getHome().isEmpty());
+		this.followLeashOwner = followMode ? this.guard.resolveOwner(world) : null;
+	}
 
-		if (this.guard.squaredDistanceTo(target) < TARGET_PROGRESS_RESET_DISTANCE_SQUARED) {
-			this.lastProgressPos = this.guard.getEntityPos();
-			this.stuckTargetTicks = 0;
+	/**
+	 * Entity scans, staggered by entity id. Line of sight rotates through distance-sorted candidates (a bounded
+	 * number of raycasts) instead of for every hostile on every tick.
+	 */
+	private void refreshScans(ServerLevel world, long now) {
+		if (this.scanInitialized && Math.floorMod(now + this.guard.getId(), SCAN_INTERVAL_TICKS) != 0) {
 			return;
 		}
+		this.scanInitialized = true;
+		this.scannedHostiles.clear();
+		this.scannedRaidTarget = null;
 
-		if (this.guard.getGuardNavigation().isCrowdBlocked()) {
-			this.lastProgressPos = this.guard.getEntityPos();
-			this.stuckTargetTicks = 0;
-			return;
-		}
-
-		if (this.guard.squaredDistanceTo(this.lastProgressPos) < TARGET_PROGRESS_MIN_SQUARED) {
-			if (++this.stuckTargetTicks > TARGET_STUCK_GRACE_TICKS) {
-				this.suppressTarget(target.getUuid(), world.getTime());
-				this.guard.setTarget(null);
-				this.noSightTicks = 0;
-				this.stuckTargetTicks = 0;
-				this.lastProgressPos = this.guard.getEntityPos();
+		Raid raid = world.getRaidAt(this.guard.blockPosition());
+		this.cachedRaid = raid != null && raid.isActive() ? raid : null;
+		if (this.cachedRaid != null) {
+			List<Raider> raiders = this.raidScanBuffer;
+			raiders.clear();
+			world.getEntities(
+					EntityTypeTest.forClass(Raider.class),
+					this.guard.getBoundingBox().inflate(RAID_SCAN_RANGE),
+					entity -> this.isTargetStillTrackable(entity, false) && !this.isSuppressed(entity.getUUID(), now), raiders);
+			raiders.sort((a, b) -> Double.compare(this.guard.distanceToSqr(a), this.guard.distanceToSqr(b)));
+			for (int checks = 0; checks < Math.min(MAX_SCAN_SIGHT_CHECKS, raiders.size()); checks++) {
+				this.raidScanCursor = Math.floorMod(this.raidScanCursor, raiders.size());
+				Raider raider = raiders.get(this.raidScanCursor++);
+				if (this.guard.getSensing().hasLineOfSight(raider)) {
+					this.scannedRaidTarget = raider;
+					break;
+				}
 			}
+		}
+
+		List<LivingEntity> hostiles = this.hostileScanBuffer;
+		hostiles.clear();
+		world.getEntities(
+				EntityTypeTest.forClass(LivingEntity.class),
+				this.guard.getBoundingBox().inflate(HOSTILE_SCAN_RANGE),
+				entity -> (entity instanceof Monster
+						|| (!this.guard.hasOwner() && entity instanceof Player
+								&& GuardReputationManager.shouldGuardsTurnHostile(world, entity.getUUID(), this.guard.blockPosition())))
+						&& this.isTargetStillTrackable(entity, false) && !this.isSuppressed(entity.getUUID(), now), hostiles);
+		if (hostiles.isEmpty()) {
+			return;
+		}
+		hostiles.sort((a, b) -> Double.compare(this.guard.distanceToSqr(a), this.guard.distanceToSqr(b)));
+		for (int checks = 0; checks < Math.min(MAX_SCAN_SIGHT_CHECKS, hostiles.size())
+				&& this.scannedHostiles.size() < MAX_SCANNED_HOSTILES; checks++) {
+			this.hostileScanCursor = Math.floorMod(this.hostileScanCursor, hostiles.size());
+			LivingEntity hostile = hostiles.get(this.hostileScanCursor++);
+			if (this.guard.getSensing().hasLineOfSight(hostile)) {
+				this.scannedHostiles.add(hostile);
+			}
+		}
+	}
+
+	/**
+	 * Drops a target the guard cannot see or make progress toward. A bowman holding position with
+	 * sight, or a guard in close combat, is not "stuck"; LOS loss is tolerated longer while the
+	 * guard is actually moving along a path (e.g. around a house).
+	 */
+	private void tickCombatTracking(ServerLevel world, long now) {
+		LivingEntity target = this.guard.getTarget();
+		if (!this.isTargetStillTrackable(target, true)) {
+			this.resetCombatTracking();
 			return;
 		}
 
-		this.lastProgressPos = this.guard.getEntityPos();
-		this.stuckTargetTicks = 0;
+		boolean hasSight = this.guard.getSensing().hasLineOfSight(target);
+		double distanceSq = this.guard.distanceToSqr(target);
+		boolean moving = this.guard.getNavigation().isInProgress();
+		// A crowd only excuses a stall next to the fight, and covers lost sight only for a while: a
+		// squad clumped against a wall in front of a target it could not reach used to keep that
+		// target forever, because the jam reset the sight timer and counted as holding position.
+		boolean crowdBlocked = distanceSq <= CROWD_EXCUSE_DISTANCE_SQUARED
+				&& this.guard.getGuardNavigation().isCrowdBlocked();
+		if (!crowdBlocked || hasSight) {
+			this.crowdExcusedTicks = 0;
+		} else {
+			crowdBlocked = ++this.crowdExcusedTicks <= MAX_CROWD_EXCUSE_TICKS;
+		}
+
+		if (hasSight || crowdBlocked) {
+			this.noSightTicks = 0;
+		} else if (++this.noSightTicks > (moving ? TARGET_LOS_GRACE_MOVING_TICKS : TARGET_LOS_GRACE_TICKS)) {
+			this.dropTarget(target, now);
+			return;
+		}
+
+		boolean holdingPosition = distanceSq <= CLOSE_COMBAT_DISTANCE_SQUARED
+				|| (hasSight && this.guard.getMainHandItem().is(Items.BOW) && distanceSq <= BOW_HOLD_DISTANCE_SQUARED)
+				|| (hasSight && GuardMeleeAttackGoal.holdsSupportLine(this.guard, distanceSq))
+				|| crowdBlocked;
+		if (holdingPosition || this.progressSamplePos == null) {
+			this.startProgressWindow(distanceSq);
+			return;
+		}
+		if (++this.progressWindowTicks < PROGRESS_WINDOW_TICKS) {
+			return;
+		}
+		double moved = Math.sqrt(this.guard.distanceToSqr(this.progressSamplePos));
+		double closed = Math.sqrt(this.progressSampleTargetDistance) - Math.sqrt(distanceSq);
+		if (moved >= PROGRESS_MIN_DISTANCE || closed >= PROGRESS_MIN_DISTANCE) {
+			this.stuckWindows = 0;
+		} else if (++this.stuckWindows >= TARGET_STUCK_WINDOWS) {
+			this.dropTarget(target, now);
+			return;
+		}
+		this.progressWindowTicks = 0;
+		this.progressSamplePos = this.guard.position();
+		this.progressSampleTargetDistance = distanceSq;
+	}
+
+	private void startProgressWindow(double distanceSq) {
+		this.progressWindowTicks = 0;
+		this.stuckWindows = 0;
+		this.progressSamplePos = this.guard.position();
+		this.progressSampleTargetDistance = distanceSq;
+	}
+
+	private void resetCombatTracking() {
+		this.noSightTicks = 0;
+		this.crowdExcusedTicks = 0;
+		this.progressWindowTicks = 0;
+		this.stuckWindows = 0;
+		this.progressSamplePos = null;
+		this.progressSampleTargetDistance = Double.MAX_VALUE;
+	}
+
+	private void dropTarget(LivingEntity target, long now) {
+		this.suppressTarget(target.getUUID(), now);
+		this.guard.setTarget(null);
+		this.resetCombatTracking();
 	}
 
 	private void suppressTarget(UUID targetUuid, long currentTick) {
@@ -479,7 +837,11 @@ public final class GuardAiController {
 			return;
 		}
 		this.suppressedTargets.put(targetUuid, currentTick + TARGET_SUPPRESSION_TICKS);
-		this.alerts.removeIf(alert -> targetUuid.equals(alert.targetUuid()));
+		this.removeAlerts(alert -> targetUuid.equals(alert.targetUuid()));
+		this.scannedHostiles.removeIf(entity -> targetUuid.equals(entity.getUUID()));
+		if (this.scannedRaidTarget != null && targetUuid.equals(this.scannedRaidTarget.getUUID())) {
+			this.scannedRaidTarget = null;
+		}
 		if (targetUuid.equals(this.mainTargetUuid)) {
 			this.mainTargetUuid = null;
 		}
@@ -488,150 +850,126 @@ public final class GuardAiController {
 		}
 	}
 
-	private void ingestAlert(LivingEntity target, AlertReason reason, long alertTick, boolean clearSuppression) {
-		if (!this.isValidCombatTarget(target, reason.requiresSight())) {
-			return;
+	private boolean ingestAlert(LivingEntity target, AlertReason reason, long alertTick, boolean clearSuppression) {
+		if (!this.isTargetStillTrackable(target, reason.ownerDirected())) {
+			return false;
 		}
 		if (reason.ownerDirected() && alertTick < this.lastAcceptedOwnerAlertTick) {
-			return;
+			return false;
 		}
-
+		UUID targetUuid = target.getUUID();
 		if (clearSuppression) {
-			this.suppressedTargets.remove(target.getUuid());
+			this.suppressedTargets.remove(targetUuid);
+		} else if (this.isSuppressed(targetUuid, alertTick)) {
+			return false;
 		}
 
 		long expiresAt = alertTick + reason.ttlTicks();
-		for (int i = 0; i < this.alerts.size(); i++) {
-			GuardAlert existing = this.alerts.get(i);
-			if (existing.targetUuid().equals(target.getUuid()) && existing.reason() == reason) {
-				this.alerts.set(i, new GuardAlert(target.getUuid(), reason, alertTick, Math.max(existing.expiresAt(), expiresAt)));
-				this.combatCooldown = Math.max(this.combatCooldown, reason.cooldownTicks());
-				if (reason.ownerDirected()) {
-					this.lastAcceptedOwnerAlertTick = Math.max(this.lastAcceptedOwnerAlertTick, alertTick);
-				}
-				return;
-			}
-		}
-
-		this.alerts.add(new GuardAlert(target.getUuid(), reason, alertTick, expiresAt));
 		this.combatCooldown = Math.max(this.combatCooldown, reason.cooldownTicks());
 		if (reason.ownerDirected()) {
 			this.lastAcceptedOwnerAlertTick = Math.max(this.lastAcceptedOwnerAlertTick, alertTick);
 		}
-	}
-
-	private void addCandidate(Map<UUID, TargetAccumulator> candidates, LivingEntity entity, AlertReason reason, long tick, boolean sticky) {
-		if (!this.isValidCombatTarget(entity, reason)) {
-			return;
-		}
-		TargetAccumulator accumulator = candidates.computeIfAbsent(entity.getUuid(), uuid -> new TargetAccumulator(entity));
-		accumulator.include(reason, this.guard.squaredDistanceTo(entity), tick, sticky, this.scoreThreat(entity));
-	}
-
-	private LivingEntity findNearbyHostile(ServerWorld world) {
-		Box searchBox = this.guard.getBoundingBox().expand(HOSTILE_SCAN_RANGE);
-		List<HostileEntity> hostiles = world.getEntitiesByClass(
-				HostileEntity.class,
-				searchBox,
-				entity -> this.isValidCombatTarget(entity, true));
-		if (hostiles.isEmpty()) {
-			return null;
-		}
-		hostiles.sort(Comparator
-				.comparingInt((HostileEntity entity) -> this.scoreThreat(entity))
-				.reversed()
-				.thenComparingDouble((HostileEntity entity) -> this.guard.squaredDistanceTo(entity))
-				.thenComparing(entity -> entity.getUuid()));
-		return hostiles.getFirst();
-	}
-
-	private LivingEntity findNearestRaidTarget(ServerWorld world) {
-		if (this.getActiveRaid(world) == null) {
-			return null;
-		}
-		List<RaiderEntity> raiders = world.getEntitiesByClass(
-				RaiderEntity.class,
-				this.guard.getBoundingBox().expand(RAID_SCAN_RANGE),
-				entity -> this.isValidCombatTarget(entity, true));
-		if (raiders.isEmpty()) {
-			return null;
-		}
-		raiders.sort(Comparator
-				.comparingDouble((RaiderEntity entity) -> this.guard.squaredDistanceTo(entity))
-				.thenComparing(entity -> entity.getUuid()));
-		return raiders.getFirst();
-	}
-
-	private LivingEntity resolveOwnerHostilityTarget(ServerWorld world) {
-		UUID ownerUuid = this.guard.getOwnerUuid();
-		if (ownerUuid == null) {
-			return null;
-		}
-		if (!GuardReputationManager.shouldGuardsTurnHostile(world, ownerUuid, this.guard.getBlockPos())) {
-			return null;
-		}
-		ServerPlayerEntity owner = this.guard.resolveOwner(world);
-		if (owner == null || owner.getAbilities().creativeMode) {
-			return null;
-		}
-		if (this.guard.squaredDistanceTo(owner) > OWNER_HOSTILITY_CHECK_RANGE_SQUARED) {
-			return null;
-		}
-		return owner;
-	}
-
-	private Raid getActiveRaid(ServerWorld world) {
-		Raid raid = world.getRaidAt(this.guard.getBlockPos());
-		return raid != null && raid.isActive() ? raid : null;
-	}
-
-	private boolean isValidCombatTarget(LivingEntity target, boolean requiresSight) {
-		if (!this.isTargetStillTrackable(target)) {
-			return false;
-		}
-		if (requiresSight && !this.guard.canSee(target)) {
-			return false;
-		}
-		Long suppressedUntil = this.suppressedTargets.get(target.getUuid());
-		return suppressedUntil == null || suppressedUntil <= this.currentWorldTime();
-	}
-
-	private boolean isHostileOwnerTarget(LivingEntity target) {
-		return target instanceof ServerPlayerEntity player
-				&& this.guard.getOwnerUuid() != null
-				&& this.guard.getOwnerUuid().equals(player.getUuid())
-				&& target.isAlive()
-				&& !target.isRemoved()
-				&& this.guard.canTargetWithinZone(target.getBlockPos());
-	}
-
-	private boolean isTargetStillTrackable(LivingEntity target) {
-		return target != null
-				&& target.isAlive()
-				&& !target.isRemoved()
-				&& !this.guard.isAlly(target)
-				&& this.guard.canTargetWithinZone(target.getBlockPos());
-	}
-
-	private boolean isTargetStillTrackable(LivingEntity target, AlertReason reason) {
-		if (reason == AlertReason.OWNER_HOSTILE && this.isHostileOwnerTarget(target)) {
+		Map<UUID, GuardAlert> byTarget = this.alertsByReason.computeIfAbsent(reason, ignored -> new HashMap<>());
+		GuardAlert existing = byTarget.get(targetUuid);
+		if (existing != null) {
+			existing.alertTick = alertTick;
+			existing.expiresAt = Math.max(existing.expiresAt, expiresAt);
 			return true;
 		}
-		return this.isTargetStillTrackable(target);
+		GuardAlert alert = new GuardAlert(targetUuid, reason, alertTick, expiresAt);
+		byTarget.put(targetUuid, alert);
+		this.alerts.add(alert);
+		return true;
 	}
 
-	private boolean isValidCombatTarget(LivingEntity target, AlertReason reason) {
-		if (!this.isTargetStillTrackable(target, reason)) {
-			return false;
-		}
-		if (reason.requiresSight() && !this.guard.canSee(target)) {
-			return false;
-		}
-		Long suppressedUntil = this.suppressedTargets.get(target.getUuid());
-		return suppressedUntil == null || suppressedUntil <= this.currentWorldTime();
+	private void removeAlert(int index) {
+		GuardAlert removed = this.alerts.remove(index);
+		this.alertsByReason.get(removed.reason()).remove(removed.targetUuid());
 	}
 
-	private LivingEntity resolveEntity(ServerWorld world, UUID uuid) {
+	private void removeAlerts(Predicate<GuardAlert> predicate) {
+		for (int i = this.alerts.size() - 1; i >= 0; i--) {
+			if (predicate.test(this.alerts.get(i))) this.removeAlert(i);
+		}
+	}
+
+	private void addCandidate(LivingEntity entity, AlertReason reason, long tick, boolean sticky) {
+		if (entity == null) {
+			return;
+		}
+		if (!this.isTargetStillTrackable(entity, reason.ownerDirected()) || this.isSuppressed(entity.getUUID(), tick)) {
+			return;
+		}
+		TargetAccumulator accumulator = this.candidatesByEntity.get(entity);
+		if (accumulator == null) {
+			accumulator = this.acquireAccumulator(entity, this.guard.distanceToSqr(entity), this.scoreThreat(entity));
+			this.candidates.add(accumulator);
+			this.candidatesByEntity.put(entity, accumulator);
+		}
+		accumulator.include(reason, tick, sticky);
+	}
+
+	private TargetAccumulator acquireAccumulator(LivingEntity entity, double distanceSq, int threat) {
+		TargetAccumulator accumulator = this.accumulatorPool.isEmpty()
+				? new TargetAccumulator()
+				: this.accumulatorPool.removeLast();
+		accumulator.reset(entity, distanceSq, threat);
+		return accumulator;
+	}
+
+	private void releaseCandidates() {
+		for (int i = 0; i < this.candidates.size(); i++) {
+			this.candidates.get(i).entity = null;
+			this.accumulatorPool.add(this.candidates.get(i));
+		}
+		this.candidates.clear();
+		this.candidatesByEntity.clear();
+	}
+
+
+	private boolean isSuppressed(UUID uuid, long now) {
+		if (this.suppressedTargets.isEmpty()) {
+			return false;
+		}
+		Long suppressedUntil = this.suppressedTargets.get(uuid);
+		return suppressedUntil != null && suppressedUntil > now;
+	}
+
+
+	/**
+	 * Alive, not an ally, inside the home zone, and inside the guard's leash: within
+	 * {@link #FOLLOW_COMBAT_LEASH} of the owner while following (unless the owner directed the
+	 * attack), or within {@link #STAY_COMBAT_LEASH} of the stay point while staying.
+	 */
+	private boolean isTargetStillTrackable(LivingEntity target, boolean ownerDirected) {
+		// attackable()/canBeSeenAsEnemy(): owner alerts used to lock guards onto armor stands,
+		// invulnerable mobs and invisible-to-all entities they can never damage.
+		if (target == null || !target.isAlive() || target.isRemoved() || target.level() != this.guard.level()
+				|| !target.attackable() || !target.canBeSeenAsEnemy()
+				|| this.guard.isAlly(target) || !this.guard.canTargetWithinZone(target.blockPosition())) {
+			return false;
+		}
+		if (this.guard.isHoldingPosition()) {
+			double reach = this.guard.getMainHandItem().is(Items.BOW) ? HOLD_BOW_REACH : HOLD_MELEE_REACH;
+			if (this.guard.distanceToSqr(target) > reach * reach) {
+				return false;
+			}
+		}
+		if (this.guard.isStaying() && this.rallyTicks <= 0) {
+			BlockPos stayOrigin = this.guard.getStayOrigin();
+			if (stayOrigin != null && stayOrigin.distToCenterSqr(target.position()) > STAY_COMBAT_LEASH * STAY_COMBAT_LEASH) {
+				return false;
+			}
+		}
+		ServerPlayer leashOwner = this.followLeashOwner;
+		if (!ownerDirected && leashOwner != null && !leashOwner.isRemoved() && leashOwner.level() == target.level()
+				&& leashOwner.distanceToSqr(target) > FOLLOW_COMBAT_LEASH * FOLLOW_COMBAT_LEASH) {
+			return false;
+		}
+		return true;
+	}
+
+	private LivingEntity resolveEntity(ServerLevel world, UUID uuid) {
 		if (uuid == null) {
 			return null;
 		}
@@ -648,98 +986,100 @@ public final class GuardAiController {
 
 	private int scoreThreat(LivingEntity target) {
 		int score = this.guard.scoreTarget(target);
-		if (target instanceof RaiderEntity) {
+		if (target instanceof Raider) {
 			score += 20;
 		}
 		if (target instanceof RangedAttackMob
-				|| target.getMainHandStack().isOf(Items.BOW)
-				|| target.getMainHandStack().isOf(Items.CROSSBOW)
-				|| target.getMainHandStack().isOf(Items.TRIDENT)) {
+				|| target.getMainHandItem().is(Items.BOW)
+				|| target.getMainHandItem().is(Items.CROSSBOW)
+				|| target.getMainHandItem().is(Items.TRIDENT)) {
 			score += 5;
 		}
 		return score;
 	}
 
-	private boolean hasReachedPeelCap(ServerWorld world) {
-		int groupSize = 1;
-		int peeling = 0;
-		double range = Math.max(MIN_OWNER_ALERT_RANGE, this.guard.getAttributeValue(EntityAttributes.FOLLOW_RANGE));
-		for (GuardEntity other : world.getEntitiesByClass(
-				GuardEntity.class,
-				this.guard.getBoundingBox().expand(range),
-				entity -> entity != this.guard && entity.isAlive() && this.guard.isSameGroup(entity))) {
-			groupSize++;
-			if (other.getUrgentTargetUuid() != null) {
-				peeling++;
-			}
-			// Early exit: once peeling reaches the maximum possible cap (10), no need to continue
-			if (peeling >= 10) {
-				return true;
-			}
-		}
-		int peelCap = Math.max(1, Math.min(10, groupSize * 30 / 100));
-		return peeling >= peelCap;
-	}
-
-	private void broadcastToAlliedGuards(ServerWorld world, LivingEntity target, AlertReason reason, long alertTick) {
-		if (!this.isTargetStillTrackable(target)) {
+	private void broadcastToAlliedGuards(ServerLevel world, LivingEntity target, long alertTick) {
+		// A scoped command is not evidence that every allied guard should attack the same entity.
+		// Sharing only independent threats prevents an order from returning through allied-alert echoes.
+		if (target == this.huntTarget) return;
+		if (!(target instanceof Enemy) && this.alerts.stream().noneMatch(alert -> alert.targetUuid().equals(target.getUUID())
+				&& alert.expiresAt() > alertTick && alert.reason() != AlertReason.DIRECTIVE_PRIORITY
+				&& alert.reason() != AlertReason.DIRECTIVE_PRIMARY && alert.reason() != AlertReason.ALLY_BROADCAST)) {
 			return;
 		}
-
-		double range = Math.max(MIN_OWNER_ALERT_RANGE, this.guard.getAttributeValue(EntityAttributes.FOLLOW_RANGE));
+		double range = Mth.clamp(this.guard.getAttributeValue(Attributes.FOLLOW_RANGE), MIN_ALLY_ALERT_RANGE,
+				MAX_ALLY_ALERT_RANGE);
 		double rangeSq = range * range;
-		for (GuardEntity other : world.getEntitiesByClass(
-				GuardEntity.class,
-				this.guard.getBoundingBox().expand(range),
+		this.broadcastBuffer.clear();
+		world.getEntities(
+				EntityTypeTest.forClass(GuardEntity.class),
+				this.guard.getBoundingBox().inflate(range),
 				entity -> entity != this.guard
 						&& entity.isAlive()
-						&& entity.squaredDistanceTo(this.guard) <= rangeSq
-						&& this.guard.isSameGroup(entity))) {
+						&& entity.getTarget() != target
+						&& entity.distanceToSqr(this.guard) <= rangeSq
+						&& this.guard.isSameGroup(entity), this.broadcastBuffer);
+		for (GuardEntity other : this.broadcastBuffer) {
 			other.receiveAlliedAlert(target, alertTick);
 		}
 
-		if (target instanceof HostileEntity || target instanceof RaiderEntity) {
-			for (IronGolemEntity golem : world.getEntitiesByClass(
-					IronGolemEntity.class,
-					this.guard.getBoundingBox().expand(24.0D),
-					LivingEntity::isAlive)) {
+		if (target instanceof Monster || target instanceof Raider) {
+			for (IronGolem golem : world.getEntitiesOfClass(
+					IronGolem.class,
+					this.guard.getBoundingBox().inflate(GOLEM_ALERT_RANGE),
+					golem -> golem.isAlive() && golem.getTarget() == null)) {
 				golem.setTarget(target);
 			}
 		}
 	}
 
 	private long currentWorldTime() {
-		return this.guard.getEntityWorld() instanceof ServerWorld world ? world.getTime() : Long.MIN_VALUE;
+		return this.guard.level() instanceof ServerLevel world ? world.getGameTime() : Long.MIN_VALUE;
 	}
 
-	private record GuardAlert(UUID targetUuid, AlertReason reason, long alertTick, long expiresAt) {
+	private static final class GuardAlert {
+		private final UUID targetUuid;
+		private final AlertReason reason;
+		private long alertTick;
+		private long expiresAt;
+
+		private GuardAlert(UUID targetUuid, AlertReason reason, long alertTick, long expiresAt) {
+			this.targetUuid = targetUuid;
+			this.reason = reason;
+			this.alertTick = alertTick;
+			this.expiresAt = expiresAt;
+		}
+
+		UUID targetUuid() { return this.targetUuid; }
+		AlertReason reason() { return this.reason; }
+		long alertTick() { return this.alertTick; }
+		long expiresAt() { return this.expiresAt; }
 	}
 
 	private enum AlertReason {
-		DIRECTIVE_PRIMARY(85, 120, false, false, false, 100),
-		DIRECTIVE_PRIORITY(92, 140, false, false, true, 120),
-		OWNER_DAMAGED(90, 140, false, false, true, 120),
-		OWNER_ATTACK(88, 120, false, false, true, 100),
-		DIRECT_DAMAGE(95, 160, false, false, false, 160),
-		URGENT_PEEL(100, 120, true, false, false, 120),
-		ALLY_BROADCAST(80, 100, false, false, false, 100),
-		OWNER_HOSTILE(82, 100, false, true, false, 100),
-		RAID_TARGET(76, 40, false, true, false, 80),
-		HOSTILE_SCAN(70, 20, false, true, false, 80),
-		CURRENT_TARGET(84, 20, false, false, false, 80);
+		DIRECTIVE_PRIMARY(85, 120, false, false, 100),
+		DIRECTIVE_PRIORITY(92, 140, false, true, 120),
+		OWNER_DAMAGED(90, 140, false, true, 120),
+		OWNER_ATTACK(88, 120, false, true, 100),
+		DIRECT_DAMAGE(95, 160, false, false, 160),
+		URGENT_PEEL(100, 120, true, false, 120),
+		ALLY_BROADCAST(80, 100, false, false, 100),
+		RAID_TARGET(76, 40, false, false, 80),
+		HOSTILE_SCAN(70, 20, false, false, 80),
+		// Stickiness comes from TargetScoring.STICKY_BONUS; the source itself ranks below allied
+		// alerts so a better-sourced target can still take over.
+		CURRENT_TARGET(78, 20, false, false, 80);
 
 		private final int priority;
 		private final int ttlTicks;
 		private final boolean urgent;
-		private final boolean requiresSight;
 		private final boolean ownerDirected;
 		private final int cooldownTicks;
 
-		AlertReason(int priority, int ttlTicks, boolean urgent, boolean requiresSight, boolean ownerDirected, int cooldownTicks) {
+		AlertReason(int priority, int ttlTicks, boolean urgent, boolean ownerDirected, int cooldownTicks) {
 			this.priority = priority;
 			this.ttlTicks = ttlTicks;
 			this.urgent = urgent;
-			this.requiresSight = requiresSight;
 			this.ownerDirected = ownerDirected;
 			this.cooldownTicks = cooldownTicks;
 		}
@@ -756,10 +1096,6 @@ public final class GuardAiController {
 			return this.urgent;
 		}
 
-		public boolean requiresSight() {
-			return this.requiresSight;
-		}
-
 		public boolean ownerDirected() {
 			return this.ownerDirected;
 		}
@@ -770,54 +1106,50 @@ public final class GuardAiController {
 	}
 
 	private static final class TargetAccumulator {
-		private final LivingEntity entity;
+		private LivingEntity entity;
 		private boolean urgent;
+		private boolean ownerDirected;
 		private boolean sticky;
 		private int sourcePriority;
 		private int threatPriority;
-		private double distanceSq = Double.MAX_VALUE;
-		private long latestTick = Long.MIN_VALUE;
+		private double distanceSq;
+		private long latestTick;
+		private int score;
 
-		private TargetAccumulator(LivingEntity entity) {
+		private void reset(LivingEntity entity, double distanceSq, int threatPriority) {
 			this.entity = entity;
+			this.urgent = false;
+			this.ownerDirected = false;
+			this.sticky = false;
+			this.sourcePriority = 0;
+			this.threatPriority = threatPriority;
+			this.distanceSq = distanceSq;
+			this.latestTick = Long.MIN_VALUE;
+			this.score = 0;
 		}
 
-		private void include(AlertReason reason, double distanceSq, long tick, boolean sticky, int threatPriority) {
+		private void include(AlertReason reason, long tick, boolean sticky) {
 			this.urgent |= reason.urgent();
+			this.ownerDirected |= reason.ownerDirected();
 			this.sticky |= sticky;
 			this.sourcePriority = Math.max(this.sourcePriority, reason.priority());
-			this.threatPriority = Math.max(this.threatPriority, threatPriority);
-			this.distanceSq = Math.min(this.distanceSq, distanceSq);
 			this.latestTick = Math.max(this.latestTick, tick);
 		}
 
-		private TargetCandidate freeze() {
-			return new TargetCandidate(
-					this.entity,
-					this.urgent,
-					this.sticky,
-					this.sourcePriority,
-					this.threatPriority,
-					this.distanceSq,
-					this.latestTick);
+		/** Urgent, then owner-directed, then score; ties go to distance, recency and UUID. */
+		private boolean isBetterThan(TargetAccumulator other) {
+			int priority = TargetScoring.compare(this.urgent, this.ownerDirected, this.score,
+					other.urgent, other.ownerDirected, other.score);
+			if (priority != 0) {
+				return priority > 0;
+			}
+			if (this.distanceSq != other.distanceSq) {
+				return this.distanceSq < other.distanceSq;
+			}
+			if (this.latestTick != other.latestTick) {
+				return this.latestTick > other.latestTick;
+			}
+			return this.entity.getUUID().compareTo(other.entity.getUUID()) < 0;
 		}
-	}
-
-	private record TargetCandidate(
-			LivingEntity entity,
-			boolean urgent,
-			boolean sticky,
-			int sourcePriority,
-			int threatPriority,
-			double distanceSq,
-			long latestTick) {
-	}
-
-	private record Decision(
-			GuardAiIntent intent,
-			GuardBehaviorExecutor behaviorExecutor,
-			LivingEntity combatTarget,
-			UUID mainTargetUuid,
-			UUID urgentTargetUuid) {
 	}
 }

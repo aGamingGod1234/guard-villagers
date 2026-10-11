@@ -1,6 +1,6 @@
 package com.guardvillagers.entity;
 
-import net.minecraft.util.math.random.Random;
+import net.minecraft.util.RandomSource;
 
 public enum GuardBehavior {
 	PERIMETER(0),
@@ -27,7 +27,7 @@ public enum GuardBehavior {
 		return DEFENSIVE;
 	}
 
-	public static GuardBehavior random(Random random) {
+	public static GuardBehavior random(RandomSource random) {
 		GuardBehavior[] values = values();
 		return values[random.nextInt(values.length)];
 	}

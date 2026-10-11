@@ -2,8 +2,8 @@ package com.guardvillagers;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import net.minecraft.text.Text;
-import net.minecraft.util.math.random.Random;
+import net.minecraft.network.chat.Component;
+import net.minecraft.util.RandomSource;
 
 public final class GuardPlayerUpgrades {
 	public static final int MAX_ARMOR_LEVEL = 8;
@@ -164,7 +164,7 @@ public final class GuardPlayerUpgrades {
 		};
 	}
 
-	public ArmorTier rollArmorTier(Random random) {
+	public ArmorTier rollArmorTier(RandomSource random) {
 		ArmorDistribution distribution = this.getArmorDistribution();
 		int roll = random.nextInt(100);
 		ArmorTier baseTier;
@@ -195,9 +195,9 @@ public final class GuardPlayerUpgrades {
 		return baseTier;
 	}
 
-	public Text toArmorPercentText() {
+	public Component toArmorPercentText() {
 		ArmorDistribution d = this.getArmorDistribution();
-		return Text.literal("Armor odds L:" + d.leather() + "% I:" + d.iron() + "% G:" + d.gold() + "% D:" + d.diamond() + "%");
+		return Component.literal("Armor odds L:" + d.leather() + "% I:" + d.iron() + "% G:" + d.gold() + "% D:" + d.diamond() + "%");
 	}
 
 	public enum ArmorTier {

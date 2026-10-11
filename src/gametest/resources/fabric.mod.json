@@ -1,0 +1,40 @@
+{
+	"schemaVersion": 1,
+	"id": "guardvillagers-gametest",
+	"version": "1.0.0",
+	"name": "Guard Villagers Game Tests",
+	"environment": "*",
+	"entrypoints": {
+		"fabric-gametest": [
+			"com.guardvillagers.gametest.GuardCombatGameTest",
+			"com.guardvillagers.gametest.GuardHuntGameTest",
+			"com.guardvillagers.gametest.GuardCombatReviewGameTest",
+			"com.guardvillagers.gametest.GuardCombatScenariosGameTest",
+			"com.guardvillagers.gametest.GuardOwnershipGameTest",
+            "com.guardvillagers.gametest.GuardScaleGameTest",
+			"com.guardvillagers.gametest.GuardMovementGameTest",
+			"com.guardvillagers.gametest.GuardNavigationRegressionGameTest",
+			"com.guardvillagers.gametest.GuardPersistenceGameTest",
+			"com.guardvillagers.gametest.GuardTacticsServerGameTest",
+			"com.guardvillagers.gametest.GuardReputationGameTest",
+			"com.guardvillagers.gametest.GuardVillageGameTest",
+			"com.guardvillagers.gametest.perf.GuardPerfBenchmark",
+			"com.guardvillagers.gametest.GuardAiGameTest",
+			"com.guardvillagers.gametest.GuardCommanderGameTest",
+			"com.guardvillagers.gametest.GuardOrderRegressionGameTest",
+			"com.guardvillagers.gametest.GuardCommanderRegressionGameTest",
+			"com.guardvillagers.gametest.GuardBehaviorRegressionGameTest"
+		],
+		"fabric-client-gametest": [
+			"com.guardvillagers.gametest.client.GuardRenderClientGameTest",
+			"com.guardvillagers.gametest.client.GuardItemsClientGameTest",
+			"com.guardvillagers.gametest.client.GuardShopClientGameTest",
+			"com.guardvillagers.gametest.client.GuardTacticsClientGameTest",
+			"com.guardvillagers.gametest.client.GuardDebugOverlayClientGameTest",
+			"com.guardvillagers.gametest.client.GuardRosterSyncClientGameTest"
+		]
+	},
+	"depends": {
+		"guardvillagers": "*"
+	}
+}

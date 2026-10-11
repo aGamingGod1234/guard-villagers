@@ -2,25 +2,24 @@ package com.guardvillagers.data;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import net.minecraft.datafixer.DataFixTypes;
-import net.minecraft.util.Uuids;
-import net.minecraft.world.PersistentState;
-import net.minecraft.world.PersistentStateType;
-
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import net.minecraft.core.UUIDUtil;
+import net.minecraft.util.datafix.DataFixTypes;
+import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.saveddata.SavedDataType;
 
-public final class GuardDebugState extends PersistentState {
-	private static final Codec<Map<UUID, DebugSettings>> SETTINGS_CODEC = Codec.unboundedMap(Uuids.STRING_CODEC, DebugSettings.CODEC);
+public final class GuardDebugState extends SavedData {
+	private static final Codec<Map<UUID, DebugSettings>> SETTINGS_CODEC = Codec.unboundedMap(UUIDUtil.STRING_CODEC, DebugSettings.CODEC);
 
 	public static final Codec<GuardDebugState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
 		SETTINGS_CODEC.optionalFieldOf("players", Map.of()).forGetter(GuardDebugState::entriesForCodec)
 	).apply(instance, GuardDebugState::new));
 
-	public static final PersistentStateType<GuardDebugState> TYPE = new PersistentStateType<>(
-		"guardvillagers_debug",
+	public static final SavedDataType<GuardDebugState> TYPE = new SavedDataType<>(
+		GuardSavedData.id("debug"),
 		GuardDebugState::new,
 		CODEC,
 		DataFixTypes.LEVEL
@@ -45,8 +44,7 @@ public final class GuardDebugState extends PersistentState {
 		if (current.enabled() == enabled) {
 			return;
 		}
-		this.settings.put(playerId, current.withEnabled(enabled));
-		this.markDirty();
+		this.store(playerId, current.withEnabled(enabled));
 	}
 
 	public double getRange(UUID playerId) {
@@ -59,12 +57,21 @@ public final class GuardDebugState extends PersistentState {
 		if (Double.compare(current.range(), normalizedRange) == 0) {
 			return;
 		}
-		this.settings.put(playerId, current.withRange(normalizedRange));
-		this.markDirty();
+		this.store(playerId, current.withRange(normalizedRange));
 	}
 
-	public void toggle(UUID playerId) {
-		this.setEnabled(playerId, !this.isEnabled(playerId));
+	public int trackedPlayerCount() {
+		return this.settings.size();
+	}
+
+	/** Rows equal to the defaults are dropped so a disabled overlay leaves nothing behind in the save. */
+	private void store(UUID playerId, DebugSettings updated) {
+		if (updated.equals(DebugSettings.DEFAULT)) {
+			this.settings.remove(playerId);
+		} else {
+			this.settings.put(playerId, updated);
+		}
+		this.setDirty();
 	}
 
 	private Map<UUID, DebugSettings> entriesForCodec() {

@@ -1,133 +1,159 @@
 package com.guardvillagers.entity.ai;
 
-import com.guardvillagers.GuardVillagersMod;
 import com.guardvillagers.entity.GuardEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Vec3d;
+import com.guardvillagers.navigation.GuardGrounding;
+import java.util.UUID;
+import net.minecraft.core.BlockPos;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.Vec3;
 
-import java.util.Comparator;
-import java.util.List;
-
+/**
+ * Assigns each guard a distinct standing slot around a shared anchor.
+ *
+ * <p>Why the old version clumped: slots were computed per "movement group" (owner + group column),
+ * but every group used the same ring radii around the same owner, and rotations that were
+ * multiples of 45 degrees on 8-slot rings. Three columns therefore mapped onto the same eight
+ * positions, and the 12-guard "cohort" rings were centred 4.4 blocks out, overlapping ring one.
+ * Now every guard that uses an anchor shares one roster ({@link GuardSlotRegistry}), so indices
+ * are unique and the ring layout ({@link FormationGeometry}) never overlaps.
+ *
+ * <p>Slots are grounded with {@link GuardGrounding} (pathfinder walkability, closest to the anchor
+ * height) and cached per guard until the anchor block or the slot index changes.
+ */
 public final class GuardMovementSlotResolver {
-	private static final double GROUP_QUERY_RADIUS = 48.0D;
-	private static final double GROUP_QUERY_HEIGHT = 24.0D;
-	private static final int GROUND_SEARCH_VERTICAL_RANGE = 6;
-	private static final int MAX_MOVEMENT_COHORT_SIZE = 12;
-	private static final int FOLLOW_LANE_COUNT = 3;
-	private static final double FOLLOW_MIN_TRAIL_DISTANCE = 2.5D;
-	private static final double FOLLOW_ROW_SPACING = 1.5D;
-	private static final double COHORT_ANCHOR_SPACING_MULTIPLIER = 2.5D;
-	private static final Comparator<GuardEntity> SLOT_ORDER = Comparator
-			.comparingInt(GuardEntity::getGroupIndex)
-			.thenComparingInt(GuardEntity::getGroupColumn)
-			.thenComparing(entity -> entity.getUuid());
+	public static final double DEFAULT_FIRST_RADIUS = 2.0D;
+	public static final double DEFAULT_RING_STEP = 1.6D;
+	public static final double DEFAULT_ARC_SPACING = 1.5D;
+	private static final int MEMBER_TTL_TICKS = 60;
+	private static final int MAX_ROSTERS = 2048;
+	private static final int CACHE_MAX_AGE_TICKS = 60;
+	private static final int GROUND_MAX_UP = 3;
+	private static final int GROUND_MAX_DOWN = 3;
+	private static final int GROUND_NEIGHBOUR_RADIUS = 1;
+
+	private static final GuardSlotRegistry<AnchorKey> REGISTRY = new GuardSlotRegistry<>(MEMBER_TTL_TICKS, MAX_ROSTERS);
+
+	public enum AnchorKind {
+		FOLLOW_OWNER,
+		HOME,
+		RALLY,
+		CROWD,
+		RAID,
+		RETREAT,
+		SPAWN_SPREAD
+	}
+
+	/** Identity of a shared anchor; follow anchors are keyed by owner so they move with the player. */
+	public record AnchorKey(AnchorKind kind, ResourceKey<Level> dimension, UUID owner, long anchor) {
+		public static AnchorKey follow(UUID owner) {
+			return new AnchorKey(AnchorKind.FOLLOW_OWNER, null, owner, 0L);
+		}
+
+		public static AnchorKey at(AnchorKind kind, ResourceKey<Level> dimension, BlockPos anchor) {
+			return new AnchorKey(kind, dimension, null, anchor.asLong());
+		}
+	}
+
+	/** Per-guard memo of the last resolved slot. */
+	public static final class SlotCache {
+		private AnchorKey key;
+		private BlockPos anchor;
+		private int index = -1;
+		private BlockPos result;
+		private Vec3 exact;
+		private long computedTick;
+
+		/**
+		 * Exact ring position of the last resolved slot when it landed in the requested column,
+		 * otherwise the centre of the grounded block. Lets guards stand on the ring rather than on
+		 * block centres (which put neighbours as close as one block apart).
+		 */
+		public Vec3 exactPosition() {
+			return this.exact;
+		}
+
+		public void clear() {
+			this.key = null;
+			this.anchor = null;
+			this.index = -1;
+			this.result = null;
+			this.exact = null;
+		}
+	}
 
 	private GuardMovementSlotResolver() {
 	}
 
-	public static Vec3d resolveDynamicSlot(ServerWorld world, GuardEntity guard, Vec3d anchor, double spacing,
-			boolean allowCenter) {
-		int slotOrder = resolveSlotOrder(world, guard, anchor);
-		double rotation = rotationForGuard(guard);
-		int cohortIndex = slotOrder / MAX_MOVEMENT_COHORT_SIZE;
-		int localSlotOrder = slotOrder % MAX_MOVEMENT_COHORT_SIZE;
-		Vec3d offset = offsetForSlot(localSlotOrder, spacing, allowCenter, rotation);
-		offset = offset.add(cohortAnchorOffset(cohortIndex, spacing, rotation));
-		return anchor.add(offset);
-	}
-
-	public static BlockPos resolveGroundSlot(ServerWorld world, GuardEntity guard, BlockPos anchor, double spacing,
-			boolean allowCenter) {
-		Vec3d slot = resolveDynamicSlot(world, guard, Vec3d.ofBottomCenter(anchor), spacing, allowCenter);
-		BlockPos candidateOrigin = BlockPos.ofFloored(slot.x, anchor.getY(), slot.z);
-		return groundSlotNear(world, candidateOrigin, anchor);
-	}
-
-	public static BlockPos resolveFollowCatchUpSlot(ServerWorld world, GuardEntity guard, Vec3d anchor, double spacing) {
-		int slotOrder = resolveSlotOrder(world, guard, anchor);
-		int cohortIndex = slotOrder / MAX_MOVEMENT_COHORT_SIZE;
-		int localSlotOrder = slotOrder % MAX_MOVEMENT_COHORT_SIZE;
-		int laneIndex = Math.floorMod(localSlotOrder, FOLLOW_LANE_COUNT) - (FOLLOW_LANE_COUNT / 2);
-		int rowIndex = localSlotOrder / FOLLOW_LANE_COUNT;
-		double rotation = rotationForGuard(guard);
-
-		Vec3d trailDirection = guard.getEntityPos().subtract(anchor);
-		trailDirection = new Vec3d(trailDirection.x, 0.0D, trailDirection.z);
-		if (trailDirection.lengthSquared() < 1.0E-4D) {
-			trailDirection = new Vec3d(Math.cos(rotation), 0.0D, Math.sin(rotation));
-		} else {
-			trailDirection = trailDirection.normalize();
+	/**
+	 * Grounded slot for {@code guard} around {@code anchor}. Falls back to a neighbouring column,
+	 * then half-way toward the anchor, then the anchor itself.
+	 */
+	public static BlockPos resolve(GuardEntity guard, SlotCache cache, AnchorKey key, BlockPos anchor,
+			boolean allowCenter, long tick) {
+		int index = REGISTRY.indexOf(key, guard.getUUID(), sortKey(guard), tick);
+		if (cache.result != null && key.equals(cache.key) && anchor.equals(cache.anchor) && index == cache.index
+				&& tick - cache.computedTick < CACHE_MAX_AGE_TICKS) {
+			return cache.result;
 		}
 
-		Vec3d right = new Vec3d(-trailDirection.z, 0.0D, trailDirection.x);
-		double trailDistance = FOLLOW_MIN_TRAIL_DISTANCE + rowIndex * FOLLOW_ROW_SPACING;
-		Vec3d slot = anchor.add(trailDirection.multiply(trailDistance))
-				.add(right.multiply(laneIndex * spacing))
-				.add(cohortAnchorOffset(cohortIndex, spacing, rotation));
-		BlockPos anchorPos = BlockPos.ofFloored(anchor.x, anchor.y, anchor.z);
-		BlockPos candidateOrigin = BlockPos.ofFloored(slot.x, anchor.y, slot.z);
-		return groundSlotNear(world, candidateOrigin, anchorPos);
-	}
-
-	private static List<GuardEntity> collectNearbyGroup(ServerWorld world, GuardEntity guard, Vec3d anchor) {
-		Box searchBox = Box.of(anchor, GROUP_QUERY_RADIUS * 2.0D, GROUP_QUERY_HEIGHT * 2.0D, GROUP_QUERY_RADIUS * 2.0D);
-		List<GuardEntity> guards = world.getEntitiesByClass(
-				GuardEntity.class,
-				searchBox,
-				entity -> entity.isAlive() && guard.isSameMovementGroup(entity));
-		guards.sort(SLOT_ORDER);
-		return guards;
-	}
-
-	private static int resolveSlotOrder(ServerWorld world, GuardEntity guard, Vec3d anchor) {
-		List<GuardEntity> nearbyGroup = collectNearbyGroup(world, guard, anchor);
-		int slotOrder = nearbyGroup.indexOf(guard);
-		return slotOrder >= 0 ? slotOrder : Math.floorMod(guard.getUuid().hashCode(), MAX_MOVEMENT_COHORT_SIZE * 4);
-	}
-
-	private static Vec3d offsetForSlot(int slotOrder, double spacing, boolean allowCenter, double rotation) {
-		if (allowCenter && slotOrder == 0) {
-			return Vec3d.ZERO;
+		double[] offset = new double[2];
+		FormationGeometry.slotOffset(index, allowCenter, DEFAULT_FIRST_RADIUS, DEFAULT_RING_STEP, DEFAULT_ARC_SPACING,
+				rotationFor(key), offset);
+		BlockPos grounded = groundOffset(guard, anchor, offset[0], offset[1]);
+		if (grounded == null) {
+			grounded = groundOffset(guard, anchor, offset[0] * 0.5D, offset[1] * 0.5D);
+		}
+		if (grounded == null) {
+			grounded = GuardGrounding.findStandableNear(guard, anchor.getX(), anchor.getZ(), anchor.getY(), GROUND_MAX_UP,
+					GROUND_MAX_DOWN, GROUND_NEIGHBOUR_RADIUS);
+		}
+		if (grounded == null) {
+			grounded = anchor.immutable();
 		}
 
-		int remaining = allowCenter ? slotOrder - 1 : slotOrder;
-		int ring = 1;
-		int ringCapacity = 8;
-		while (remaining >= ringCapacity) {
-			remaining -= ringCapacity;
-			ring++;
-			ringCapacity = ring * 8;
-		}
-
-		double radius = Math.max(1.25D, ring * spacing);
-		double angle = rotation + (Math.PI * 2.0D * remaining / ringCapacity);
-		return new Vec3d(Math.cos(angle) * radius, 0.0D, Math.sin(angle) * radius);
+		cache.key = key;
+		cache.anchor = anchor.immutable();
+		cache.index = index;
+		cache.result = grounded;
+		double exactX = anchor.getX() + 0.5D + offset[0];
+		double exactZ = anchor.getZ() + 0.5D + offset[1];
+		boolean sameColumn = (int) Math.floor(exactX) == grounded.getX() && (int) Math.floor(exactZ) == grounded.getZ();
+		cache.exact = sameColumn ? new Vec3(exactX, grounded.getY(), exactZ) : Vec3.atBottomCenterOf(grounded);
+		cache.computedTick = tick;
+		return grounded;
 	}
 
-	private static Vec3d cohortAnchorOffset(int cohortIndex, double spacing, double rotation) {
-		if (cohortIndex <= 0) {
-			return Vec3d.ZERO;
-		}
-		return offsetForSlot(
-				cohortIndex - 1,
-				Math.max(spacing * COHORT_ANCHOR_SPACING_MULTIPLIER, spacing + 1.0D),
-				false,
-				rotation + (Math.PI / 8.0D));
+	/** Number of guards currently sharing {@code key}. */
+	public static int occupancy(AnchorKey key, long tick) {
+		return REGISTRY.size(key, tick);
 	}
 
-	private static BlockPos groundSlotNear(ServerWorld world, BlockPos candidateOrigin, BlockPos fallbackAnchor) {
-		BlockPos grounded = GuardVillagersMod.findNearbyGuardSpawnPos(world, candidateOrigin, GROUND_SEARCH_VERTICAL_RANGE);
-		if (grounded != null) {
-			return grounded.toImmutable();
-		}
-		BlockPos fallback = GuardVillagersMod.findNearbyGuardSpawnPos(world, fallbackAnchor, GROUND_SEARCH_VERTICAL_RANGE);
-		return fallback != null ? fallback.toImmutable() : fallbackAnchor.toImmutable();
+	/** Drops every roster; called when the server stops so the next world starts clean. */
+	public static void clearSessionState() {
+		REGISTRY.clear();
 	}
 
-	private static double rotationForGuard(GuardEntity guard) {
-		int seed = Math.floorMod(guard.getGroupIndex() * 3 + guard.getGroupColumn(), 8);
-		return seed * (Math.PI / 4.0D);
+	public static void release(AnchorKey key, UUID guard) {
+		if (key != null) {
+			REGISTRY.release(key, guard);
+		}
+	}
+
+	/** Groups stay contiguous in the formation: assigned groups first by index, then by column. */
+	static long sortKey(GuardEntity guard) {
+		return ((long) (guard.getGroupIndex() + 1) << 8) | (guard.getGroupColumn() & 0xFF);
+	}
+
+	private static BlockPos groundOffset(GuardEntity guard, BlockPos anchor, double offsetX, double offsetZ) {
+		int x = (int) Math.floor(anchor.getX() + 0.5D + offsetX);
+		int z = (int) Math.floor(anchor.getZ() + 0.5D + offsetZ);
+		return GuardGrounding.findStandableNear(guard, x, z, anchor.getY(), GROUND_MAX_UP, GROUND_MAX_DOWN,
+				GROUND_NEIGHBOUR_RADIUS);
+	}
+
+	private static double rotationFor(AnchorKey key) {
+		// Fixed per anchor so the layout does not spin when the roster changes.
+		return Math.floorMod(key.hashCode(), 360) * (Math.PI / 180.0D);
 	}
 }

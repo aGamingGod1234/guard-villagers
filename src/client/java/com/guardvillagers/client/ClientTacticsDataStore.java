@@ -12,20 +12,26 @@ import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.longs.Long2IntMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
+import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import com.guardvillagers.data.SafeFiles;
+import com.guardvillagers.network.GuardGroupResultPayload;
+import net.minecraft.world.level.storage.LevelResource;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.UUID;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ServerInfo;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.util.math.ChunkPos;
-import net.minecraft.util.math.MathHelper;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.util.Mth;
+import net.minecraft.world.level.ChunkPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -51,6 +57,9 @@ public final class ClientTacticsDataStore {
 
 	private final Map<String, WorldData> worlds = new LinkedHashMap<>(16, 0.75F, true);
 
+	private final Map<String, ArrayDeque<Integer>> pendingGroups = new HashMap<>();
+	private final Map<String, List<String>> confirmedGroupNames = new HashMap<>();
+
 	private boolean dirty;
 	private long dirtyAtMillis;
 
@@ -65,14 +74,14 @@ public final class ClientTacticsDataStore {
 	// Dev note: discovered chunks are tracked from client chunk-load events and persisted by world + dimension.
 	public void markDiscovered(WorldContext context, int chunkX, int chunkZ) {
 		DimensionData dimensionData = this.dimension(context);
-		long chunkKey = ChunkPos.toLong(chunkX, chunkZ);
+		long chunkKey = ChunkPos.pack(chunkX, chunkZ);
 		if (this.addDiscoveredChunk(dimensionData, chunkKey)) {
 			this.markDirty();
 		}
 	}
 
 	public boolean isDiscovered(WorldContext context, int chunkX, int chunkZ) {
-		return this.dimension(context).discovered.contains(ChunkPos.toLong(chunkX, chunkZ));
+		return this.dimension(context).discovered.contains(ChunkPos.pack(chunkX, chunkZ));
 	}
 
 	public long[] discoveredChunkKeys(WorldContext context) {
@@ -96,13 +105,73 @@ public final class ClientTacticsDataStore {
 		return visibleChunks;
 	}
 
+	/**
+	 * Allocation-free variant of {@link #discoveredChunksInBounds}: clears {@code out} and fills it with packed
+	 * chunk keys. Used by the map every frame.
+	 */
+	public void collectDiscoveredInBounds(WorldContext context, int minChunkX, int maxChunkX, int minChunkZ, int maxChunkZ, LongArrayList out) {
+		out.clear();
+		DimensionData dimensionData = this.dimension(context);
+		for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+			IntOpenHashSet zValues = dimensionData.discoveredByChunkX.get(chunkX);
+			if (zValues == null || zValues.isEmpty()) {
+				continue;
+			}
+			var iterator = zValues.iterator();
+			while (iterator.hasNext()) {
+				int chunkZ = iterator.nextInt();
+				if (chunkZ >= minChunkZ && chunkZ <= maxChunkZ) {
+					out.add(ChunkPos.pack(chunkX, chunkZ));
+				}
+			}
+		}
+	}
+
+	/**
+	 * Writes the discovered-chunk bounding box as {minX, maxX, minZ, maxZ} into {@code out}.
+	 * Returns false when nothing has been discovered. Bounds are recomputed only after discovery changes.
+	 */
+	public boolean discoveredBounds(WorldContext context, int[] out) {
+		DimensionData dimensionData = this.dimension(context);
+		if (dimensionData.discovered.isEmpty()) {
+			return false;
+		}
+		if (dimensionData.boundsDirty) {
+			int minX = Integer.MAX_VALUE;
+			int maxX = Integer.MIN_VALUE;
+			int minZ = Integer.MAX_VALUE;
+			int maxZ = Integer.MIN_VALUE;
+			LongIterator iterator = dimensionData.discovered.iterator();
+			while (iterator.hasNext()) {
+				long key = iterator.nextLong();
+				int x = ChunkPos.getX(key);
+				int z = ChunkPos.getZ(key);
+				minX = Math.min(minX, x);
+				maxX = Math.max(maxX, x);
+				minZ = Math.min(minZ, z);
+				maxZ = Math.max(maxZ, z);
+			}
+			dimensionData.bounds[0] = minX;
+			dimensionData.bounds[1] = maxX;
+			dimensionData.bounds[2] = minZ;
+			dimensionData.bounds[3] = maxZ;
+			dimensionData.boundsDirty = false;
+		}
+		System.arraycopy(dimensionData.bounds, 0, out, 0, 4);
+		return true;
+	}
+
+	public int discoveredCount(WorldContext context) {
+		return this.dimension(context).discovered.size();
+	}
+
 	public RegionColor getRegionColor(WorldContext context, int chunkX, int chunkZ) {
-		int colorId = this.dimension(context).regionByChunk.get(ChunkPos.toLong(chunkX, chunkZ));
+		int colorId = this.dimension(context).regionByChunk.get(ChunkPos.pack(chunkX, chunkZ));
 		return RegionColor.fromId(colorId);
 	}
 
 	public void setRegionColor(WorldContext context, int chunkX, int chunkZ, RegionColor color) {
-		this.setRegionColor(context, ChunkPos.toLong(chunkX, chunkZ), color);
+		this.setRegionColor(context, ChunkPos.pack(chunkX, chunkZ), color);
 	}
 
 	public void setRegionColor(WorldContext context, long chunkKey, RegionColor color) {
@@ -127,7 +196,7 @@ public final class ClientTacticsDataStore {
 	}
 
 	public void ensureGroupCount(WorldContext context, int groupCount) {
-		int targetCount = MathHelper.clamp(groupCount, 0, MAX_GROUPS);
+		int targetCount = Mth.clamp(groupCount, 0, MAX_GROUPS);
 		WorldData worldData = this.world(context);
 		if (targetCount <= worldData.groupNames.size()) {
 			return;
@@ -139,13 +208,13 @@ public final class ClientTacticsDataStore {
 	}
 
 	public String getGroupName(WorldContext context, int row) {
-		int normalizedRow = MathHelper.clamp(row, 0, MAX_GROUPS - 1);
+		int normalizedRow = Mth.clamp(row, 0, MAX_GROUPS - 1);
 		this.ensureGroupCount(context, normalizedRow + 1);
 		return this.world(context).groupNames.get(normalizedRow);
 	}
 
 	public void setGroupName(WorldContext context, int row, String roleName) {
-		int normalizedRow = MathHelper.clamp(row, 0, MAX_GROUPS - 1);
+		int normalizedRow = Mth.clamp(row, 0, MAX_GROUPS - 1);
 		this.ensureGroupCount(context, normalizedRow + 1);
 		String sanitized = sanitizeGroupName(roleName);
 		WorldData worldData = this.world(context);
@@ -163,14 +232,44 @@ public final class ClientTacticsDataStore {
 		List<String> sanitizedNames = groupNames == null
 				? List.of()
 				: groupNames.stream().limit(MAX_GROUPS).map(ClientTacticsDataStore::sanitizeGroupName).toList();
+		this.confirmedGroupNames.put(context.worldId(), sanitizedNames);
+		List<String> visibleNames = new ArrayList<>(sanitizedNames);
+		for (int row : this.pendingGroups.getOrDefault(context.worldId(), new ArrayDeque<>())) {
+			while (visibleNames.size() <= row) visibleNames.add("Group " + (visibleNames.size() + 1));
+		}
 		WorldData worldData = this.world(context);
-		if (worldData.groupNames.equals(sanitizedNames)) {
+		if (worldData.groupNames.equals(visibleNames)) {
 			return;
 		}
 
 		worldData.groupNames.clear();
-		worldData.groupNames.addAll(sanitizedNames);
+		worldData.groupNames.addAll(visibleNames);
 		this.markDirty();
+	}
+
+	/** Keeps dependent drops visible until the server accepts or rejects the add, across older roster snapshots. */
+	public void expectGroup(WorldContext context, int row) {
+		this.pendingGroups.computeIfAbsent(context.worldId(), ignored -> new ArrayDeque<>()).addLast(row);
+		this.ensureGroupCount(context, row + 1);
+	}
+
+	public GuardGroupResultPayload applyGroupResult(WorldContext context, GuardGroupResultPayload result) {
+		if (result.action() != GuardGroupResultPayload.Action.ADD) return result;
+		ArrayDeque<Integer> pending = this.pendingGroups.get(context.worldId());
+		Integer expectedRow = pending == null ? null : pending.pollFirst();
+		this.replaceGroupNames(context, this.confirmedGroupNames.getOrDefault(context.worldId(), List.of()));
+		// Rejected adds have no server row; retain the requested row so the screen can roll back dependent edits.
+		return expectedRow != null && result.rejected() > 0
+			? new GuardGroupResultPayload(result.action(), expectedRow, result.applied(), result.rejected(), result.reasonKey())
+			: result;
+	}
+
+	public void clearPendingGroups() {
+		this.pendingGroups.clear();
+		for (Map.Entry<String, List<String>> entry : this.confirmedGroupNames.entrySet()) {
+			this.replaceGroupNames(new WorldContext(entry.getKey(), ""), entry.getValue());
+		}
+		this.confirmedGroupNames.clear();
 	}
 
 	public RegionColor getGroupColor(WorldContext context, int row) {
@@ -251,19 +350,21 @@ public final class ClientTacticsDataStore {
 	}
 
 	private void indexDiscoveredChunk(DimensionData dimensionData, long chunkKey) {
-		int chunkX = ChunkPos.getPackedX(chunkKey);
-		int chunkZ = ChunkPos.getPackedZ(chunkKey);
+		int chunkX = ChunkPos.getX(chunkKey);
+		int chunkZ = ChunkPos.getZ(chunkKey);
 		dimensionData.discoveredByChunkX.computeIfAbsent(chunkX, ignored -> new IntOpenHashSet()).add(chunkZ);
+		dimensionData.boundsDirty = true;
 	}
 
 	private void unindexDiscoveredChunk(DimensionData dimensionData, long chunkKey) {
-		int chunkX = ChunkPos.getPackedX(chunkKey);
-		int chunkZ = ChunkPos.getPackedZ(chunkKey);
+		int chunkX = ChunkPos.getX(chunkKey);
+		int chunkZ = ChunkPos.getZ(chunkKey);
 		IntOpenHashSet zValues = dimensionData.discoveredByChunkX.get(chunkX);
 		if (zValues == null) {
 			return;
 		}
 		zValues.remove(chunkZ);
+		dimensionData.boundsDirty = true;
 		if (zValues.isEmpty()) {
 			dimensionData.discoveredByChunkX.remove(chunkX);
 		}
@@ -332,97 +433,100 @@ public final class ClientTacticsDataStore {
 		}
 	}
 
+	/**
+	 * Runs from the static INSTANCE initializer, so it must never throw: an exception here would become an
+	 * ExceptionInInitializerError and every later use a NoClassDefFoundError. A malformed file is moved aside and
+	 * the store starts empty.
+	 */
 	private void load() {
 		this.worlds.clear();
-		if (!Files.exists(SAVE_PATH)) {
+		if (!SafeFiles.readOrQuarantine(SAVE_PATH, LOGGER, this::parse)) {
+			this.worlds.clear();
+		}
+		this.dirty = false;
+	}
+
+	private void parse(String json) {
+		JsonElement rootElement = JsonParser.parseString(json);
+		if (!rootElement.isJsonObject()) {
 			return;
 		}
-		try {
-			String json = Files.readString(SAVE_PATH);
-			JsonElement rootElement = JsonParser.parseString(json);
-			if (!rootElement.isJsonObject()) {
-				return;
+		JsonObject rootObject = rootElement.getAsJsonObject();
+		JsonObject worldsObject = asObject(rootObject.get("worlds"));
+		if (worldsObject == null) {
+			return;
+		}
+		for (Map.Entry<String, JsonElement> worldEntry : worldsObject.entrySet()) {
+			JsonObject worldObject = asObject(worldEntry.getValue());
+			if (worldObject == null) {
+				continue;
 			}
-			JsonObject rootObject = rootElement.getAsJsonObject();
-			JsonObject worldsObject = asObject(rootObject.get("worlds"));
-			if (worldsObject == null) {
-				return;
-			}
-			for (Map.Entry<String, JsonElement> worldEntry : worldsObject.entrySet()) {
-				JsonObject worldObject = asObject(worldEntry.getValue());
-				if (worldObject == null) {
-					continue;
-				}
-				WorldData worldData = new WorldData();
-				worldData.groupNames.clear();
+			WorldData worldData = new WorldData();
+			worldData.groupNames.clear();
 
-				JsonArray rolesArray = asArray(worldObject.get("groupNames"));
-				if (rolesArray != null) {
-					for (JsonElement roleElement : rolesArray) {
-						String sanitized = sanitizeGroupName(asString(roleElement));
-						if (!sanitized.isBlank()) {
-							worldData.groupNames.add(sanitized);
-						}
+			JsonArray rolesArray = asArray(worldObject.get("groupNames"));
+			if (rolesArray != null) {
+				for (JsonElement roleElement : rolesArray) {
+					String sanitized = sanitizeGroupName(asString(roleElement));
+					if (!sanitized.isBlank()) {
+						worldData.groupNames.add(sanitized);
 					}
 				}
-				JsonObject rowColorsObject = asObject(worldObject.get("rowColors"));
-				if (rowColorsObject != null) {
-					for (Map.Entry<String, JsonElement> colorEntry : rowColorsObject.entrySet()) {
-						try {
-							int row = Integer.parseInt(colorEntry.getKey());
-							RegionColor color = RegionColor.fromId(asInt(colorEntry.getValue(), 0));
-							if (row >= 0 && color != RegionColor.NONE) {
-								worldData.rowColorByGroup.put(row, color.id());
+			}
+			JsonObject rowColorsObject = asObject(worldObject.get("rowColors"));
+			if (rowColorsObject != null) {
+				for (Map.Entry<String, JsonElement> colorEntry : rowColorsObject.entrySet()) {
+					try {
+						int row = Integer.parseInt(colorEntry.getKey());
+						RegionColor color = RegionColor.fromId(asInt(colorEntry.getValue(), 0));
+						if (row >= 0 && color != RegionColor.NONE) {
+							worldData.rowColorByGroup.put(row, color.id());
+						}
+					} catch (NumberFormatException ignored) {
+					}
+				}
+			}
+
+			JsonObject dimensionsObject = asObject(worldObject.get("dimensions"));
+			if (dimensionsObject != null) {
+				for (Map.Entry<String, JsonElement> dimensionEntry : dimensionsObject.entrySet()) {
+					JsonObject dimensionObject = asObject(dimensionEntry.getValue());
+					if (dimensionObject == null) {
+						continue;
+					}
+					DimensionData dimensionData = new DimensionData();
+					JsonArray discoveredArray = asArray(dimensionObject.get("discovered"));
+					if (discoveredArray != null) {
+						for (JsonElement discoveredElement : discoveredArray) {
+							try {
+								long chunkKey = Long.parseLong(asString(discoveredElement));
+								this.addDiscoveredChunk(dimensionData, chunkKey);
+							} catch (NumberFormatException ignored) {
 							}
-						} catch (NumberFormatException ignored) {
 						}
 					}
-				}
 
-				JsonObject dimensionsObject = asObject(worldObject.get("dimensions"));
-				if (dimensionsObject != null) {
-					for (Map.Entry<String, JsonElement> dimensionEntry : dimensionsObject.entrySet()) {
-						JsonObject dimensionObject = asObject(dimensionEntry.getValue());
-						if (dimensionObject == null) {
-							continue;
-						}
-						DimensionData dimensionData = new DimensionData();
-						JsonArray discoveredArray = asArray(dimensionObject.get("discovered"));
-						if (discoveredArray != null) {
-							for (JsonElement discoveredElement : discoveredArray) {
-								try {
-									long chunkKey = Long.parseLong(asString(discoveredElement));
-									this.addDiscoveredChunk(dimensionData, chunkKey);
-								} catch (NumberFormatException ignored) {
+					JsonObject regionsObject = asObject(dimensionObject.get("regions"));
+					if (regionsObject != null) {
+						for (Map.Entry<String, JsonElement> regionEntry : regionsObject.entrySet()) {
+							try {
+								long chunkKey = Long.parseLong(regionEntry.getKey());
+								RegionColor color = RegionColor.fromId(asInt(regionEntry.getValue(), 0));
+								if (color != RegionColor.NONE && dimensionData.discovered.contains(chunkKey)) {
+									dimensionData.regionByChunk.put(chunkKey, color.id());
 								}
+							} catch (NumberFormatException ignored) {
 							}
-						}
-
-						JsonObject regionsObject = asObject(dimensionObject.get("regions"));
-						if (regionsObject != null) {
-							for (Map.Entry<String, JsonElement> regionEntry : regionsObject.entrySet()) {
-								try {
-									long chunkKey = Long.parseLong(regionEntry.getKey());
-									RegionColor color = RegionColor.fromId(asInt(regionEntry.getValue(), 0));
-									if (color != RegionColor.NONE && dimensionData.discovered.contains(chunkKey)) {
-										dimensionData.regionByChunk.put(chunkKey, color.id());
-									}
-								} catch (NumberFormatException ignored) {
-								}
-							}
-						}
-						if (worldData.dimensions.size() < MAX_DIMENSIONS_PER_WORLD) {
-							worldData.dimensions.put(dimensionEntry.getKey(), dimensionData);
 						}
 					}
-				}
-				if (this.worlds.size() < MAX_WORLDS) {
-					this.worlds.put(worldEntry.getKey(), worldData);
+					if (worldData.dimensions.size() < MAX_DIMENSIONS_PER_WORLD) {
+						worldData.dimensions.put(dimensionEntry.getKey(), dimensionData);
+					}
 				}
 			}
-			this.dirty = false;
-		} catch (IOException exception) {
-			LOGGER.error("Failed to load client tactics data from {}", SAVE_PATH, exception);
+			if (this.worlds.size() < MAX_WORLDS) {
+				this.worlds.put(worldEntry.getKey(), worldData);
+			}
 		}
 	}
 
@@ -477,35 +581,43 @@ public final class ClientTacticsDataStore {
 		}
 
 		try {
-			Files.createDirectories(SAVE_PATH.getParent());
-			Files.writeString(
-				SAVE_PATH,
-				GSON.toJson(rootObject),
-				StandardOpenOption.CREATE,
-				StandardOpenOption.TRUNCATE_EXISTING,
-				StandardOpenOption.WRITE
-			);
+			SafeFiles.writeAtomically(SAVE_PATH, GSON.toJson(rootObject));
 			this.dirty = false;
 		} catch (IOException exception) {
 			LOGGER.error("Failed to save client tactics data to {}", SAVE_PATH, exception);
 		}
 	}
 
-	public static WorldContext resolveContext(MinecraftClient client, ClientWorld world) {
-		String dimensionId = world.getRegistryKey().getValue().toString();
+	public static WorldContext resolveContext(Minecraft client, ClientLevel world) {
+		String dimensionId = world.dimension().identifier().toString();
 		return new WorldContext(resolveWorldId(client), dimensionId);
 	}
 
-	private static String resolveWorldId(MinecraftClient client) {
-		if (client.isInSingleplayer() && client.getServer() != null) {
-			String levelName = client.getServer().getSaveProperties().getLevelName();
-			return "singleplayer:" + safeKey(levelName);
+	private static String resolveWorldId(Minecraft client) {
+		if (client.isLocalServer() && client.getSingleplayerServer() != null) {
+			String levelName = client.getSingleplayerServer().getWorldData().getLevelName();
+			String worldId = singleplayerId(client.getSingleplayerServer().getWorldPath(LevelResource.ROOT));
+			String legacyId = "singleplayer:" + safeKey(levelName);
+			// Claim a legacy display-name entry once. Another save with that name must start independently.
+			if (!INSTANCE.worlds.containsKey(worldId)) {
+				WorldData legacy = INSTANCE.worlds.remove(legacyId);
+				if (legacy != null) {
+					INSTANCE.worlds.put(worldId, legacy);
+					INSTANCE.markDirty();
+				}
+			}
+			return worldId;
 		}
-		ServerInfo serverInfo = client.getCurrentServerEntry();
-		if (serverInfo != null && serverInfo.address != null && !serverInfo.address.isBlank()) {
-			return "multiplayer:" + safeKey(serverInfo.address.toLowerCase(Locale.ROOT));
+		ServerData serverInfo = client.getCurrentServer();
+		if (serverInfo != null && serverInfo.ip != null && !serverInfo.ip.isBlank()) {
+			return "multiplayer:" + safeKey(serverInfo.ip.toLowerCase(Locale.ROOT));
 		}
 		return "session:default";
+	}
+
+	static String singleplayerId(Path saveRoot) {
+		String path = saveRoot.toAbsolutePath().normalize().toString();
+		return "singleplayer-save:" + UUID.nameUUIDFromBytes(path.getBytes(StandardCharsets.UTF_8));
 	}
 
 	private static String safeKey(String value) {
@@ -561,6 +673,8 @@ public final class ClientTacticsDataStore {
 		private final Long2IntOpenHashMap regionByChunk = new Long2IntOpenHashMap();
 		private final Int2ObjectOpenHashMap<IntOpenHashSet> discoveredByChunkX = new Int2ObjectOpenHashMap<>();
 		private final ArrayDeque<Long> discoveryOrder = new ArrayDeque<>();
+		private final int[] bounds = new int[4];
+		private boolean boundsDirty = true;
 
 		private DimensionData() {
 			this.regionByChunk.defaultReturnValue(0);

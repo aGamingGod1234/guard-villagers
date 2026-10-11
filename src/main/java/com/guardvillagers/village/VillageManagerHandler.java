@@ -4,19 +4,6 @@ import com.guardvillagers.GuardVillagersMod;
 import com.guardvillagers.data.GuardVillageState;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.SpawnReason;
-import net.minecraft.entity.passive.VillagerEntity;
-import net.minecraft.registry.tag.BlockTags;
-import net.minecraft.registry.tag.StructureTags;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.structure.StructureStart;
-import net.minecraft.util.math.BlockBox;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.ChunkSectionPos;
-import net.minecraft.world.poi.PointOfInterestStorage;
-import net.minecraft.world.poi.PointOfInterestTypes;
-
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -27,14 +14,31 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.GlobalPos;
+import net.minecraft.core.SectionPos;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.tags.StructureTags;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntitySpawnReason;
+import net.minecraft.world.entity.ai.memory.MemoryModuleType;
+import net.minecraft.world.entity.ai.village.poi.PoiManager;
+import net.minecraft.world.entity.ai.village.poi.PoiTypes;
+import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
+import net.minecraft.world.level.levelgen.structure.StructureStart;
 
 public final class VillageManagerHandler {
 	private static final int PROCESS_INTERVAL_TICKS = 100;
-	private static final int MAX_VILLAGERS_SCANNED = 256;
 	private static final int MAX_SPAWNS_PER_VILLAGE = 2;
 	private static final int MAX_GUARDS_PER_VILLAGE = 12;
 	private static final int RESPAWN_COOLDOWN_TICKS = 20 * 60 * 2;
-	private static final int NATURAL_GUARD_SCAN_EXPANSION = 16;
 	private static final int DOOR_COUNT_CACHE_TICKS = 20 * 60;
 	private static final int DOOR_COUNT_CACHE_MAX_ENTRIES = 4096;
 	private static final long VILLAGE_RETENTION_TICKS = 20L * 60L * 60L * 6L;
@@ -52,25 +56,58 @@ public final class VillageManagerHandler {
 	private VillageManagerHandler() {
 	}
 
-	public static void maintainVillageGuards(ServerWorld world) {
-		if (world.getTime() % PROCESS_INTERVAL_TICKS != 0) {
+	public static void register() {
+		ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> {
+			if (entity instanceof GuardEntity guard) {
+				trackNaturalGuard(world, guard);
+			}
+		});
+		ServerEntityEvents.ENTITY_UNLOAD.register((entity, world) -> {
+			if (entity instanceof GuardEntity guard) {
+				trackNaturalGuard(world, guard);
+			}
+		});
+	}
+
+	private static void trackNaturalGuard(ServerLevel world, GuardEntity guard) {
+		GuardVillageState state = world.getDataStorage().computeIfAbsent(GuardVillageState.TYPE);
+		Entity.RemovalReason reason = guard.getRemovalReason();
+		if (guard.hasOwner() || guard.getHealth() <= 0.0F || guard.getSquadId() == null || guard.getHome().isEmpty()
+				|| (reason != null && (reason.shouldDestroy() || reason == Entity.RemovalReason.CHANGED_DIMENSION))) {
+			state.removeNaturalGuard(guard.getUUID());
+		} else {
+			state.recordNaturalGuard(guard.getUUID(), guard.getSquadId());
+		}
+	}
+
+	public static void clearSessionState() {
+		DOOR_COUNT_CACHE.clear();
+	}
+
+	public static void maintainVillageGuards(ServerLevel world) {
+		if (world.getGameTime() % PROCESS_INTERVAL_TICKS != 0) {
 			return;
 		}
 
-		List<VillagerEntity> villagers = collectLoadedVillagers(world);
-		GuardVillageState state = world.getPersistentStateManager().getOrCreate(GuardVillageState.TYPE);
+		List<Villager> villagers = collectLoadedVillagers(world);
+		GuardVillageState state = world.getDataStorage().computeIfAbsent(GuardVillageState.TYPE);
+		for (Entity entity : world.getAllEntities()) {
+			if (entity instanceof GuardEntity guard) {
+				trackNaturalGuard(world, guard);
+			}
+		}
 		if (villagers.isEmpty()) {
-			state.retireStale(world.getTime(), Set.of(), VILLAGE_RETENTION_TICKS);
+			state.retireStale(world.getGameTime(), Set.of(), VILLAGE_RETENTION_TICKS);
 			return;
 		}
 
 		Map<String, VillageAggregation> villages = aggregateVillages(world, villagers);
 		if (villages.isEmpty()) {
-			state.retireStale(world.getTime(), Set.of(), VILLAGE_RETENTION_TICKS);
+			state.retireStale(world.getGameTime(), Set.of(), VILLAGE_RETENTION_TICKS);
 			return;
 		}
 
-		long now = world.getTime();
+		long now = world.getGameTime();
 		Set<String> observedVillageIds = new HashSet<>();
 		for (VillageAggregation aggregation : villages.values()) {
 			VillageDescriptor village = aggregation.descriptor;
@@ -84,6 +121,9 @@ public final class VillageManagerHandler {
 				continue;
 			}
 
+			if (!prefetchPois(world, village.center(), village.horizontalRadius() + 16)) {
+				continue;
+			}
 			int beds = countBeds(world, village);
 			int doors = countDoors(world, village);
 			int deterministicCap = Math.max(1, Math.max(villagerCount / 2, Math.max(beds, doors)));
@@ -127,31 +167,54 @@ public final class VillageManagerHandler {
 		state.retireStale(now, observedVillageIds, VILLAGE_RETENTION_TICKS);
 	}
 
-	public static Optional<VillageDescriptor> findVillageDescriptor(ServerWorld world, BlockPos origin) {
-		StructureStart start = world.getStructureAccessor().getStructureContaining(origin, StructureTags.VILLAGE);
-		if (start == null || !start.hasChildren()) {
-			return Optional.empty();
-		}
+	public static Optional<VillageDescriptor> findVillageDescriptor(ServerLevel world, BlockPos origin) {
+		return lookupVillage(world, origin).descriptor();
+	}
 
-		BlockBox bounds = start.getBoundingBox();
-		if (bounds == null || bounds.getMaxX() < bounds.getMinX() || bounds.getMaxZ() < bounds.getMinZ()) {
+	private static VillageLookup lookupVillage(ServerLevel world, BlockPos origin) {
+		LevelChunk chunk = world.getChunkSource().getChunkNow(SectionPos.blockToSectionCoord(origin.getX()), SectionPos.blockToSectionCoord(origin.getZ()));
+		if (chunk == null) {
+			return new VillageLookup(Optional.empty(), true);
+		}
+		boolean incomplete = false;
+		var structures = world.registryAccess().lookupOrThrow(Registries.STRUCTURE);
+		for (var entry : chunk.getAllReferences().entrySet()) {
+			if (!structures.get(structures.getId(entry.getKey())).map(holder -> holder.is(StructureTags.VILLAGE)).orElse(false)) {
+				continue;
+			}
+			for (long reference : entry.getValue()) {
+				ChunkPos pos = ChunkPos.unpack(reference);
+				LevelChunk startChunk = world.getChunkSource().getChunkNow(pos.x(), pos.z());
+				if (startChunk == null) {
+					incomplete = true;
+					continue;
+				}
+				StructureStart start = startChunk.getStartForStructure(entry.getKey());
+				if (start != null && start.isValid() && world.structureManager().structureHasPieceAt(origin, start)) {
+					return new VillageLookup(describeVillage(world, start), false);
+				}
+			}
+		}
+		return new VillageLookup(Optional.empty(), incomplete);
+	}
+
+	private static Optional<VillageDescriptor> describeVillage(ServerLevel world, StructureStart start) {
+		BoundingBox bounds = start.getBoundingBox();
+		if (bounds == null || bounds.maxX() < bounds.minX() || bounds.maxZ() < bounds.minZ()) {
 			return Optional.empty();
 		}
 
 		BlockPos center = bounds.getCenter();
-		int radius = Math.max(16, Math.max(bounds.getBlockCountX(), bounds.getBlockCountZ()) / 2);
-		String id = world.getRegistryKey().getValue() + "|" + bounds.getMinX() + "|" + bounds.getMinZ() + "|" + bounds.getMaxX() + "|" + bounds.getMaxZ();
+		int radius = Math.max(16, Math.max(bounds.getXSpan(), bounds.getZSpan()) / 2);
+		String id = world.dimension().identifier() + "|" + bounds.minX() + "|" + bounds.minZ() + "|" + bounds.maxX() + "|" + bounds.maxZ();
 		return Optional.of(new VillageDescriptor(id, bounds, center, radius));
 	}
 
-	private static List<VillagerEntity> collectLoadedVillagers(ServerWorld world) {
-		List<VillagerEntity> villagers = new ArrayList<>();
-		for (Entity entity : world.iterateEntities()) {
-			if (entity instanceof VillagerEntity villager && villager.isAlive() && !villager.isRemoved()) {
+	private static List<Villager> collectLoadedVillagers(ServerLevel world) {
+		List<Villager> villagers = new ArrayList<>();
+		for (Entity entity : world.getAllEntities()) {
+			if (entity instanceof Villager villager && villager.isAlive() && !villager.isRemoved()) {
 				villagers.add(villager);
-				if (villagers.size() >= MAX_VILLAGERS_SCANNED) {
-					break;
-				}
 			}
 		}
 		return villagers;
@@ -161,18 +224,19 @@ public final class VillageManagerHandler {
 	 * B1: A villager belongs to a village iff the villager has either a bed (HOME POI)
 	 * or a job site located within the inner bounding box of the chunk.
 	 */
-	private static Map<String, VillageAggregation> aggregateVillages(ServerWorld world, List<VillagerEntity> villagers) {
-		Map<Long, Optional<VillageDescriptor>> chunkCache = new HashMap<>();
+	private static Map<String, VillageAggregation> aggregateVillages(ServerLevel world, List<Villager> villagers) {
 		Map<String, VillageAggregation> villages = new HashMap<>();
 
-		for (VillagerEntity villager : villagers) {
-			int chunkX = ChunkSectionPos.getSectionCoord(villager.getBlockX());
-			int chunkZ = ChunkSectionPos.getSectionCoord(villager.getBlockZ());
-			long chunkKey = (((long) chunkX) << 32) ^ (chunkZ & 0xffffffffL);
-			Optional<VillageDescriptor> descriptor = chunkCache.computeIfAbsent(chunkKey, ignored -> {
-				Optional<VillageDescriptor> structured = findVillageDescriptor(world, villager.getBlockPos());
-				return structured.isPresent() ? structured : findFallbackVillageDescriptor(world, villager.getBlockPos());
-			});
+		for (Villager villager : villagers) {
+			VillageLookup lookup = lookupVillage(world, villager.blockPosition());
+			// An unavailable structure start must not create a second, POI-based identity for the same village.
+			if (lookup.incomplete()) {
+				continue;
+			}
+			Optional<VillageDescriptor> descriptor = lookup.descriptor();
+			if (descriptor.isEmpty()) {
+				descriptor = findFallbackVillageDescriptor(world, villager.blockPosition());
+			}
 			if (descriptor.isEmpty()) {
 				continue;
 			}
@@ -195,44 +259,63 @@ public final class VillageManagerHandler {
 	 * A villager belongs to a village iff it has a bed (HOME POI) or a job site
 	 * located within the inner bounding box.
 	 */
-	private static boolean villagerBelongsToVillage(ServerWorld world, VillagerEntity villager, VillageDescriptor village) {
-		BlockBox bounds = village.bounds();
+	private static boolean villagerBelongsToVillage(ServerLevel world, Villager villager, VillageDescriptor village) {
+		BoundingBox bounds = village.bounds();
+
+		// Fast path: the villager's own claimed bed or job site. Avoids two POI square queries per villager.
+		if (claimedPoiInside(world, villager, MemoryModuleType.HOME, bounds)
+			|| claimedPoiInside(world, villager, MemoryModuleType.JOB_SITE, bounds)) {
+			return true;
+		}
+		if (!prefetchPois(world, villager.blockPosition(), 48)) {
+			return false;
+		}
 
 		// Check for bed (HOME POI) within village bounds near the villager
-		boolean hasBedInBounds = world.getPointOfInterestStorage().getInSquare(
-			entry -> entry.matchesKey(PointOfInterestTypes.HOME),
-			villager.getBlockPos(),
+		boolean hasBedInBounds = world.getPoiManager().getInSquare(
+			entry -> entry.is(PoiTypes.HOME),
+			villager.blockPosition(),
 			48,
-			PointOfInterestStorage.OccupationStatus.ANY
-		).anyMatch(poi -> bounds.contains(poi.getPos()));
+			PoiManager.Occupancy.ANY
+		).anyMatch(poi -> bounds.isInside(poi.getPos()));
 
 		if (hasBedInBounds) {
 			return true;
 		}
 
 		// Check for any job site POI within village bounds near the villager
-		boolean hasJobSiteInBounds = world.getPointOfInterestStorage().getInSquare(
-			entry -> !entry.matchesKey(PointOfInterestTypes.HOME)
-				&& !entry.matchesKey(PointOfInterestTypes.MEETING)
-				&& !entry.matchesKey(PointOfInterestTypes.NETHER_PORTAL)
-				&& !entry.matchesKey(PointOfInterestTypes.LIGHTNING_ROD)
-				&& !entry.matchesKey(PointOfInterestTypes.LODESTONE)
-				&& !entry.matchesKey(PointOfInterestTypes.BEE_NEST)
-				&& !entry.matchesKey(PointOfInterestTypes.BEEHIVE),
-			villager.getBlockPos(),
+		boolean hasJobSiteInBounds = world.getPoiManager().getInSquare(
+			entry -> !entry.is(PoiTypes.HOME)
+				&& !entry.is(PoiTypes.MEETING)
+				&& !entry.is(PoiTypes.NETHER_PORTAL)
+				&& !entry.is(PoiTypes.LIGHTNING_ROD)
+				&& !entry.is(PoiTypes.LODESTONE)
+				&& !entry.is(PoiTypes.BEE_NEST)
+				&& !entry.is(PoiTypes.BEEHIVE),
+			villager.blockPosition(),
 			48,
-			PointOfInterestStorage.OccupationStatus.ANY
-		).anyMatch(poi -> bounds.contains(poi.getPos()));
+			PoiManager.Occupancy.ANY
+		).anyMatch(poi -> bounds.isInside(poi.getPos()));
 
 		return hasJobSiteInBounds;
 	}
 
-	private static Optional<VillageDescriptor> findFallbackVillageDescriptor(ServerWorld world, BlockPos origin) {
-		Optional<BlockPos> poiCenter = world.getPointOfInterestStorage().getNearestPosition(
-			entry -> entry.matchesKey(PointOfInterestTypes.HOME),
+	private static boolean claimedPoiInside(ServerLevel world, Villager villager, MemoryModuleType<GlobalPos> memory, BoundingBox bounds) {
+		Optional<GlobalPos> claimed = villager.getBrain().getMemory(memory);
+		return claimed.isPresent()
+			&& claimed.get().dimension() == world.dimension()
+			&& bounds.isInside(claimed.get().pos());
+	}
+
+	private static Optional<VillageDescriptor> findFallbackVillageDescriptor(ServerLevel world, BlockPos origin) {
+		if (!prefetchPois(world, origin, 48)) {
+			return Optional.empty();
+		}
+		Optional<BlockPos> poiCenter = world.getPoiManager().findClosest(
+			entry -> entry.is(PoiTypes.HOME),
 			origin,
 			48,
-			PointOfInterestStorage.OccupationStatus.ANY
+			PoiManager.Occupancy.ANY
 		);
 		if (poiCenter.isEmpty()) {
 			return Optional.empty();
@@ -240,48 +323,60 @@ public final class VillageManagerHandler {
 
 		BlockPos center = poiCenter.get();
 		int radius = 32;
-		BlockBox bounds = new BlockBox(
+		BoundingBox bounds = new BoundingBox(
 			center.getX() - radius,
-			world.getBottomY(),
+			world.getMinY(),
 			center.getZ() - radius,
 			center.getX() + radius,
-			world.getTopYInclusive(),
+			world.getMaxY(),
 			center.getZ() + radius
 		);
-		String id = world.getRegistryKey().getValue()
+		String id = world.dimension().identifier()
 			+ "|poi|"
-			+ ChunkSectionPos.getSectionCoord(center.getX())
+			+ SectionPos.blockToSectionCoord(center.getX())
 			+ "|"
-			+ ChunkSectionPos.getSectionCoord(center.getZ());
+			+ SectionPos.blockToSectionCoord(center.getZ());
 		return Optional.of(new VillageDescriptor(id, bounds, center, radius));
 	}
 
 	private static double calculateDensity(VillageDescriptor village, int villagerCount) {
-		double area = Math.max(1.0D, village.bounds().getBlockCountX() * village.bounds().getBlockCountZ());
+		double area = Math.max(1.0D, village.bounds().getXSpan() * village.bounds().getZSpan());
 		return villagerCount / (area / 256.0D);
 	}
 
-	private static int countNaturalGuards(ServerWorld world, VillageDescriptor village) {
-		return world.getEntitiesByClass(
-			GuardEntity.class,
-			village.toEntityBox(NATURAL_GUARD_SCAN_EXPANSION),
-			guard -> !guard.hasOwner() && village.bounds().contains(guard.getBlockPos())
-		).size();
+	/** The vanilla POI queries join pending reads. Start every column read, then defer until all have completed. */
+	private static boolean prefetchPois(ServerLevel world, BlockPos center, int radius) {
+		boolean ready = true;
+		int chunkRadius = Math.floorDiv(radius, 16) + 1;
+		for (ChunkPos pos : ChunkPos.rangeClosed(ChunkPos.containing(center), chunkRadius).toList()) {
+			var pending = world.getPoiManager().prefetch(pos);
+			ready &= pending.isDone() && !pending.isCompletedExceptionally() && !pending.isCancelled();
+		}
+		return ready;
 	}
 
-	private static int countBeds(ServerWorld world, VillageDescriptor village) {
-		long beds = world.getPointOfInterestStorage().count(
-			entry -> entry.matchesKey(PointOfInterestTypes.HOME),
+	private static int countNaturalGuards(ServerLevel world, VillageDescriptor village) {
+		UUID squadId = UUID.nameUUIDFromBytes(village.id().getBytes(StandardCharsets.UTF_8));
+		int count = 0;
+		for (ServerLevel level : world.getServer().getAllLevels()) {
+			count += level.getDataStorage().computeIfAbsent(GuardVillageState.TYPE).countNaturalGuards(squadId);
+		}
+		return count;
+	}
+
+	private static int countBeds(ServerLevel world, VillageDescriptor village) {
+		long beds = world.getPoiManager().getCountInRange(
+			entry -> entry.is(PoiTypes.HOME),
 			village.center(),
 			village.horizontalRadius() + 16,
-			PointOfInterestStorage.OccupationStatus.ANY
+			PoiManager.Occupancy.ANY
 		);
 		return (int) Math.min(Integer.MAX_VALUE, beds);
 	}
 
-	private static int countDoors(ServerWorld world, VillageDescriptor village) {
-		long now = world.getTime();
-		String cacheKey = world.getRegistryKey().getValue() + "|" + village.id();
+	private static int countDoors(ServerLevel world, VillageDescriptor village) {
+		long now = world.getGameTime();
+		String cacheKey = world.dimension().identifier() + "|" + village.id();
 		DoorCountCache cached = DOOR_COUNT_CACHE.get(cacheKey);
 		if (cached != null && now - cached.sampleTick() <= DOOR_COUNT_CACHE_TICKS) {
 			return cached.count();
@@ -293,21 +388,50 @@ public final class VillageManagerHandler {
 		return recalculated;
 	}
 
-	private static int countDoorsUncached(ServerWorld world, VillageDescriptor village) {
+	/**
+	 * Counts door blocks (both halves, as before) in a box around the village center. Walks loaded chunks only and
+	 * skips sections whose palette has no doors, instead of up to ~170k getBlockState calls that could also force
+	 * unloaded chunks to load.
+	 */
+	private static int countDoorsUncached(ServerLevel world, VillageDescriptor village) {
 		int radius = Math.min(64, village.horizontalRadius() + 8);
-		int minY = Math.max(world.getBottomY(), village.center().getY() - 4);
-		int maxY = Math.min(world.getTopYInclusive(), village.center().getY() + 5);
-		BlockPos.Mutable mutable = new BlockPos.Mutable();
+		BlockPos center = village.center();
+		int minX = center.getX() - radius;
+		int maxX = center.getX() + radius;
+		int minZ = center.getZ() - radius;
+		int maxZ = center.getZ() + radius;
+		int minY = Math.max(world.getMinY(), center.getY() - 4);
+		int maxY = Math.min(world.getMaxY(), center.getY() + 5);
 		int count = 0;
 
-		for (int x = village.center().getX() - radius; x <= village.center().getX() + radius; x++) {
-			for (int z = village.center().getZ() - radius; z <= village.center().getZ() + radius; z++) {
-				for (int y = minY; y <= maxY; y++) {
-					mutable.set(x, y, z);
-					if (world.getBlockState(mutable).isIn(BlockTags.DOORS)) {
-						count++;
-						if (count >= 512) {
-							return count;
+		for (int chunkX = SectionPos.blockToSectionCoord(minX); chunkX <= SectionPos.blockToSectionCoord(maxX); chunkX++) {
+			for (int chunkZ = SectionPos.blockToSectionCoord(minZ); chunkZ <= SectionPos.blockToSectionCoord(maxZ); chunkZ++) {
+				LevelChunk chunk = world.getChunkSource().getChunkNow(chunkX, chunkZ);
+				if (chunk == null) {
+					continue;
+				}
+				for (int sectionY = SectionPos.blockToSectionCoord(minY); sectionY <= SectionPos.blockToSectionCoord(maxY); sectionY++) {
+					int sectionIndex = world.getSectionIndexFromSectionY(sectionY);
+					if (sectionIndex < 0 || sectionIndex >= chunk.getSectionsCount()) {
+						continue;
+					}
+					LevelChunkSection section = chunk.getSection(sectionIndex);
+					if (section.hasOnlyAir() || !section.maybeHas(state -> state.is(BlockTags.DOORS))) {
+						continue;
+					}
+					int baseX = SectionPos.sectionToBlockCoord(chunkX);
+					int baseY = SectionPos.sectionToBlockCoord(sectionY);
+					int baseZ = SectionPos.sectionToBlockCoord(chunkZ);
+					for (int y = Math.max(minY, baseY); y <= Math.min(maxY, baseY + 15); y++) {
+						for (int x = Math.max(minX, baseX); x <= Math.min(maxX, baseX + 15); x++) {
+							for (int z = Math.max(minZ, baseZ); z <= Math.min(maxZ, baseZ + 15); z++) {
+								if (section.getBlockState(x - baseX, y - baseY, z - baseZ).is(BlockTags.DOORS)) {
+									count++;
+									if (count >= 512) {
+										return count;
+									}
+								}
+							}
 						}
 					}
 				}
@@ -324,8 +448,8 @@ public final class VillageManagerHandler {
 		DOOR_COUNT_CACHE.entrySet().removeIf(entry -> entry.getValue().sampleTick() < cutoff);
 	}
 
-	private static boolean spawnVillageGuard(ServerWorld world, VillageDescriptor village, int guardIndex) {
-		GuardEntity guard = GuardVillagersMod.GUARD_ENTITY_TYPE.create(world, SpawnReason.NATURAL);
+	private static boolean spawnVillageGuard(ServerLevel world, VillageDescriptor village, int guardIndex) {
+		GuardEntity guard = GuardVillagersMod.GUARD_ENTITY_TYPE.create(world, EntitySpawnReason.NATURAL);
 		if (guard == null) {
 			GuardVillagersMod.LOGGER.warn("Failed to create village guard for village {}", village.id());
 			return false;
@@ -334,22 +458,22 @@ public final class VillageManagerHandler {
 		int ringIndex = (guardIndex * 2) % SPAWN_RING_OFFSETS.length;
 		int xOffset = SPAWN_RING_OFFSETS[ringIndex];
 		int zOffset = SPAWN_RING_OFFSETS[(ringIndex + 1) % SPAWN_RING_OFFSETS.length];
-		BlockPos origin = village.center().add(xOffset, 0, zOffset);
+		BlockPos origin = village.center().offset(xOffset, 0, zOffset);
 		BlockPos spawn = GuardVillagersMod.findNearbyGuardSpawnPos(world, origin, 10);
 		if (spawn == null) {
 			GuardVillagersMod.LOGGER.warn("No valid spawn position found for village guard in {}", village.id());
 			return false;
 		}
 
-		guard.refreshPositionAndAngles(spawn.getX() + 0.5D, spawn.getY(), spawn.getZ() + 0.5D, world.getRandom().nextFloat() * 360.0F, 0.0F);
+		guard.snapTo(spawn.getX() + 0.5D, spawn.getY(), spawn.getZ() + 0.5D, world.getRandom().nextFloat() * 360.0F, 0.0F);
 		guard.applyNaturalLoadout(world);
 		guard.setBehavior(pickVillageBehavior(village, guardIndex));
 		guard.setSquadId(UUID.nameUUIDFromBytes(village.id().getBytes(StandardCharsets.UTF_8)));
 		guard.setSquadLeader(false);
 		guard.setHome(village.center(), Math.max(24, village.horizontalRadius()));
 
-		if (!world.spawnEntity(guard)) {
-			GuardVillagersMod.LOGGER.warn("Village guard spawn rejected at {} in {}", spawn, world.getRegistryKey().getValue());
+		if (!world.addFreshEntity(guard)) {
+			GuardVillagersMod.LOGGER.warn("Village guard spawn rejected at {} in {}", spawn, world.dimension().identifier());
 			return false;
 		}
 		return true;
@@ -375,5 +499,8 @@ public final class VillageManagerHandler {
 	}
 
 	private record DoorCountCache(int count, long sampleTick) {
+	}
+
+	private record VillageLookup(Optional<VillageDescriptor> descriptor, boolean incomplete) {
 	}
 }

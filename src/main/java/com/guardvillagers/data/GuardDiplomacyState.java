@@ -2,11 +2,6 @@ package com.guardvillagers.data;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import net.minecraft.datafixer.DataFixTypes;
-import net.minecraft.util.Uuids;
-import net.minecraft.world.PersistentState;
-import net.minecraft.world.PersistentStateType;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -14,21 +9,40 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import net.minecraft.core.UUIDUtil;
+import net.minecraft.util.datafix.DataFixTypes;
+import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.saveddata.SavedDataType;
 
-public final class GuardDiplomacyState extends PersistentState {
-	private static final Codec<Set<UUID>> UUID_SET_CODEC = Uuids.STRING_CODEC.listOf().xmap(HashSet::new, ArrayList::new);
-	private static final Codec<Map<UUID, DiplomacyLists>> DIPLOMACY_MAP_CODEC = Codec.unboundedMap(Uuids.STRING_CODEC, DiplomacyLists.CODEC);
+public final class GuardDiplomacyState extends SavedData {
+	private static final Codec<Set<UUID>> UUID_SET_CODEC = UUIDUtil.STRING_CODEC.listOf().xmap(HashSet::new, ArrayList::new);
+	private static final Codec<Map<UUID, DiplomacyLists>> DIPLOMACY_MAP_CODEC = Codec.unboundedMap(UUIDUtil.STRING_CODEC, DiplomacyLists.CODEC);
 
 	public static final Codec<GuardDiplomacyState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
 		DIPLOMACY_MAP_CODEC.optionalFieldOf("diplomacy", Map.of()).forGetter(GuardDiplomacyState::entriesForCodec)
 	).apply(instance, GuardDiplomacyState::new));
 
-	public static final PersistentStateType<GuardDiplomacyState> TYPE = new PersistentStateType<>(
-		"guardvillagers_diplomacy",
+	public static final SavedDataType<GuardDiplomacyState> TYPE = new SavedDataType<>(
+		GuardSavedData.id("diplomacy"),
 		GuardDiplomacyState::new,
 		CODEC,
 		DataFixTypes.LEVEL
 	);
+
+	/** Per owner, whitelist and blacklist each. */
+	public static final int MAX_LIST_SIZE = 64;
+	/** Owners with at least one entry. Empty owners are never stored, so only real lists count toward this. */
+	public static final int MAX_OWNERS = 4096;
+
+	public enum Change {
+		ADDED,
+		REMOVED,
+		ALREADY_PRESENT,
+		NOT_PRESENT,
+		LIST_FULL,
+		STATE_FULL,
+		SELF
+	}
 
 	private final Map<UUID, DiplomacyLists> entries;
 
@@ -38,46 +52,89 @@ public final class GuardDiplomacyState extends PersistentState {
 
 	private GuardDiplomacyState(Map<UUID, DiplomacyLists> entries) {
 		this.entries = new HashMap<>();
+		// Limits apply to new additions, never to relationships already saved by an older version.
 		for (Map.Entry<UUID, DiplomacyLists> entry : entries.entrySet()) {
-			this.entries.put(entry.getKey(), entry.getValue().copy());
+			DiplomacyLists lists = entry.getValue().copy();
+			if (!lists.isEmpty()) {
+				this.entries.put(entry.getKey(), lists);
+			}
 		}
 	}
 
-	public DiplomacyLists getOrCreate(UUID owner) {
-		return this.entries.computeIfAbsent(owner, ignored -> {
-			this.markDirty();
-			return new DiplomacyLists(new HashSet<>(), new HashSet<>());
-		});
+	/** Trusts {@code target} for {@code owner}'s guards (and removes it from the blacklist). */
+	public Change addToWhitelist(UUID owner, UUID target) {
+		return this.add(owner, target, true);
 	}
 
+	public Change removeFromWhitelist(UUID owner, UUID target) {
+		return this.remove(owner, target, true);
+	}
+
+	public Change addToBlacklist(UUID owner, UUID target) {
+		return this.add(owner, target, false);
+	}
+
+	public Change removeFromBlacklist(UUID owner, UUID target) {
+		return this.remove(owner, target, false);
+	}
+
+	/** @return {@code true} when the target is now whitelisted */
 	public boolean toggleWhitelist(UUID owner, UUID target) {
-		DiplomacyLists lists = this.getOrCreate(owner);
-		boolean added;
-		if (lists.whitelist().contains(target)) {
-			lists.whitelist().remove(target);
-			added = false;
-		} else {
-			lists.whitelist().add(target);
-			lists.blacklist().remove(target);
-			added = true;
+		if (this.isWhitelisted(owner, target)) {
+			this.removeFromWhitelist(owner, target);
+			return false;
 		}
-		this.markDirty();
-		return added;
+		return this.addToWhitelist(owner, target) == Change.ADDED;
 	}
 
+	/** @return {@code true} when the target is now blacklisted */
 	public boolean toggleBlacklist(UUID owner, UUID target) {
-		DiplomacyLists lists = this.getOrCreate(owner);
-		boolean added;
-		if (lists.blacklist().contains(target)) {
-			lists.blacklist().remove(target);
-			added = false;
-		} else {
-			lists.blacklist().add(target);
-			lists.whitelist().remove(target);
-			added = true;
+		if (this.isBlacklisted(owner, target)) {
+			this.removeFromBlacklist(owner, target);
+			return false;
 		}
-		this.markDirty();
-		return added;
+		return this.addToBlacklist(owner, target) == Change.ADDED;
+	}
+
+	public int ownerCount() {
+		return this.entries.size();
+	}
+
+	private Change add(UUID owner, UUID target, boolean whitelist) {
+		if (owner.equals(target)) {
+			return Change.SELF;
+		}
+		DiplomacyLists lists = this.entries.get(owner);
+		if (lists == null) {
+			if (this.entries.size() >= MAX_OWNERS) {
+				return Change.STATE_FULL;
+			}
+			lists = new DiplomacyLists(new HashSet<>(), new HashSet<>());
+		}
+		Set<UUID> list = whitelist ? lists.whitelist() : lists.blacklist();
+		if (list.contains(target)) {
+			return Change.ALREADY_PRESENT;
+		}
+		if (list.size() >= MAX_LIST_SIZE) {
+			return Change.LIST_FULL;
+		}
+		list.add(target);
+		(whitelist ? lists.blacklist() : lists.whitelist()).remove(target);
+		this.entries.put(owner, lists);
+		this.setDirty();
+		return Change.ADDED;
+	}
+
+	private Change remove(UUID owner, UUID target, boolean whitelist) {
+		DiplomacyLists lists = this.entries.get(owner);
+		if (lists == null || !(whitelist ? lists.whitelist() : lists.blacklist()).remove(target)) {
+			return Change.NOT_PRESENT;
+		}
+		if (lists.isEmpty()) {
+			this.entries.remove(owner);
+		}
+		this.setDirty();
+		return Change.REMOVED;
 	}
 
 	public boolean isBlacklisted(UUID owner, UUID target) {
@@ -109,6 +166,10 @@ public final class GuardDiplomacyState extends PersistentState {
 			UUID_SET_CODEC.optionalFieldOf("whitelist", Set.of()).forGetter(DiplomacyLists::whitelist),
 			UUID_SET_CODEC.optionalFieldOf("blacklist", Set.of()).forGetter(DiplomacyLists::blacklist)
 		).apply(instance, (whitelist, blacklist) -> new DiplomacyLists(new HashSet<>(whitelist), new HashSet<>(blacklist))));
+
+		public boolean isEmpty() {
+			return this.whitelist.isEmpty() && this.blacklist.isEmpty();
+		}
 
 		public DiplomacyLists copy() {
 			return new DiplomacyLists(new HashSet<>(this.whitelist), new HashSet<>(this.blacklist));

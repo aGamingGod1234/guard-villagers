@@ -48,3 +48,7 @@ replay_*.log
 # local agent/workflow state
 .claude/
 nimbalyst-local/
+
+# local run output
+logs/
+*.log

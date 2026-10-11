@@ -11,7 +11,7 @@ public final class GuardDiplomacyManager {
 	}
 
 	public static GuardDiplomacyState getState(MinecraftServer server) {
-		return server.getOverworld().getPersistentStateManager().getOrCreate(GuardDiplomacyState.TYPE);
+		return server.getDataStorage().computeIfAbsent(GuardDiplomacyState.TYPE);
 	}
 
 	public static boolean toggleWhitelist(MinecraftServer server, UUID owner, UUID target) {
@@ -20,6 +20,14 @@ public final class GuardDiplomacyManager {
 
 	public static boolean toggleBlacklist(MinecraftServer server, UUID owner, UUID target) {
 		return getState(server).toggleBlacklist(owner, target);
+	}
+
+	public static GuardDiplomacyState.Change trust(MinecraftServer server, UUID owner, UUID target) {
+		return getState(server).addToWhitelist(owner, target);
+	}
+
+	public static GuardDiplomacyState.Change untrust(MinecraftServer server, UUID owner, UUID target) {
+		return getState(server).removeFromWhitelist(owner, target);
 	}
 
 	public static boolean isBlacklisted(MinecraftServer server, UUID owner, UUID target) {

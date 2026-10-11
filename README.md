@@ -1,404 +1,416 @@
 # Guard Villagers
 
-Guard Villagers is a Fabric mod for Minecraft `1.21.11` (Java 21) that turns passive villagers into an active village-defence system. Villages grow their own guard garrison based on resident density, players can hire and train personal guards with emerald blocks, and every guard can be issued orders — follow, stay, patrol a zone, fall into a formation, defend the perimeter, or concentrate on crowd control — from an in-game tactics screen.
+A Fabric mod that adds villager guards. Villages raise their own garrison, and you can hire personal guards with emerald blocks, sort them into groups, and lead them through a commander you talk to by text or by voice.
 
-## Summary
-
-- **Two kinds of guards.** Natural village guards spawn around populated villages and patrol in response to local threats; personal guards are hired from villagers that trust you, are bound to your UUID, and follow you across dimensions.
-- **Roles and loadouts.** Each guard is one of two combat roles (`Swordsman`, `Bowman`), each with its own AI goal stack. Gear is account-level — upgrades persist for all of a player's future guards instead of being applied to individual entities.
-- **Behaviours and formations.** Four behaviours (`Defensive`, `Offensive`, `Perimeter`, `Crowd Control`) and named formations control how the guard prioritises targets, how it moves relative to the owner, and how it shares intent with the rest of its squad.
-- **Tactics screen.** A top-down, discovered-chunk map lets you paint chunk zones, bind colours to groups, and view a synced roster with live health, XP, and distance readouts. Groups can be named, coloured, and used to issue squad-level commands (assign, rename, deploy, recall).
-- **Perimeter and patrol logic.** Villages expose their door/POI density to the guard AI so patrol goals, recovery-stall fallback, and crowd-unsticking all respect real village bounds rather than fixed hard-coded boxes.
-- **Reputation system.** Per-player village reputation gates whether unowned guards will defend you, whether you can claim them, and whether trades feed the guard pool. Operators can inspect and set reputation values via `/guards reputation`.
-- **Operator debug tooling.** `/guards debug` (operator-only) turns on a live overlay of pathfinding nodes, combat targets, and intent decisions for every visible guard, syncing to the client only for the player who enabled it.
-
-## Design highlights
-
-- **Central AI coordinator.** Each guard runs a thin `GuardAiController` that computes a `Decision` (main target, urgent target, intent, cooldowns) once per tick; the goals read that decision instead of re-deriving it, which keeps goal logic deterministic and cheap to tune.
-- **Per-squad route cache.** Path computations are shared across a squad heading to the same quantised target for a bounded TTL (2s) and soft-capped size, so a 10-guard squad only triggers one pathfind, not ten.
-- **Concurrent-safe statics.** The cross-world static caches (`OWNER_USED_NAMES`, `DEBUG_PATH_HASH_CACHE`, `SquadRouteCache.SQUAD_ROUTES`) use `ConcurrentHashMap` so per-dimension tick threads and NBT load hooks can mutate them without the `HashMap` corruption seen in earlier revisions.
-- **Bounded command surface.** `/guards groups rename/assign` clamp their row index to `MAX_GROUP_ROW` (64) and `GuardTacticsState.ensureGroupCount` mirrors the cap, so an unprivileged player can't force a multi-billion-entry group list.
-- **Save/load round-trip.** The guard's formation type is now read back from NBT on load (previously it was always reset to `FOLLOW`), so player-configured formations survive restarts. Tactics group-colour codec range covers the full supported palette (0..10) instead of silently dropping colour IDs above 4.
+![Guards with different gear](docs/images/guards-lineup.png)
 
 ## Contents
 
-- [What The Mod Adds](#what-the-mod-adds)
+- [Features](#features)
 - [Requirements](#requirements)
-- [Installation](#installation)
-- [Getting Started](#getting-started)
-- [Core Gameplay](#core-gameplay)
-- [Guard Controls](#guard-controls)
-- [Shop And Upgrades](#shop-and-upgrades)
-- [Tactics And Groups](#tactics-and-groups)
-- [Reputation And Trust](#reputation-and-trust)
+- [Install](#install)
+- [Getting started](#getting-started)
+- [Guards](#guards)
+- [Commander, captains and orders](#commander-captains-and-orders)
+- [Command post (tactics screen)](#command-post-tactics-screen)
+- [Shop and upgrades](#shop-and-upgrades)
+- [Reputation and trust](#reputation-and-trust)
 - [Commands](#commands)
-- [Creative And Admin Tools](#creative-and-admin-tools)
-- [Building From Source](#building-from-source)
+- [Voice setup](#voice-setup)
+- [Upgrading from 1.21.11](#upgrading-from-12111)
+- [Building from source](#building-from-source)
+- [License](#license)
 
-## What The Mod Adds
+## Features
 
-- Natural village guards that spawn and persist as defenders.
-- Hireable personal guards purchased with emerald blocks.
-- Claimable unowned guards if your village trust is high enough.
-- Two main combat roles:
-  - `Swordsman`
-  - `Bowman`
-- Four behaviors:
-  - `Defensive`
-  - `Offensive`
-  - `Perimeter`
-  - `Crowd Control`
-- A whistle item for opening tactics, rallying leaders, and assigning patrol zones.
-- A tactics screen with:
-  - top-down discovered-chunk map
-  - paintable chunk zones
-  - group-color bindings
-  - a synced roster of owned guards
-- A shop with persistent account-style upgrades for future guards.
-- Operator-only reputation and debug commands.
+- Village guards that spawn around populated villages and answer the village bell.
+- Unlimited personal guards by default, hired in a shop or claimed from a village. Server operators can set a cap.
+- Two roles (Swordsman, Bowman), four behaviors, formations, patrol zones and a hold mode.
+- A chain of command: one commander per player and one captain per group, chosen by seniority or by you.
+- Orders in plain English through `/guards say`, a `!g` chat prefix, or your voice with Simple Voice Chat.
+- A commander that reacts on its own: defends you, assigns guards to threats, pulls the wounded back, answers raids.
+- A command post screen with a paintable chunk map and drag-and-drop groups.
+- Account-wide shop upgrades for armor, weapons and healing.
+- Per-player reputation that decides whether guards trust you.
 
 ## Requirements
 
 | Component | Version |
 | --- | --- |
-| Minecraft | `1.21.11` |
-| Java | `21` |
-| Fabric Loader | `0.18.2` or newer |
-| Fabric API | `0.139.4+1.21.11` |
+| Minecraft | `26.1.2` |
+| Java | `25` |
+| Fabric Loader | `0.19.5` or newer |
+| Fabric API | `0.155.3+26.1.2` or newer |
+| Simple Voice Chat | Optional, `2.6.21` or newer. Only needed for voice orders. |
 
-## Installation
+## Install
 
-### For Players
+1. Install Fabric Loader for Minecraft 26.1.2.
+2. Put Fabric API and `guard-villagers-2.0.0.jar` in the `mods` folder.
+3. Optional: add Simple Voice Chat on both server and client for voice orders. See [Voice setup](#voice-setup).
 
-1. Install Minecraft `1.21.11`.
-2. Install Fabric Loader for the same version.
-3. Install Fabric API.
-4. Place the built `guard-villagers-1.0.0.jar` into your `mods` folder.
-5. Launch the game with the Fabric profile.
+The mod is needed on both the server and the client.
 
-### Where The Jar Comes From
+## Getting started
 
-- Release or build outputs are written to `build/libs/`.
-- The main runtime artifact is the remapped mod jar in that folder.
+1. Get emerald blocks and run `/guards shop`.
+2. Click **Hire a Guard**. It appears at your feet and follows you.
+3. Right-click it with an empty hand to toggle stay and follow.
+4. Type `/guards say hold the line` or `!g follow me` to give an order.
+5. Run `/guards tactics` to open the command post and sort guards into groups.
 
-## Getting Started
+The Guard Whistle and the Guard Spawn Egg are in the mod's creative tab. The whistle has no recipe; use the creative tab or `/give @s guardvillagers:guard_whistle`.
 
-### Quick Start
+## Guards
 
-1. Join a world with the mod installed.
-2. Open the guard shop with `/guards shop`.
-3. Hire your first guard.
-4. Use `/guards follow`, `/guards stay`, and `/guards tactics` to control them.
-5. Use the whistle to set patrol zones or rally leaders.
+### Village guards and personal guards
 
-### First Guard Options
+- **Village guards** spawn around villages based on how many villagers and doors the village has, and are replaced over time. They defend the village and gather at the bell when it rings.
+- **Personal guards** belong to one player. Ownership is unlimited by default. Get them by:
+  - hiring in `/guards shop` (emerald blocks), or
+  - right-clicking an unowned guard with emeralds, if your reputation is at least `0.50`. Price: `4 + 2 x (level - 1)` emeralds.
 
-You can get a guard in three main ways:
+Guards gain XP from kills and slowly over time, up to level 10. Support level 2 gives every new guard a shield.
 
-- Hire one from the shop using emerald blocks.
-- Claim an unowned guard by right-clicking it with an emerald, if your reputation is trusted.
-- Use the creative spawn egg if you are testing or building.
+### Roles
 
-## Core Gameplay
-
-### Natural Village Guards
-
-- Villages are actively maintained with guards over time.
-- Natural guards are meant to act as defenders for villages.
-- They can still be claimed by a player if they are unowned and that player is trusted.
-
-### Player-Owned Guards
-
-Owned guards remember and persist:
-
-- owner
-- squad identity
-- level and experience
-- equipment
-- assigned group
-- patrol home / zone
-- follow state
-
-### Guard Levels
-
-- Guards level up from combat and passive time.
-- Level is capped at `10`.
-- Higher level guards cost more to claim if they are already unowned world guards.
-
-Unowned guard hire cost is:
-
-- `4 + 2 * (level - 1)` emeralds
-
-## Guard Controls
-
-## Empty-Hand Interactions
-
-Right-click your own guard with an empty hand:
-
-- normal right-click: toggle `stay` / `follow`
-- sneak + right-click: cycle behavior
-
-Behavior cycle order:
-
-1. `Perimeter`
-2. `Crowd Control`
-3. `Offensive`
-4. `Defensive`
-
-### Giving Equipment To Guards
-
-Right-click your own guard while holding gear:
-
-- Better swords replace weaker swords on swordsmen.
-- Better bows replace weaker bows on bowmen.
-- Better armor can be equipped.
-
-Armor upgrade rules:
-
-- You must be sneaking.
-- You must be close to the guard.
-- The offered piece must be better than the current one, or equal tier with better Protection enchantment.
-
-### Follow And Stay
-
-- `Stay` holds guards in place and clears forced follow.
-- `Follow` resumes following.
-- Plain `/guards follow` now affects all owned guards, even zoned ones.
-- Group-specific `/guards follow <group name>` only affects guards in that group.
-
-### Zones And Home Tethering
-
-- Zoned guards can be assigned a home area and patrol radius.
-- While forced follow is active, zone tethering is suppressed so they are not dragged back home mid-follow.
-- Assigning or clearing home state removes forced follow and returns the guard to zone-based logic.
-
-### Whistle Controls
-
-The whistle is one of the main control items in the mod.
-
-Controls:
-
-- Right-click in air: open the tactics screen.
-- Sneak + right-click in air: rally nearby squad leaders.
-- Right-click your owned guard: assign its current position as home.
-- Sneak + right-click your owned guard: increase patrol radius.
-
-## Shop And Upgrades
-
-Open the shop with `/guards shop`.
-
-### Buying Guards
-
-- Base hiring is done with emerald blocks.
-- Shift-clicking the hire card buys as many as you can afford.
-- In creative mode, hiring is free and bulk-buy caps at `64`.
-- If the exact player `X/Z` column cannot support a spawn, the purchase fails cleanly instead of spawning offset to the side.
-
-### Reputation-Based Cost
-
-Shop hire price is modified by reputation:
-
-- low reputation: up to `1.5x`
-- high reputation: down to `0.75x`
-
-### Upgrade Categories
-
-The shop has three persistent upgrade tracks.
-
-#### Armor Upgrades
-
-- Max level: `8`
-- Cost pattern: starts at `4`, doubles per level, capped at `64`
-- Improves the armor quality distribution on future hired guards
-
-#### Weapon Upgrades
-
-- Max level: `5`
-- Cost pattern: starts at `4`, scales aggressively, capped at `64`
-- Improves swords for swordsmen and bow Power level for bowmen
-
-Weapon progression:
-
-- Sword: Stone -> Iron -> Diamond -> Diamond Sharpness III -> IV -> V
-- Bow: Power I -> II -> III -> IV -> V
-
-#### Support Upgrades
-
-- Max level: `3`
-- Stage 1: passive healing
-- Stage 2: shield unlock
-- Stage 3: stronger/faster healing
-
-Support progression:
-
-| Support Level | Effect |
+| Role | Fights with |
 | --- | --- |
-| `0` | No support bonus |
-| `1` | Healing enabled |
-| `2` | Shield enabled |
-| `3` | Advanced healing enabled |
+| Swordsman | Sword, up close |
+| Bowman | Bow, at range |
 
-Healing cadence:
+Shop hires alternate between the two roles.
 
-- no support: `1 HP every 5s`
-- support level 1 or 2: `2 HP every 2.5s`
-- support level 3: `2 HP every 1s`
+### Behaviors
 
-## Tactics And Groups
+Sneak + right-click your guard with an empty hand to cycle: Perimeter, Crowd Control, Offensive, Defensive. Purchased and claimed guards start as Defensive. Village guards use the village behavior pattern; spawn eggs and summoned guards pick a random behavior.
 
-Open the tactics UI with:
+| Behavior | What the guard does |
+| --- | --- |
+| Defensive | Stays near you or its home. In a raid, holds positions around the raid centre. |
+| Offensive | In a raid, goes after the nearest raider. |
+| Perimeter | Walks the edge and inside of its village or zone. |
+| Crowd Control | Holds a spot around the village bell, its home, or where it started. |
 
-- `/guards tactics`
-- `/guards groups`
-- right-clicking the whistle in air
+All guards retreat to heal at low health (toward a cleric, a bed, or home) and fight back if cornered.
 
-### Tactical Map
+### Follow, stay, hold and zones
 
-The tactics view is a chunk-based control map.
+| State | How to set it | Effect |
+| --- | --- | --- |
+| Follow | Right-click (empty hand), `/guards follow`, "follow me" | Walks with you in a formation ring, catches up along your path. |
+| Stay | Right-click again, `/guards stay`, "stay" | Stays put. |
+| Hold | `/guards hold`, "hold the line" | Stands on its block, fights only what it can reach (bowmen shoot from position), never walks away. Follow, stay and home orders clear it. |
+| Home zone | Whistle on the guard, `/guards zone <radius>`, "patrol here" | Patrols around a home point and walks back if it strays out. |
 
-You can:
+### Group hunts
 
-- pan with middle mouse drag
-- zoom with mouse wheel
-- left-drag to select chunks
-- right-click to paint the active zone color
-- shift + right-click to clear zone color
-- press `C` to clear selection
+Punch a mob, in Survival or Creative, to send nearby personal guards after its group. Guards join within their alert range (`max(8, FOLLOW_RANGE)` blocks from the hit), spread across targets, and keep choosing another when one dies. Further punches merge mob hunts and refresh the whole order to 30 seconds (600 ticks) after the last punch. The commander leaves hunters under your direction. Stay, hold, ?as you were?, and `/guards cleartargets` cancel your hunt; logout, changing dimension, and server shutdown clear it too.
 
-Important details:
+The hunt includes the hit mob, matching entity types within 24 blocks, and a breadth-first chain of matching types within 6 blocks of each member. It also includes eligible members of the hit mob's active raid or scoreboard team, connected vehicles/passengers, public llama caravan head links and nearby followers, piglins in its `NEARBY_ADULT_PIGLINS` memory, and hoglins in its `NEAREST_VISIBLE_ADULT_HOGLINS` memory. Wolves have no exposed pack identity, and fish school leaders are private in 26.1.2; both use the proximity rule. No chunks are loaded to find members.
 
-- Only discovered chunks are paintable.
-- Zones are visual tactical overlays.
-- Group-to-color tooltips are shown for hovered chunks.
+Expansion skips players, allies (including villagers, golems and your guards), any animal with an owner reference even if that owner is offline, armor stands, unattackable entities, and entities in another dimension. The directly punched entity keeps the existing ally and attackability checks. Punching a player creates a separate, single-player target order, subject to PvP, team, trust, Creative and Spectator protection. Stay guards never join; hold reach, retreat, suspended combat and patrol-zone restrictions still apply.
 
-### Groups View
+Each owner has at most 96 hunt targets, preferring nearer candidates within each breadth layer. Expansion and pruning run once per five ticks, with one queued punch expanded per refresh, at most 512 entities per local query and 4,096 candidate inspections per expansion. Crowded scenes can reach those limits before every member is found. Guards reuse that roster and the existing engagement tracker; they scan it at most once per ten ticks when they need a new target, with no hunt world scan per guard.
 
-The groups view is driven by a server-synced owned-guard roster.
+### Formations
 
-You can:
+`FOLLOW` is the default ring around you. Orders can put guards in a `LINE`, `SQUARE` or `CIRCLE` in front of you for a limited time (60 s by default): swordsmen take the front posts, bowmen the back.
 
-- create groups
-- rename groups
-- assign colors to groups
-- drag guards between groups
-- save assignments back to the server
+### Whistle
 
-Controls:
+| Action | Effect |
+| --- | --- |
+| Right-click in air | Open the command post. |
+| Sneak + right-click in air | Rally your captains and commander within 64 blocks to you for 12 s; they target whatever last hurt you. |
+| Right-click your guard | Set its home to where it stands (radius at least 24). |
+| Sneak + right-click your guard | Grow its patrol radius by 8 (16 to 96). |
 
-- left-click and drag guard cards to move them
-- shift + right-click a group header to rename it
-- click a color swatch to cycle group color
-- right-click a swatch to clear it
+### Giving gear
 
-### Group Notes
+Right-click your own guard while holding:
 
-- New data starts with no premade groups.
-- Unassigned guards are supported and use internal group index `-1`.
-- The groups screen no longer depends on the guard entity being loaded on the client, so far-away loaded server guards can still appear in the roster.
+- a better sword (swordsman) or a bow with higher Power (bowman), to swap its weapon;
+- a better armor piece while sneaking within 5 blocks. Equal tier counts only with higher Protection.
 
-## Reputation And Trust
+### Bell rally
 
-Reputation is normalized from `0.00` to `1.00`.
+Ringing a bell (by hand, projectile or redstone) calls guards to it for 12 s:
 
-General meaning:
+- unowned village guards within 32 blocks;
+- personal guards whose home is in that village, if the ringer is their owner, a player the owner trusts, or redstone.
 
-- `0.50` and above: trusted enough to hire
-- below `0.50`: trust is too low to hire
+Each bell rallies at most once every 5 s.
 
-Reputation changes from:
+### Hitting guards
 
-- trading with villagers
-- harming villagers
-- harming guards
-- killing hostiles
-- defending against raids
-- being killed by guards, which resets your reputation to `0.00`
+- Your own guards never fight back when you hit them.
+- A player's first light hit on someone else's guard is forgiven: no reputation loss and no retaliation, if it dealt at most 2 hearts, the player had not hit a guard in the last 5 s, and their reputation is at least `0.25`.
+- Other hits cost reputation and the guard and its squad fight back.
 
-Decay:
+## Commander, captains and orders
 
-- reputation decays by `0.01`
-- decay happens every `36` seconds
+### Chain of command
 
-### Trust Outcomes
+- **Commander:** your most senior loaded guard. Seniority is level, then XP, then time in service.
+- **Captain:** the most senior guard of each group that has at least 2 loaded members.
+- Ranks are rechecked every 5 s and right after a hire, death, unload or group change. Only a strictly higher level unseats a rank holder, so ranks do not flicker.
+- When a commander falls, the most senior captain within 64 blocks of you takes over, and the commander announces it.
+- Appoint ranks yourself: look at a guard within 8 blocks and run `/guards appoint commander` or `/guards appoint captain`, or say "make Liam commander". Appointed guards keep their rank until they die or you run `/guards appoint auto`.
+- Ranks show as a gold star (commander) and a silver chevron (captain) in the tactics sidebar and on name tags. Right-click a guard in the sidebar to make it commander or captain.
 
-- Trusted players can hire guards.
-- Distrusted players are blocked from hiring.
-- Very low trust can cause guards to treat the player as hostile.
+### What the commander does on its own
+
+Unless you turn it off with `/guards commander auto off`, the commander plans every 2 s (sooner when you are hurt or give an order):
+
+1. Guards under your order, stay, hold, a rally or a retreat are left alone. They still defend themselves.
+2. Whoever hurts you, or any hostile within 12 blocks of you, gets the nearest guards.
+3. Homed squads near a raid switch to raid tactics and rally to the bell.
+4. Other threats are assigned highest score first to the nearest free guards: bowmen against slow melee mobs and creepers, swordsmen against ranged mobs. A small bodyguard detail stays with you.
+5. A fight whose guards average under 60% health gets two more.
+6. A guard under 30% health is pulled back to you and not reassigned until above 50%.
+7. Archers step behind you, away from the threat, so swordsmen take the front.
+8. After 30 s of quiet, homed squads walk a loop around their home every minute.
+
+It reports in chat and in the action bar ("Area clear.", "Liam is wounded. Pulling him back.") and, with voice set up, out loud from the commander's position.
+
+### Giving orders
+
+Three ways to give the same orders, all handled by the same interpreter:
+
+- `/guards say <text>`
+- Chat starting with `!g ` (for example `!g alpha hold the line`). These messages are not broadcast.
+- Your voice through Simple Voice Chat, after `/guards voice on`.
+
+An order is `[who] <what> [who]`, in either order: `alpha, hold the line`, `hold the line alpha`. Chain up to three with "and", "then" or "after that": `alpha form a line and archers follow me`. A later order without a name reuses the earlier one's name. Filler words ("uh", "please", "now", "okay", "can you", "I need you to") are ignored, number words become digits, and small typos or common mishearings ("hole the line", "commanda", "petrol here") still match.
+
+**Who** (scope):
+
+| Say | Reaches |
+| --- | --- |
+| nothing, or guards, guard, everyone, everybody, all, squad, team, men, troops, soldiers, units, boys, lads, y'all | All your loaded guards in your current dimension |
+| commander | Your commander only |
+| a group name, with or without "squad", "team" or "group" in front ("alpha", "squad blue") | That group |
+| a guard's name ("Liam") | That guard |
+| archers, archer, bowmen, bowman, bows | Your bowmen |
+| swordsmen, swordsman, swords, fighters | Your swordsmen |
+
+`commander, alpha hold` relays through the commander to Alpha.
+
+**What** (every phrase the built-in grammar understands):
+
+| Order | Phrases | Lasts |
+| --- | --- | --- |
+| Follow | follow me, follow, on me, with me, come with me, fall in, stay with me, stick with me, follow us, keep up | Until changed |
+| Stay | stay, stay here, stay put, wait, wait here, stop, halt | Until changed |
+| Hold | hold, hold position, hold your position, hold the line, hold here, hold this position, stand your ground, hold your ground, hold fast | Until changed |
+| Come here | come here, to me, report to me, over here, get over here, come to me, come over here | Timed |
+| Attack my target | attack, attack that / this / it / him / her / them, attack my target, kill it / that / him / her / them, get him / her / them / it / that, charge | Timed |
+| Attack my attacker | attack my attacker, get / attack / kill whoever hit me, attack / get whoever is attacking me, protect me, defend me | Timed |
+| Attack nearest hostile | engage; attack / kill / get / engage (the) nearest enemy / hostile / mob / monster | Timed |
+| Defend the village | defend the village, guard the village, protect the village, to the bell, go to the bell, defend the bell, defend village, protect village, guard village | Until changed |
+| Patrol here | patrol here, patrol this area, guard this area, set up here, patrol, patrol the area, patrol around here, guard here, secure this area; add "radius 20", "within 20 blocks" or "20 blocks" | Until changed |
+| Form up | form / form a / make a / get in a / get into a / form up in a + line, circle or square; line up; circle up | Timed |
+| Retreat | retreat, fall back, pull back, back off | Timed |
+| As you were | as you were, carry on, commander take over, take over, at ease, stand down, dismissed | Instant |
+| Status report | status, report, status report, report status, sitrep, how are we doing, how are you doing, whats the status, give me a report, give me a status report | Instant |
+| Appoint | make / promote / appoint &lt;guard&gt; (to / as / the) commander; ... captain (of &lt;group&gt;) | Instant |
+
+Details:
+
+- **Attack my target** picks the creature under your crosshair within 48 blocks, or the last thing you hit in the past 5 s. **Nearest hostile** looks within 24 blocks.
+- **Defend the village** sends guards to the nearest bell within 64 blocks (or your spot if there is none) with a 32-block home and Defensive behavior.
+- **Patrol here** sets a home at your position with radius 24 (8 to 128) and Perimeter behavior.
+- **Retreat** pulls guards to you and stops them fighting for up to 10 s.
+- **Timed** orders end after 60 s (configurable) or when done. **As you were** clears orders and hands control back to the commander.
+- Typed `/guards follow`, `stay` and `hold` replace voice orders on the same guards.
+- Speech that is not addressed to your guards and does not parse as an order issues no guard command. Eligible proximity speech still goes to transcription while voice is enabled. If you address them ("commander, ...") and the grammar cannot parse it, the commander says "I did not catch that." With an OpenAI key configured, those addressed but unparsed lines go to an optional LLM fallback first ([details](docs/voice.md#privacy)).
+
+## Command post (tactics screen)
+
+Open it with `/guards tactics`, `/guards groups`, or the whistle. The map is on the left, groups on the right, and the zone tools and orders along the bottom. Press `H` for the in-game legend.
+
+![Command post](docs/images/command-post.png)
+
+**Zone map**
+
+| Input | Action |
+| --- | --- |
+| Left-drag | Select an area |
+| Right-click | Fill the selection, or paint one chunk |
+| Right-drag | Paint freely (no selection) |
+| Shift + right-click | Erase instead of paint (or the Erase tool, `X`) |
+| Middle-drag / arrow keys | Pan |
+| Scroll / `+` `-` | Zoom (scroll zooms at the cursor) |
+| `1`-`9`, `0` | Pick the paint colour (`+` shows all) |
+| `C` / `Delete` | Deselect / erase the selection |
+| `Space` | Center the map on you |
+
+Zones save automatically. Only explored chunks are shown.
+
+**Groups**
+
+| Input | Action |
+| --- | --- |
+| Drag a guard | Move it to a group |
+| Drop on Unassigned | Remove it from its group |
+| Drop on + New group | Create a group for it |
+| Click a group name | Collapse or expand it |
+| Double-click a name | Rename (Enter saves, Esc cancels) |
+| Click colour stripe | Next colour (Shift: previous) |
+| Right-click stripe | Remove the colour |
+| `F` / `S` on a group | Order that group to follow / stay |
+| Follow all / Stay all (bottom bar) | Order everyone |
+| `Ctrl` + `S` | Save group moves |
+| `Esc` | Cancel the current action, then close |
+
+A group's colour links it to the zones painted in that colour. Group moves are saved in one batch; closing with unsaved moves asks first. The roster shows every guard you own. Loaded guards show level, health, gear, distance and current orders; unloaded guards show their saved name and group. You can have up to 64 groups.
+
+Singleplayer map notes are stored per save folder, so renaming a world keeps its notes and worlds with the same display name stay separate. Older notes keyed by display name migrate to the first matching save opened.
+
+## Shop and upgrades
+
+`/guards shop`. Prices are in emerald blocks. Upgrades apply to every guard you hire afterwards.
+
+![Shop](docs/images/shop-armor.png)
+
+**Server ownership cap.** `/gamerule guardvillagers:max_personal_guards 0` allows unlimited guards (the default). Set a positive integer, for example `/gamerule guardvillagers:max_personal_guards 300`, to cap each player's total across dimensions and unloaded chunks. Lowering the cap keeps existing guards and blocks further purchases/claims until below it. The shop and `/guards count` show `?` when unlimited.
+
+Large rosters are sent in packets below 512 KiB and assembled before the sidebar updates. Equipment previews are omitted beyond 64 blocks or in unloaded chunks; an individually oversized preview is also omitted. Large open rosters refresh every 1?5 seconds, with command changes coalesced over half a second. The sidebar only draws visible guard rows. Groups retain their 64-group limit, with no per-group guard cap.
+
+**Hiring.** Click the card to hire one guard, shift-click to hire as many as you can afford (subject to the server?s configured cap; creative shift-click buys 16 per click). The guard spawns in your own block column or the hire fails and you are refunded. Free in creative.
+
+Hire price is `4 + 2 x (loadout tier - 1)`, where loadout tier is `1 + armor + weapon + support` upgrade levels. Reputation scales it: `1.5x` at `0.00`, `1.125x` at `0.50`, `0.75x` at `1.00`, never below 1 block. Recruits receive the purchased equipment and support upgrades, but start at XP level 1 with zero experience. The loadout tier is a price factor, not the guard's XP level.
+
+| Upgrade | Levels | Cost per level | Effect |
+| --- | --- | --- | --- |
+| Armor | 8 | 4, 8, 16, 32, then 64 | Better armor odds, from all leather at level 0 to 30% iron, 35% gold, 35% diamond at level 8. From level 2, some leather rolls become chainmail; from level 6, a small chance of netherite. |
+| Weapon | 5 | 4, 16, then 64 | Swords: stone, iron, diamond, then Sharpness III, IV, V. Bows: Power I to V. |
+| Support | 3 | 64, 128, 192 | 1: faster healing. 2: shields. 3: fastest healing. |
+
+| Support level | Healing |
+| --- | --- |
+| 0 | 1 HP every 5 s |
+| 1-2 | 2 HP every 2.5 s |
+| 3 | 2 HP every 1 s |
+
+## Reputation and trust
+
+Reputation is one number per player from `0.00` to `1.00`. Everyone starts at `0.50`.
+
+| Reputation | Meaning |
+| --- | --- |
+| `0.50` or more | Trusted: you can hire and claim guards. |
+| below `0.50` | You cannot hire or claim guards. |
+| below `0.25` | Guards treat you as hostile, and your first-hit grace no longer applies. |
+
+| Event | Change |
+| --- | --- |
+| Trade with a villager | `+0.0025` (at most once per 10 s per villager) |
+| Your guard kills a hostile mob | `+0.005` |
+| Your guard kills a raider | `+0.01`, plus `+0.01` during an active raid |
+| You harm a villager | `-0.02` |
+| You harm a guard (unforgiven hit) | `-0.015` |
+| A guard kills you | reset to `0.00` |
+
+Every 36 s, reputation moves `0.01` toward `0.50`, so both good and bad standing fade.
+
+**Trusting other players.** `/guards trust add <player>` makes your guards treat that player as a friend: they never target them, and the player can ring a bell to call your guards. Up to 64 players. `/guards trust list` and `/guards trust remove <player>` manage the list.
 
 ## Commands
 
-All player-facing commands live under `/guards`.
+Everything is under `/guards`. Player commands only affect your own guards.
 
-### Player Commands
+### Player commands
 
-| Command | What It Does |
+| Command | What it does |
 | --- | --- |
-| `/guards shop` | Opens the Guard Shop UI. |
-| `/guards tactics` | Opens the tactical map UI. |
-| `/guards groups` | Opens the groups-focused UI. |
-| `/guards stay` | Orders all owned guards to stay. |
-| `/guards follow` | Orders all owned guards to follow. |
-| `/guards follow <group name>` | Orders only that named group to follow. |
-| `/guards zone <radius>` | Assigns the player's current location as home for nearby owned guards. Radius range: `8` to `128`. |
-| `/guards groups add` | Adds a new group row. |
-| `/guards groups rename <row> <name>` | Renames a group. |
-| `/guards groups assign <guardUuid> <groupRow>` | Assigns a guard to a group. Use `0` to unassign. |
-| `/guards count` | Shows how many guards you own. |
+| `/guards shop` | Open the shop. |
+| `/guards tactics` | Open the command post. |
+| `/guards groups` | Open the command post. |
+| `/guards groups add` | Add a group. |
+| `/guards groups rename <row> <name>` | Rename group `<row>` (1 to 64). |
+| `/guards groups assign <guardUuid> <groupRow>` | Put one guard in a group. `0` unassigns. |
+| `/guards groups assignmany <groupRow> <guardUuids>` | Same for up to 64 space- or comma-separated UUIDs. The command post uses this. |
+| `/guards follow [group]` | All guards, or one group by name, follow you. |
+| `/guards stay [group]` | All guards, or one group, stay. |
+| `/guards hold` | All guards hold position. |
+| `/guards cleartargets` | All guards drop their current target. |
+| `/guards zone <radius>` | Your guards within 96 blocks get a home at your position. Radius 8 to 128. |
+| `/guards count` | How many guards you own, how many are loaded, and the limit. |
+| `/guards say <text>` | Give an order in plain English (see [Giving orders](#giving-orders)). |
+| `/guards status` | Commander's status report. |
+| `/guards appoint commander` | Make the guard you look at (within 8 blocks) your commander. |
+| `/guards appoint captain` | Make it captain of its group. |
+| `/guards appoint commander <guardUuid>` / `captain <guardUuid>` | Same, for a specific guard (used by the tactics screen menu). |
+| `/guards appoint auto` | Clear appointments; ranks follow seniority again. |
+| `/guards commander auto on\|off` | Let the commander act on its own, or only on your orders. |
+| `/guards voice on\|off` | Allow or stop voice orders for you. |
+| `/guards voice status` | What voice needs to work for you. |
+| `/guards trust add <player>` | Your guards treat this player as a friend. |
+| `/guards trust remove <player>` | Remove this player from your trusted list. |
+| `/guards trust list` | Show your trusted players. |
 
-### Operator-Only Commands
+### Operator commands (permission level 2)
 
-| Command | What It Does |
+| Command | What it does |
 | --- | --- |
-| `/guards reputation <value>` | Sets your own reputation. |
-| `/guards reputation <player> <value>` | Sets another player's reputation. |
-| `/guards debug` | Toggles guard debug rendering. |
-| `/guards debug <range>` | Enables debug and sets render range. |
+| `/guards reputation get [player]` | Show a reputation (yours by default). |
+| `/guards reputation <value>` | Set your reputation, `0` to `1` with up to two decimals. |
+| `/guards reputation <player> <value>` | Set another player's reputation. |
+| `/guards debug [range]` | Toggle the debug overlay for you: paths, targets, intents and labels. Range 1 to 256, capped at half your view distance. |
+| `/guards voice reload` | Re-read `config/guardvillagers-voice.json` and the API key. |
 
-Reputation command input rules:
+![Debug overlay](docs/images/debug-overlay.png)
 
-- valid range: `0.00` to `1.00`
-- up to two decimal places
+## Voice setup
 
-Debug range notes:
+Voice is optional and server-side. In short:
 
-- range is capped to half the player's view distance in blocks
-- debug data includes pathing and target overlays
+1. Install Simple Voice Chat 2.6.21+ on the server and clients.
+2. Set `OPENAI_API_KEY` in the server's environment.
+3. Start the server once; tune `config/guardvillagers-voice.json`; `/guards voice reload`.
+4. Players run `/guards voice on` and hold their voice chat key to talk.
 
-## Creative And Admin Tools
+Audio is only captured from players who opted in and are near their own guards. It is sent to OpenAI for transcription and never stored. The full field list, privacy details and cost controls are in [docs/voice.md](docs/voice.md).
 
-The mod includes:
+## Upgrading from 1.21.11
 
-- `Guard Spawn Egg`
-- `Guard Whistle`
-- a dedicated item group for quick access in creative
+Open your 1.21.11 world with 2.0.0 and the data moves on the first start:
 
-Debug mode is intended for operators and advanced troubleshooting. It can show:
+- Saved files move from `data/guardvillagers_<name>.dat` to the 26.1 layout, `data/guardvillagers/<name>.dat`, and per-dimension village data moves out of the old `DIM-1` / `DIM1` folders.
+- Old reputation values (`-200` to `200`) convert to the `0.00` to `1.00` scale.
+- Guards keep their owner, level, gear, group and home. Older group keys are read and rewritten.
+- The old one-step healing upgrade becomes support level 1.
 
-- path nodes
-- current path index
-- target linkage
-- behavior / owner / group labels
+The migration runs before the world loads, only moves files that exist, and is safe to run again. Back up the world first anyway.
 
-## Building From Source
+## Building from source
 
-### Windows
-
-```powershell
-.\gradlew.bat runClient
-.\gradlew.bat runServer
-.\gradlew.bat build
-```
-
-### macOS / Linux
+Needs JDK 25. Point `JAVA_HOME` at it:
 
 ```bash
-./gradlew runClient
-./gradlew runServer
-./gradlew build
+export JAVA_HOME=/path/to/jdk-25                                   # Linux / macOS
+```
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Microsoft\jdk-25.0.0.0-hotspot"  # Windows, adjust to your install
 ```
 
-Build outputs are written to `build/libs/`.
+| Command | What it does |
+| --- | --- |
+| `./gradlew build` | Compile, run unit tests and server game tests, build the jar in `build/libs/`. |
+| `./gradlew test` | Unit tests only. |
+| `./gradlew runGameTest` | Server game tests (logs in `build/run/gameTest/logs/`). |
+| `./gradlew runClientGameTest` | Client game tests. Opens a game window and saves screenshots to `build/run/clientGameTest/screenshots/`. |
+| `./gradlew runClient` / `runServer` | Dev client or server. Both include Simple Voice Chat for testing; it is never bundled in the jar. |
+| `./gradlew runGameTest -Pperf` | Server tick benchmark instead of the game tests. Results go to `build/perf/`. |
+
+Benchmark options: `-PperfOnly=combat_128,follow_64` (scenario name prefixes), `-PperfSizes=16,64,128`, `-PperfMeasure=600`, `-PperfWarmup=100`, `-PperfJitWarmup=200`, `-PperfJfr` (also writes `build/perf/guard-perf.jfr`).
+
+On Windows use `.\gradlew.bat` instead of `./gradlew`.
+
+Old development notes from the 1.21.11 era are in [docs/history](docs/history/README.md). Changes are listed in [docs/CHANGELOG.md](docs/CHANGELOG.md).
 
 ## License
 
-Licensed under `CC0-1.0`. See [LICENSE](LICENSE).
+[CC0-1.0](LICENSE).
