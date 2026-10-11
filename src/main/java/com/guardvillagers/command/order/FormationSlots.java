@@ -2,9 +2,7 @@ package com.guardvillagers.command.order;
 
 import com.guardvillagers.entity.FormationType;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Formation posts relative to the speaker, in whole blocks: {@code forward} along the direction the speaker faces,
@@ -14,7 +12,7 @@ import java.util.Set;
  * <li>LINE: swordsmen in the front rank 3 blocks ahead, bowmen in a rank 2 blocks behind them; at most 8 per row,
  * further rows step away from the speaker (front) or toward it (back).</li>
  * <li>SQUARE: a filled square grid in front of the speaker, swordsmen first.</li>
- * <li>CIRCLE: a ring around the speaker.</li>
+ * <li>CIRCLE: concentric rings around the speaker.</li>
  * </ul>
  */
 public final class FormationSlots {
@@ -54,17 +52,18 @@ public final class FormationSlots {
 				}
 			}
 			case CIRCLE -> {
-				double radius = Math.max(3.0D, total * SPACING / (2.0D * Math.PI));
-				Set<Long> used = new HashSet<>();
-				for (int i = 0; i < total; i++) {
-					double angle = 2.0D * Math.PI * i / Math.max(1, total);
-					double r = radius;
-					Post post;
-					do {
-						post = new Post((int) Math.round(Math.cos(angle) * r), (int) Math.round(Math.sin(angle) * r));
-						r += 1.0D;
-					} while (!used.add(((long) post.forward() << 32) ^ (post.right() & 0xFFFFFFFFL)));
-					posts.add(post);
+				int placed = 0;
+				int radius = 4;
+				while (placed < total) {
+					int capacity = Math.max(1, (int) Math.floor(2 * Math.PI * radius / 3.0D));
+					int count = Math.min(capacity, total - placed);
+					for (int i = 0; i < count; i++) {
+						double angle = 2 * Math.PI * i / count;
+						posts.add(new Post((int) Math.round(Math.cos(angle) * radius),
+								(int) Math.round(Math.sin(angle) * radius)));
+					}
+					placed += count;
+					radius += 3;
 				}
 			}
 		}

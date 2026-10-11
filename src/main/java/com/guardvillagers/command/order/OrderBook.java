@@ -23,7 +23,7 @@ import java.util.function.Predicate;
  * own priority. Instant actions (status, appointments) are never stored.
  */
 public final class OrderBook {
-	public static final int MAX_ACTIVE = 32;
+	public static final int MAX_ACTIVE = 2_048;
 	public static final long DEFAULT_TIMED_EXPIRY_TICKS = 60L * 20L;
 
 	public enum Status {

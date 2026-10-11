@@ -42,6 +42,20 @@ final class FormationSlotsTest {
 		}
 	}
 
+	@Test
+	void thousandCirclePostsRemainDistinctAndNearby() {
+		var posts = FormationSlots.posts(FormationType.CIRCLE, 500, 500);
+		assertEquals(1000, posts.size());
+		assertDistinct(posts);
+		for (var post : posts) assertTrue(Math.hypot(post.forward(), post.right()) < 60);
+		for (int i = 0; i < posts.size(); i++) {
+			for (int j = i + 1; j < posts.size(); j++) {
+				var a = posts.get(i); var b = posts.get(j);
+				assertTrue(Math.hypot(a.forward() - b.forward(), a.right() - b.right()) >= 2);
+			}
+		}
+	}
+
 	private static void assertDistinct(List<FormationSlots.Post> posts) {
 		Set<FormationSlots.Post> seen = new HashSet<>(posts);
 		assertEquals(posts.size(), seen.size(), "posts overlap: " + posts);

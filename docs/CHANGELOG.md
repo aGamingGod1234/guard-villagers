@@ -1,5 +1,14 @@
 # Changelog
 
+## Unlimited personal guards
+
+- Added `/gamerule guardvillagers:max_personal_guards`, integer default `0` (unlimited). Positive values cap purchases and emerald claims, including unloaded guards; existing guards are retained.
+- Removed roster truncation at 1,024 guards. Snapshots use byte-sized packets with atomic client assembly, distant equipment omission, coalesced refreshes and visible-row rendering.
+- Bulk assignment accepts up to 1,024 UUIDs per server command; the UI keeps its existing 256-character batches and pacing. Group membership and ownership storage have no per-owner guard cap.
+- Preserve raid behavior for every guard; allow 2,048 simultaneous orders. Recipient snapshots remain unbounded. Generated names check persisted guards and use unique suffixes when name pools fill.
+- Circle orders use concentric rings; follow rings verified through 1,000 slots. Added large-roster, ownership, command, persistence and payload coverage.
+
+
 ## 2.0.0
 
 Port to Minecraft 26.1.2 with a new command system, a rebuilt tactics screen and reworked guard AI.
@@ -36,7 +45,7 @@ Port to Minecraft 26.1.2 with a new command system, a rebuilt tactics screen and
 - Reputation now decays toward `0.50` from both sides instead of toward `0.00`.
 - Trade and raid reputation rewards fixed (raid bonus only during an active raid; trade reward at most every 10 s per villager).
 - Hired guards spawn only in the buyer's own block column and never inside sealed pockets; failed hires are refunded.
-- Owned guards are tracked in saved data, so counts and the 16-guard limit include unloaded guards.
+- Owned guards are tracked in saved data, so counts and configured ownership limits include unloaded guards.
 - Shop cards rewritten for readability.
 - Debug overlay ported to 26.1 gizmos, with a 48-block focus pick and no overlapping labels.
 - Village scans are cheaper (loaded chunks only, palette-skipped door counting).
