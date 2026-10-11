@@ -1,6 +1,5 @@
 package com.guardvillagers.data;
 
-import com.guardvillagers.GuardSecurityLimits;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import java.util.Collections;
@@ -21,14 +20,11 @@ import net.minecraft.world.level.saveddata.SavedDataType;
  * destroyed (killed or discarded) or changes owner; how long a guard has gone unseen only affects roster ordering,
  * because an old row is usually a guard parked in a far-away chunk, not a missing one.
  *
- * <p>Size is bounded per owner ({@link #MAX_ROWS_PER_OWNER}), not globally: a global cap would have to drop some
- * owner's rows and let them hire past the personal limit. The per-owner cap is four times the personal limit, so
- * eviction only ever touches owners who already hold far more guards than they can hire.
+ * <p>Every authoritative row is retained, even when an older world exceeds the current hiring limit.
  */
 public final class GuardOwnershipState extends SavedData {
 	/** Only re-mark a loaded guard's row dirty this often, so tracking does not rewrite the file every autosave. */
 	public static final long REFRESH_TICKS = 20L * 60L * 20L;
-	public static final int MAX_ROWS_PER_OWNER = GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER * 4;
 	public static final int MAX_NAME_LENGTH = 64;
 
 	private static final Codec<Map<UUID, Entry>> ENTRY_MAP_CODEC = Codec.unboundedMap(UUIDUtil.STRING_CODEC, Entry.CODEC);
@@ -80,9 +76,6 @@ public final class GuardOwnershipState extends SavedData {
 			if (sinceSeen >= 0 && sinceSeen < REFRESH_TICKS) {
 				return;
 			}
-		}
-		if (!sameOwner) {
-			this.makeRoomFor(ownerId);
 		}
 		this.put(guardId, new Entry(ownerId, tick, safeName, groupIndex));
 		this.setDirty();
@@ -149,27 +142,6 @@ public final class GuardOwnershipState extends SavedData {
 		if (owned != null && owned.remove(guardId) && owned.isEmpty()) {
 			this.byOwner.remove(ownerId);
 		}
-	}
-
-	/**
-	 * Keeps {@code ownerId} under {@link #MAX_ROWS_PER_OWNER} by dropping that owner's least recently seen row. The
-	 * owner keeps far more rows than the personal limit, so this never lets anyone hire past it.
-	 */
-	private void makeRoomFor(UUID ownerId) {
-		Set<UUID> owned = this.byOwner.get(ownerId);
-		if (owned == null || owned.size() < MAX_ROWS_PER_OWNER) {
-			return;
-		}
-		UUID oldest = null;
-		long oldestTick = Long.MAX_VALUE;
-		for (UUID guardId : owned) {
-			long lastSeen = this.guards.get(guardId).lastSeenTick();
-			if (oldest == null || lastSeen < oldestTick) {
-				oldestTick = lastSeen;
-				oldest = guardId;
-			}
-		}
-		this.remove(oldest);
 	}
 
 	private Map<UUID, Entry> entriesForCodec() {

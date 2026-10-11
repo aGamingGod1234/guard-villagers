@@ -1960,6 +1960,9 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	@Override
 	public void die(DamageSource damageSource) {
 		super.die(damageSource);
+		if (this.level() instanceof ServerLevel && !this.isAlive()) {
+			GuardOwnershipIndex.untrack(this);
+		}
 		if (this.ownerUuid != null && this.level() instanceof ServerLevel) {
 			GuardHierarchy.onGuardLost(this, true);
 		}
