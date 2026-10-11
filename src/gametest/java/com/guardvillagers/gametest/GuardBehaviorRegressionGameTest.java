@@ -58,10 +58,14 @@ public class GuardBehaviorRegressionGameTest {
 		GuardEntity guard = GuardTestSupport.swordsman(helper, 24.5, 1, 24.5);
 		guard.setHome(guard.blockPosition(), 24);
 		guard.setBehavior(GuardBehavior.CROWD_CONTROL);
-		helper.runAfterDelay(80, () -> {
-			Vec3 settled = guard.position();
-			GuardTestSupport.onEachTick(helper, () -> helper.assertTrue(guard.distanceToSqr(settled) < 1.0D,
-					"watchdog moved settled crowd guard: " + guard.position()));
+		Vec3[] settled = {null};
+		helper.runAfterDelay(80, () -> settled[0] = guard.position());
+		// Register callbacks up front: GameTestInfo iterates the scheduler map while invoking them.
+		GuardTestSupport.onEachTick(helper, () -> {
+			if (settled[0] != null) {
+				helper.assertTrue(guard.distanceToSqr(settled[0]) < 1.0D,
+						"watchdog moved settled crowd guard: " + guard.position());
+			}
 		});
 		helper.runAfterDelay(280, helper::succeed);
 	}
@@ -204,16 +208,17 @@ public class GuardBehaviorRegressionGameTest {
 		guard.setNoAi(true);
 		guard.setOnGround(true);
 		ReturnToLandGoal goal = new ReturnToLandGoal(guard, 1.0D);
+		long[] deadline = {0L};
 		helper.runAfterDelay(5, () -> {
 			goal.start();
 			goal.tick();
 			helper.assertTrue(field(goal, "destination") == null, "test unexpectedly found land");
-			long deadline = (long) field(goal, "nextRetarget");
-			helper.runAfterDelay(2, () -> {
-				goal.tick();
-				helper.assertTrue((long) field(goal, "nextRetarget") == deadline, "empty search bypassed throttle");
-				helper.succeed();
-			});
+			deadline[0] = (long) field(goal, "nextRetarget");
+		});
+		helper.runAfterDelay(7, () -> {
+			goal.tick();
+			helper.assertTrue((long) field(goal, "nextRetarget") == deadline[0], "empty search bypassed throttle");
+			helper.succeed();
 		});
 	}
 
@@ -269,6 +274,7 @@ public class GuardBehaviorRegressionGameTest {
 		RaidTacticsGoal goal = new RaidTacticsGoal(guard, 1.0D);
 		goal.start();
 		setField(goal, "raid", new Raid(guard.blockPosition(), Difficulty.NORMAL));
+		long[] deadline = {0L};
 		helper.runAfterDelay(5, () -> {
 			helper.assertFalse(guard.hasLineOfSight(raider), "test wall does not block sight");
 			goal.tick();
@@ -276,12 +282,12 @@ public class GuardBehaviorRegressionGameTest {
 			raider.discard();
 			goal.tick();
 			helper.assertTrue(field(goal, "seekTarget") == null, "dead raider was not cleared");
-			long deadline = (long) field(goal, "nextRaiderSearch");
-			helper.runAfterDelay(2, () -> {
-				goal.tick();
-				helper.assertTrue((long) field(goal, "nextRaiderSearch") == deadline, "empty raider search bypassed throttle");
-				helper.succeed();
-			});
+			deadline[0] = (long) field(goal, "nextRaiderSearch");
+		});
+		helper.runAfterDelay(7, () -> {
+			goal.tick();
+			helper.assertTrue((long) field(goal, "nextRaiderSearch") == deadline[0], "empty raider search bypassed throttle");
+			helper.succeed();
 		});
 	}
 
