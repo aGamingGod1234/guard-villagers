@@ -6,11 +6,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class GuardSecurityLimitsTest {
 	@Test
-	void remainingPersonalGuardSlotsNeverExceedsCapOrGoesNegative() {
-		assertEquals(GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER, GuardSecurityLimits.remainingPersonalGuardSlots(-5));
-		assertEquals(1, GuardSecurityLimits.remainingPersonalGuardSlots(GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER - 1));
-		assertEquals(0, GuardSecurityLimits.remainingPersonalGuardSlots(GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER));
-		assertEquals(0, GuardSecurityLimits.remainingPersonalGuardSlots(GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER + 20));
+	void zeroDefaultAllowsHundredsAndConfiguredCapIsRespected() {
+		assertEquals(0, GuardGameRules.DEFAULT_MAX_PERSONAL_GUARDS);
+		assertEquals(Integer.MAX_VALUE, GuardSecurityLimits.remainingPersonalGuardSlots(1000, 0));
+		assertEquals(16, GuardSecurityLimits.remainingPersonalGuardSlots(-5, 16));
+		assertEquals(1, GuardSecurityLimits.remainingPersonalGuardSlots(15, 16));
+		assertEquals(0, GuardSecurityLimits.remainingPersonalGuardSlots(16, 16));
+		assertEquals(0, GuardSecurityLimits.remainingPersonalGuardSlots(1000, 16));
+		assertEquals(700, GuardSecurityLimits.remainingPersonalGuardSlots(300, 1000));
 	}
 
 	@Test

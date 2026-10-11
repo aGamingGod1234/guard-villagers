@@ -61,7 +61,7 @@ public final class GuardHiring {
 		}
 
 		int ownedGuardCount = GuardOwnershipIndex.countOwnedGuards(world.getServer(), player.getUUID());
-		int remainingSlots = GuardSecurityLimits.remainingPersonalGuardSlots(ownedGuardCount);
+		int remainingSlots = GuardSecurityLimits.remainingPersonalGuardSlots(ownedGuardCount, GuardGameRules.personalGuardLimit(world));
 		if (remainingSlots <= 0) {
 			return BatchResult.of(Result.LIMIT_REACHED);
 		}

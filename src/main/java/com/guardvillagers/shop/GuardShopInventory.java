@@ -5,7 +5,7 @@ import com.guardvillagers.GuardHiring;
 import com.guardvillagers.GuardOwnershipIndex;
 import com.guardvillagers.GuardPlayerUpgrades;
 import com.guardvillagers.GuardReputationManager;
-import com.guardvillagers.GuardSecurityLimits;
+import com.guardvillagers.GuardGameRules;
 import com.guardvillagers.GuardVillagersMod;
 import java.util.ArrayList;
 import java.util.List;
@@ -67,7 +67,7 @@ public class GuardShopInventory extends SimpleContainer {
 		int requested = 1;
 		if (bulkPurchase) {
 			requested = this.player.getAbilities().instabuild
-				? GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER
+				? 16 // A creative bulk click buys one batch, not the entire allowance.
 				: Math.max(1, GuardEconomy.countEmeraldBlocks(this.player.getInventory()) / cost);
 		}
 		GuardHiring.BatchResult result = GuardHiring.hire(this.player, requested);
@@ -76,7 +76,7 @@ public class GuardShopInventory extends SimpleContainer {
 				? Component.translatable("message.guardvillagers.shop.hired_one", result.guardNames().getFirst())
 				: Component.translatable("message.guardvillagers.shop.hired_many", result.spawnedCount());
 			case NOT_TRUSTED -> Component.translatable("message.guardvillagers.shop.not_trusted");
-			case LIMIT_REACHED -> Component.translatable("message.guardvillagers.shop.limit", GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER);
+			case LIMIT_REACHED -> Component.translatable("message.guardvillagers.shop.limit", GuardGameRules.personalGuardLimit(this.player.level()));
 			case INSUFFICIENT_FUNDS -> Component.translatable("message.guardvillagers.shop.insufficient", cost);
 			case SPAWN_FAILED -> Component.translatable("message.guardvillagers.shop.spawn_failed");
 			case INTERNAL_ERROR -> Component.translatable("message.guardvillagers.shop.error");
@@ -139,7 +139,7 @@ public class GuardShopInventory extends SimpleContainer {
 		GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgradesView(this.player);
 		boolean creativeMode = this.player.getAbilities().instabuild;
 		int ownedGuards = GuardOwnershipIndex.countOwnedGuards(this.player.level().getServer(), this.player.getUUID());
-		int guardLimit = GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER;
+		int guardLimit = GuardGameRules.personalGuardLimit(this.player.level());
 
 		this.setItem(SLOT_INFO, card(Items.BOOK, key("info.title"), ChatFormatting.GOLD,
 			line(key("info.armor", armorOdds(upgrades.getArmorDistribution())), ChatFormatting.GRAY),
@@ -150,8 +150,8 @@ public class GuardShopInventory extends SimpleContainer {
 
 		int guardCost = GuardHiring.getAdjustedGuardCost(this.player);
 		this.setItem(SLOT_BUY_GUARD, card(Items.EMERALD_BLOCK, key("hire.title"), ChatFormatting.GREEN,
-			costLine(guardCost, creativeMode, ownedGuards >= guardLimit),
-			line(key("hire.owned", ownedGuards, guardLimit), ChatFormatting.GRAY),
+			costLine(guardCost, creativeMode, guardLimit > 0 && ownedGuards >= guardLimit),
+			line(key("hire.owned", ownedGuards, GuardGameRules.displayLimit(this.player.level())), ChatFormatting.GRAY),
 			Component.empty(),
 			line(key("hire.hint"), ChatFormatting.DARK_GRAY)));
 

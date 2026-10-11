@@ -90,7 +90,7 @@ final class GuardOwnershipStateTest {
 		UUID oldest = UUID.randomUUID();
 		state.record(oldest, this.owner, 0L);
 		// More rows than the old global cap (65,536), spread over owners who are all at the personal limit.
-		int perOwner = GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER;
+		int perOwner = 16;
 		for (int ownerIndex = 0; ownerIndex < 4_200; ownerIndex++) {
 			UUID someOwner = new UUID(0L, ownerIndex);
 			for (int i = 0; i < perOwner; i++) {
@@ -107,12 +107,12 @@ final class GuardOwnershipStateTest {
 		GuardOwnershipState state = new GuardOwnershipState();
 		UUID oldest = UUID.randomUUID();
 		state.record(oldest, this.owner, 0L);
-		for (int i = 0; i < 64; i++) {
+		for (int i = 0; i < 1000; i++) {
 			state.record(UUID.randomUUID(), this.owner, 10L + i);
 		}
 		state = GuardOwnershipState.CODEC.parse(NbtOps.INSTANCE,
 				GuardOwnershipState.CODEC.encodeStart(NbtOps.INSTANCE, state).getOrThrow()).getOrThrow();
-		assertEquals(65, state.countOwned(this.owner));
+		assertEquals(1001, state.countOwned(this.owner));
 		for (UUID id : java.util.Set.copyOf(state.guardsOf(this.owner))) {
 			if (!id.equals(oldest)) {
 				state.remove(id);
@@ -125,13 +125,13 @@ final class GuardOwnershipStateTest {
 	@Test
 	void ownerChangePreservesEveryGuardEvenAboveTheHiringLimit() {
 		GuardOwnershipState state = new GuardOwnershipState();
-		for (int i = 0; i < 64; i++) {
+		for (int i = 0; i < 1000; i++) {
 			state.record(UUID.randomUUID(), this.owner, i);
 		}
 		UUID moved = UUID.randomUUID();
 		state.record(moved, this.otherOwner, 0L);
 		state.record(moved, this.owner, 500L);
-		assertEquals(65, state.countOwned(this.owner));
+		assertEquals(1001, state.countOwned(this.owner));
 		assertEquals(0, state.countOwned(this.otherOwner));
 	}
 

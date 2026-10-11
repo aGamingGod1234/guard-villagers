@@ -1,4 +1,6 @@
 {
+  "gamerule.guardvillagers.max_personal_guards": "Maximum personal guards",
+  "gamerule.guardvillagers.max_personal_guards.description": "Maximum guards each player may own, including unloaded guards. 0 allows unlimited guards. Existing guards are kept when the limit is lowered.",
 	"entity.guardvillagers.guard": "Guard Villager",
 	"item.guardvillagers.guard_spawn_egg": "Guard Spawn Egg",
 	"screen.guardvillagers.shop": "Guard Shop",

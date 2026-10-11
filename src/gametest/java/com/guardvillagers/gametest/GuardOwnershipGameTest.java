@@ -368,8 +368,11 @@ public class GuardOwnershipGameTest {
 		player.getInventory().add(new ItemStack(Items.EMERALD_BLOCK, 64));
 		GuardOwnershipState state = ownershipState(helper);
 		List<UUID> parked = new ArrayList<>();
+		var rules = helper.getLevel().getServer().overworld().getGameRules();
+		int previousLimit = rules.get(com.guardvillagers.GuardGameRules.MAX_PERSONAL_GUARDS);
+		rules.set(com.guardvillagers.GuardGameRules.MAX_PERSONAL_GUARDS, 16, helper.getLevel().getServer());
 		// Guards last seen at tick 0, i.e. parked in unloaded chunks far longer than the old 100-day expiry.
-		for (int i = 0; i < GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER; i++) {
+		for (int i = 0; i < 16; i++) {
 			UUID guardId = UUID.randomUUID();
 			parked.add(guardId);
 			state.record(guardId, player.getUUID(), 0L, "Parked " + i, -1);
@@ -380,9 +383,10 @@ public class GuardOwnershipGameTest {
 			helper.assertValueEqual(result.result(), GuardHiring.Result.LIMIT_REACHED, "hire result with 16 unloaded guards");
 			helper.assertValueEqual(owned(helper, player).size(), 0, "guards spawned past the limit");
 			helper.assertValueEqual(GuardOwnershipIndex.getUnloadedOwnedGuards(helper.getLevel().getServer(), player.getUUID(), Set.of()).size(),
-					GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER, "unloaded roster rows");
+					16, "unloaded roster rows");
 		} finally {
 			parked.forEach(state::remove);
+			rules.set(com.guardvillagers.GuardGameRules.MAX_PERSONAL_GUARDS, previousLimit, helper.getLevel().getServer());
 		}
 		helper.succeed();
 	}

@@ -1278,7 +1278,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 					return InteractionResult.SUCCESS;
 				}
 				int ownedGuards = GuardOwnershipIndex.countOwnedGuards(world.getServer(), player.getUUID());
-				if (com.guardvillagers.GuardSecurityLimits.remainingPersonalGuardSlots(ownedGuards) <= 0) {
+				if (com.guardvillagers.GuardSecurityLimits.remainingPersonalGuardSlots(ownedGuards, com.guardvillagers.GuardGameRules.personalGuardLimit(world)) <= 0) {
 					player.sendOverlayMessage(Component.literal("You already command as many guards as you can."));
 					return InteractionResult.SUCCESS;
 				}
@@ -1830,14 +1830,23 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 
 	private GuardNameRoll rollUniqueGuardName(ServerLevel world, UUID ownerUuid) {
 		Set<String> usedNames = OWNER_USED_NAMES.computeIfAbsent(ownerUuid, ignored -> ConcurrentHashMap.newKeySet());
-		for (int i = 0; i < 4096; i++) {
+		var ownership = world.getServer().getDataStorage().computeIfAbsent(com.guardvillagers.data.GuardOwnershipState.TYPE);
+		for (UUID guardId : ownership.guardsOf(ownerUuid)) {
+			ownership.get(guardId).ifPresent(entry -> usedNames.add(entry.name()));
+		}
+		for (int i = 0; i < 32; i++) {
 			GuardNameRoll roll = this.rollNameCandidate(world);
 			if (!usedNames.contains(roll.name())) {
 				registerOwnerName(ownerUuid, roll.name());
 				return roll;
 			}
 		}
-		String fallback = this.composeRegularName(world) + " " + Integer.toString(Math.max(1, usedNames.size() + 1));
+		String baseName = this.composeRegularName(world);
+		int suffix = Math.max(1, usedNames.size() + 1);
+		String fallback;
+		do {
+			fallback = baseName + " " + suffix++;
+		} while (usedNames.contains(fallback));
 		registerOwnerName(ownerUuid, fallback);
 		return new GuardNameRoll(fallback, SPECIAL_PROFILE_NONE);
 	}

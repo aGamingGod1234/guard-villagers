@@ -22,9 +22,9 @@ final class GuardCommandsParsingTest {
 		assertNull(GuardCommands.parseUuidList(""));
 		assertNull(GuardCommands.parseUuidList("not-a-uuid"));
 		assertNull(GuardCommands.parseUuidList(UUID.randomUUID() + " nope"));
-		String tooMany = IntStream.range(0, 65).mapToObj(i -> UUID.randomUUID().toString()).collect(Collectors.joining(" "));
+		String tooMany = IntStream.range(0, 1025).mapToObj(i -> UUID.randomUUID().toString()).collect(Collectors.joining(" "));
 		assertNull(GuardCommands.parseUuidList(tooMany));
-		String atLimit = IntStream.range(0, 64).mapToObj(i -> UUID.randomUUID().toString()).collect(Collectors.joining(" "));
-		assertEquals(64, GuardCommands.parseUuidList(atLimit).size());
+		String atLimit = IntStream.range(0, 1024).mapToObj(i -> UUID.randomUUID().toString()).collect(Collectors.joining(" "));
+		assertEquals(1024, GuardCommands.parseUuidList(atLimit).size());
 	}
 }
