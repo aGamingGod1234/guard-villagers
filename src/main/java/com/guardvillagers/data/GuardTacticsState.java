@@ -7,7 +7,6 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -46,9 +45,10 @@ public final class GuardTacticsState extends SavedData {
 	}
 
 	private GuardTacticsState(Map<UUID, PlayerTactics> entries) {
-		this.entries = new LinkedHashMap<>(Math.max(16, entries.size()), 0.75F, true);
+		this.entries = new LinkedHashMap<>();
 		for (Map.Entry<UUID, PlayerTactics> entry : entries.entrySet()) {
-			this.putBounded(entry.getKey(), entry.getValue().copy());
+			// Existing saved owners must survive even when a later version lowers the creation limit.
+			this.entries.put(entry.getKey(), entry.getValue().copy());
 		}
 	}
 
@@ -57,8 +57,11 @@ public final class GuardTacticsState extends SavedData {
 		if (existing != null) {
 			return existing;
 		}
+		if (!this.canCreate(ownerId)) {
+			throw new IllegalStateException("Guard tactics owner limit reached");
+		}
 		PlayerTactics created = new PlayerTactics();
-		this.putBounded(ownerId, created);
+		this.entries.put(ownerId, created);
 		this.setDirty();
 		return created;
 	}
@@ -76,19 +79,8 @@ public final class GuardTacticsState extends SavedData {
 		return Collections.unmodifiableMap(this.entries);
 	}
 
-	private void putBounded(UUID ownerId, PlayerTactics tactics) {
-		if (!this.entries.containsKey(ownerId) && this.entries.size() >= GuardSecurityLimits.MAX_TACTICS_PLAYERS) {
-			this.evictEldest();
-		}
-		this.entries.put(ownerId, tactics);
-	}
-
-	private void evictEldest() {
-		Iterator<UUID> iterator = this.entries.keySet().iterator();
-		if (iterator.hasNext()) {
-			iterator.next();
-			iterator.remove();
-		}
+	public boolean canCreate(UUID ownerId) {
+		return this.entries.containsKey(ownerId) || this.entries.size() < GuardSecurityLimits.MAX_TACTICS_PLAYERS;
 	}
 
 	public static final class PlayerTactics {
@@ -162,14 +154,10 @@ public final class GuardTacticsState extends SavedData {
 				this.rowColumnZones.put(toRowColumnKey(rowColumn[0], rowColumn[1]), colorId);
 			}
 			this.groupNames = new ArrayList<>();
-			for (String name : effectiveNames) {
-				if (this.groupNames.size() >= MAX_GROUPS) {
-					break;
-				}
-				String sanitized = sanitizeGroupName(name);
-				if (!sanitized.isEmpty()) {
-					this.groupNames.add(sanitized);
-				}
+			List<String> sanitizedNames = effectiveNames.stream().limit(MAX_GROUPS).map(PlayerTactics::sanitizeGroupName).toList();
+			for (String name : sanitizedNames) {
+				// A replacement for a duplicate must not steal a later row's otherwise unique name.
+				this.groupNames.add(this.uniqueGroupName(name, sanitizedNames));
 			}
 			this.preferredFormationId = normalizeFormationId(preferredFormationId);
 		}
@@ -255,13 +243,22 @@ public final class GuardTacticsState extends SavedData {
 			return this.groupNames.get(normalizedRow);
 		}
 
-		public void setGroupName(int row, String name) {
-			if (!isValidGroupRow(row)) {
-				return;
+		public boolean setGroupName(int row, String name) {
+			if (!isValidGroupRow(row) || name == null || name.isBlank()) {
+				return false;
 			}
 			int normalizedRow = normalizeRow(row);
+			String sanitized = sanitizeGroupName(name);
+			if (!this.isGroupNameAvailable(sanitized, normalizedRow)) {
+				return false;
+			}
 			this.ensureGroupCount(normalizedRow + 1);
-			this.groupNames.set(normalizedRow, sanitizeGroupName(name));
+			// ensureGroupCount may have created a preceding row with this name.
+			if (!this.isGroupNameAvailable(sanitized, normalizedRow)) {
+				return false;
+			}
+			this.groupNames.set(normalizedRow, sanitized);
+			return true;
 		}
 
 		public int addGroup() {
@@ -270,7 +267,7 @@ public final class GuardTacticsState extends SavedData {
 			}
 			int index = this.groupNames.size();
 			String name = index < GROUP_NAME_CYCLE.size() ? GROUP_NAME_CYCLE.get(index) : "Group " + (index + 1);
-			this.groupNames.add(name);
+			this.groupNames.add(this.uniqueGroupName(name));
 			return this.groupNames.size() - 1;
 		}
 
@@ -282,12 +279,15 @@ public final class GuardTacticsState extends SavedData {
 			this.ensureGroupCount(normalizedRow + 1);
 			String current = this.groupNames.get(normalizedRow);
 			int index = GROUP_NAME_CYCLE.indexOf(current);
-			int nextIndex = (index + 1) % GROUP_NAME_CYCLE.size();
-			if (index < 0) {
-				nextIndex = 0;
+			for (int offset = 1; offset <= GROUP_NAME_CYCLE.size(); offset++) {
+				int nextIndex = (index + offset) % GROUP_NAME_CYCLE.size();
+				String next = GROUP_NAME_CYCLE.get(nextIndex);
+				if (this.isGroupNameAvailable(next, normalizedRow)) {
+					this.groupNames.set(normalizedRow, next);
+					return nextIndex;
+				}
 			}
-			this.groupNames.set(normalizedRow, GROUP_NAME_CYCLE.get(nextIndex));
-			return nextIndex;
+			return index;
 		}
 
 		public void ensureGroupCount(int count) {
@@ -299,9 +299,36 @@ public final class GuardTacticsState extends SavedData {
 				return;
 			}
 			while (this.groupNames.size() < normalizedCount) {
-				int index = this.groupNames.size();
-				String name = index < GROUP_NAME_CYCLE.size() ? GROUP_NAME_CYCLE.get(index) : "Group " + (index + 1);
-				this.groupNames.add(name);
+				this.addGroup();
+			}
+		}
+
+		private boolean isGroupNameAvailable(String name, int exceptRow) {
+			if (name.equalsIgnoreCase("Unassigned")) {
+				return false;
+			}
+			for (int row = 0; row < this.groupNames.size(); row++) {
+				if (row != exceptRow && this.groupNames.get(row).equalsIgnoreCase(name)) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		private String uniqueGroupName(String name) {
+			return this.uniqueGroupName(name, List.of());
+		}
+
+		private String uniqueGroupName(String name, List<String> reservedNames) {
+			if (this.isGroupNameAvailable(name, -1)) {
+				return name;
+			}
+			for (int suffix = 2; ; suffix++) {
+				String ending = " " + suffix;
+				String candidate = name.substring(0, Math.min(name.length(), MAX_GROUP_NAME_LENGTH - ending.length())) + ending;
+				if (this.isGroupNameAvailable(candidate, -1) && reservedNames.stream().noneMatch(candidate::equalsIgnoreCase)) {
+					return candidate;
+				}
 			}
 		}
 

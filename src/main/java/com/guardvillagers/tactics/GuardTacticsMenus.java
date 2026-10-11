@@ -121,7 +121,7 @@ public final class GuardTacticsMenus {
 		}
 	}
 
-	private static GuardRosterSyncPayload buildRoster(ServerPlayer player) {
+	public static GuardRosterSyncPayload buildRoster(ServerPlayer player) {
 		MinecraftServer server = player.level().getServer();
 		GuardTacticsState.PlayerTactics tactics = GuardTacticsManager.getState(server).getOrDefault(player.getUUID());
 		int groupCount = Math.min(tactics.groupCount(), GuardRosterSyncPayload.MAX_GROUPS);
@@ -161,7 +161,7 @@ public final class GuardTacticsMenus {
 					guard.getRole().name(),
 					guard.isStaying(),
 					guard.hasFollowOverride(),
-					false,
+					guard.isHoldingPosition(),
 					guard.getHome().isPresent(),
 					guard.getRank().id()));
 		}
