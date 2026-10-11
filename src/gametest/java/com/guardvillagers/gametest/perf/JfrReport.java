@@ -82,6 +82,11 @@ public final class JfrReport {
 				if (w == null) {
 					continue;
 				}
+				// Upkeep is deliberately outside the tick timer; exclude spawning/teardown from the profile too.
+				if (e.getStackTrace() != null && e.getStackTrace().getFrames().stream()
+						.anyMatch(frame -> frame.getMethod().getType().getName().equals(HARNESS + "perf.PerfRunner"))) {
+					continue;
+				}
 				double weight = isAlloc ? e.getLong("weight") : 1.0;
 				String allocClass = isAlloc && e.getClass("objectClass") != null ? e.getClass("objectClass").getName() : null;
 				account((isCpu ? cpu : alloc).get(w.phase()), e.getStackTrace(), weight, allocClass);

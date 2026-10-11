@@ -685,6 +685,8 @@ public final class CommanderService {
 	}
 
 	private static void reconcileCleanup(MinecraftServer server, OwnerContext context) {
+		GuardCommandState.OwnerCommand saved = GuardHierarchy.state(server).peek(context.owner);
+		if (saved == null || saved.pendingCleanup().isEmpty()) return;
 		reconcileCleanup(server, context, livingGuards(server, context.owner));
 	}
 
@@ -718,14 +720,7 @@ public final class CommanderService {
 	}
 
 	static List<GuardEntity> livingGuards(MinecraftServer server, UUID owner) {
-		List<GuardEntity> owned = GuardOwnershipIndex.getOwnedGuards(server, owner);
-		List<GuardEntity> living = new ArrayList<>(owned.size());
-		for (GuardEntity guard : owned) {
-			if (guard.isAlive() && !guard.isRemoved()) {
-				living.add(guard);
-			}
-		}
-		return living;
+		return GuardOwnershipIndex.getOwnedGuards(server, owner);
 	}
 
 	/** Group and guard names the speaker may address, from live data. */

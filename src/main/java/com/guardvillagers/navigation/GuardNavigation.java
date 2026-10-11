@@ -2,6 +2,7 @@ package com.guardvillagers.navigation;
 
 import com.guardvillagers.entity.GuardEntity;
 import java.util.function.Supplier;
+import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.tags.FluidTags;
@@ -434,10 +435,10 @@ public class GuardNavigation extends GroundPathNavigation {
 		}
 		this.lastCrowdCheckTick = now;
 		AABB crowdBox = this.guard.getBoundingBox().inflate(CROWD_JAM_RADIUS, 0.0D, CROWD_JAM_RADIUS);
-		this.lastCrowdCheckResult = !this.level.getEntitiesOfClass(
-				GuardEntity.class,
+		this.lastCrowdCheckResult = this.level.hasEntities(
+				EntityTypeTest.forClass(GuardEntity.class),
 				crowdBox,
-				entity -> entity != this.guard && entity.isAlive()).isEmpty();
+				entity -> entity != this.guard && entity.isAlive());
 		return this.lastCrowdCheckResult;
 	}
 
@@ -465,7 +466,7 @@ public class GuardNavigation extends GroundPathNavigation {
 	}
 
 	private boolean isOccupiedByGuard(BlockPos pos) {
-		return !this.level.getEntitiesOfClass(GuardEntity.class, new AABB(pos), entity -> entity != this.guard).isEmpty();
+		return this.level.hasEntities(EntityTypeTest.forClass(GuardEntity.class), new AABB(pos), entity -> entity != this.guard);
 	}
 
 	private boolean isInOrAgainstFlowingWater() {
