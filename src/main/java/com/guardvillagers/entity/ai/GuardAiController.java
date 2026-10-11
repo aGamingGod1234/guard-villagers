@@ -19,6 +19,7 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.animal.golem.IronGolem;
 import net.minecraft.world.entity.monster.Monster;
+import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.entity.monster.RangedAttackMob;
 import net.minecraft.world.entity.raid.Raid;
 import net.minecraft.world.entity.raid.Raider;
@@ -98,6 +99,8 @@ public final class GuardAiController {
 	private BlockPos rallyPoint;
 	private int rallyTicks;
 	private boolean rallyExact;
+	private long rallyGeneration;
+	private boolean commanderRecovery;
 	private int corneredTicks;
 	private long retreatSuppressedUntil = Long.MIN_VALUE;
 
@@ -124,6 +127,11 @@ public final class GuardAiController {
 
 	public void tick(ServerLevel world) {
 		long now = world.getGameTime();
+		if (this.commanderRecovery && (this.guard.getHealth() > this.guard.getMaxHealth() * 0.5F
+				|| this.guard.getOwnerUuid() == null
+				|| world.getServer().getPlayerList().getPlayer(this.guard.getOwnerUuid()) == null)) {
+			this.commanderRecovery = false;
+		}
 		this.tickTimers(world, now);
 		this.refreshStatus(world, now);
 		this.refreshScans(world, now);
@@ -236,9 +244,30 @@ public final class GuardAiController {
 		if (rallyPoint == null) {
 			return;
 		}
-		this.rallyPoint = rallyPoint.immutable();
+		this.rallyGeneration++;
+		this.commanderRecovery = false;
+		this.rallyPoint = ticks > 0 ? rallyPoint.immutable() : null;
 		this.rallyTicks = Math.max(0, ticks);
 		this.rallyExact = exact;
+	}
+
+	public long getRallyGeneration() {
+		return this.rallyGeneration;
+	}
+
+	public void setCommanderRecovery(boolean recovering) {
+		if (recovering && !this.commanderRecovery) {
+			this.clearCombatTarget();
+		}
+		this.commanderRecovery = recovering;
+	}
+
+	public boolean isCommanderRecovering() {
+		return this.commanderRecovery;
+	}
+
+	public boolean isTargetSuppressed(UUID target) {
+		return this.isSuppressed(target, this.currentWorldTime());
 	}
 
 	public Optional<BlockPos> getRallyPoint() {
@@ -277,6 +306,26 @@ public final class GuardAiController {
 		this.releaseEngagement();
 		this.guard.setTarget(null);
 		this.guard.getNavigation().stop();
+	}
+
+	/** Withdraw only the command's alert; damage, owner protection and hostile scans remain independent. */
+	public void clearPriorityTarget(UUID target) {
+		if (target == null) {
+			return;
+		}
+		this.alerts.removeIf(alert -> alert.targetUuid().equals(target) && alert.reason() == AlertReason.DIRECTIVE_PRIORITY);
+		boolean independentlyTracked = this.alerts.stream().anyMatch(alert -> alert.targetUuid().equals(target)
+				&& alert.expiresAt() > this.currentWorldTime());
+		if (!independentlyTracked) {
+			if (target.equals(this.mainTargetUuid)) this.mainTargetUuid = null;
+			if (target.equals(this.urgentTargetUuid)) this.urgentTargetUuid = null;
+			if (this.guard.getTarget() != null && target.equals(this.guard.getTarget().getUUID())) {
+				this.guard.setTarget(null);
+				this.guard.getNavigation().stop();
+				this.resetCombatTracking();
+				this.releaseEngagement();
+			}
+		}
 	}
 
 	public void setMainTarget(LivingEntity target) {
@@ -370,6 +419,9 @@ public final class GuardAiController {
 	private GuardAiIntent selectIntent(ServerLevel world, LivingEntity combatTarget) {
 		if (this.shouldSeekAir()) {
 			return GuardAiIntent.SEEK_AIR;
+		}
+		if (this.commanderRecovery) {
+			return this.rallyPoint != null && this.rallyTicks > 0 ? GuardAiIntent.RALLY : GuardAiIntent.IDLE;
 		}
 		if (this.guard.isHoldingPosition()) {
 			// Hold: fight what is in reach, otherwise stand (IDLE re-centres on the hold block).
@@ -860,6 +912,13 @@ public final class GuardAiController {
 	}
 
 	private void broadcastToAlliedGuards(ServerLevel world, LivingEntity target, long alertTick) {
+		// A scoped command is not evidence that every allied guard should attack the same entity.
+		// Sharing only independent threats prevents an order from returning through allied-alert echoes.
+		if (!(target instanceof Enemy) && this.alerts.stream().noneMatch(alert -> alert.targetUuid().equals(target.getUUID())
+				&& alert.expiresAt() > alertTick && alert.reason() != AlertReason.DIRECTIVE_PRIORITY
+				&& alert.reason() != AlertReason.DIRECTIVE_PRIMARY && alert.reason() != AlertReason.ALLY_BROADCAST)) {
+			return;
+		}
 		double range = Mth.clamp(this.guard.getAttributeValue(Attributes.FOLLOW_RANGE), MIN_ALLY_ALERT_RANGE,
 				MAX_ALLY_ALERT_RANGE);
 		double rangeSq = range * range;

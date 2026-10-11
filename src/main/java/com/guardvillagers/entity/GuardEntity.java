@@ -451,6 +451,19 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	public void setBehavior(GuardBehavior behavior) {
+		if (this.ownerUuid != null && this.level() instanceof ServerLevel level) {
+			var state = GuardHierarchy.state(level.getServer());
+			var command = state.peek(this.ownerUuid);
+			if (command != null && command.raidBehaviors().containsKey(this.getUUID())) {
+				command.markRaidBehaviorManual(this.getUUID());
+				state.setDirty();
+			}
+		}
+		this.entityData.set(BEHAVIOR, behavior.getId());
+	}
+
+	/** Commander raid changes retain their saved ownership; ordinary behavior setters relinquish it. */
+	public void setCommanderRaidBehavior(GuardBehavior behavior) {
 		this.entityData.set(BEHAVIOR, behavior.getId());
 	}
 
@@ -510,6 +523,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 			}
 		}
 		if (!java.util.Objects.equals(previousOwner, ownerUuid)) {
+			this.setCommanderRecovery(false);
 			this.setRank(GuardRank.SOLDIER);
 			if (this.level() instanceof ServerLevel serverLevel) {
 				GuardHierarchy.onGuardLeftOwner(serverLevel.getServer(), previousOwner, this.getUUID());
@@ -622,6 +636,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	public void setStaying(boolean staying) {
+		this.setCommanderRecovery(false);
 		this.holdOrigin = null;
 		this.staying = staying;
 		if (staying) {
@@ -643,6 +658,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	public void setFollowOverride(boolean followOverride) {
+		this.setCommanderRecovery(false);
 		boolean changed = this.followOverride != followOverride;
 		this.followOverride = followOverride;
 		if (!followOverride) {
@@ -836,6 +852,26 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 
 	public void clearCombatTarget() {
 		this.aiController.clearCombatTarget();
+	}
+
+	public void clearPriorityTarget(UUID target) {
+		this.aiController.clearPriorityTarget(target);
+	}
+
+	public long getRallyGeneration() {
+		return this.aiController.getRallyGeneration();
+	}
+
+	public void setCommanderRecovery(boolean recovering) {
+		this.aiController.setCommanderRecovery(recovering);
+	}
+
+	public boolean isCommanderRecovering() {
+		return this.aiController.isCommanderRecovering();
+	}
+
+	public boolean isTargetSuppressed(UUID target) {
+		return this.aiController.isTargetSuppressed(target);
 	}
 
 	public boolean canTargetWithinZone(BlockPos pos) {

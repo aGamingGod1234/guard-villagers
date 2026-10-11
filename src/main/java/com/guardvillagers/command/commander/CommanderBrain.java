@@ -32,7 +32,7 @@ import net.minecraft.world.phys.Vec3;
 /**
  * The commander's intuition for one owner: deterministic rules, no LLM. Every {@link #SNAPSHOT_INTERVAL} ticks
  * (staggered by owner) it reads the guards' existing state and scans for hostiles near the owner and near homed
- * squads; every {@link #PLAN_INTERVAL} ticks, or at once after an order or when the owner is hurt, it plans:
+ * squads; at the configured planning interval, or at once after an order or when the owner is hurt, it plans:
  *
  * <ol>
  * <li>Guards under a player order, stay, hold, a whistle/bell rally or a retreat are left alone (they still defend
@@ -52,7 +52,6 @@ import net.minecraft.world.phys.Vec3;
  */
 final class CommanderBrain {
 	static final int SNAPSHOT_INTERVAL = 20;
-	static final int PLAN_INTERVAL = 40;
 	static final double OWNER_SCAN_RADIUS = 24.0D;
 	static final double FOLLOW_LEASH = 24.0D;
 	static final double OWNER_DANGER_RADIUS = 12.0D;
@@ -81,7 +80,8 @@ final class CommanderBrain {
 	private final List<GuardEntity> roster = new ArrayList<>();
 	private final Map<GuardEntity, Control> controls = new IdentityHashMap<>();
 	private final List<Threat> threats = new ArrayList<>();
-	private final Map<UUID, Long> ownRallies = new HashMap<>();
+	private record Rally(long generation, long until) {}
+	private final Map<UUID, Rally> ownRallies = new HashMap<>();
 	private final Set<UUID> wounded = new HashSet<>();
 	private final Set<UUID> announcedThreats = new HashSet<>();
 	/** Guard to threat, as decided by the last plan (rules 2 and 4). */
@@ -95,6 +95,7 @@ final class CommanderBrain {
 	private BlockPos bell;
 	private long bellCheckedTick = Long.MIN_VALUE / 2;
 	private boolean raidActive;
+	private long lastPlanTick = Long.MIN_VALUE / 2;
 
 	CommanderBrain(UUID owner) {
 		this.owner = owner;
@@ -122,13 +123,14 @@ final class CommanderBrain {
 			}
 		}
 		boolean snapshotTick = Math.floorMod(now + this.phase, SNAPSHOT_INTERVAL) == 0;
-		if (!snapshotTick && !this.planRequested) {
+		boolean planTick = now - this.lastPlanTick >= CommanderService.planIntervalTicks();
+		if (!snapshotTick && !planTick && !this.planRequested) {
 			return;
 		}
 		this.snapshot(server, player, context, now);
-		boolean planTick = Math.floorMod(now + this.phase, PLAN_INTERVAL) == 0;
 		if (planTick || this.planRequested) {
 			this.planRequested = false;
+			this.lastPlanTick = now;
 			this.plan(server, player, context, now);
 		}
 	}
@@ -143,18 +145,17 @@ final class CommanderBrain {
 		for (GuardEntity guard : CommanderService.livingGuards(server, this.owner)) {
 			if (guard.level() == level) {
 				this.roster.add(guard);
+			} else if (guard.isCommanderRecovering()) {
+				guard.setCommanderRecovery(false);
+				this.cancelRally(guard);
 			}
 		}
 
 		List<ActiveOrder> expired = context.book.expire();
 		GuardEntity commander = com.guardvillagers.command.hierarchy.GuardHierarchy.commanderAmong(server, this.owner, this.roster);
 		if (!expired.isEmpty()) {
-			// Undo on every loaded guard, not just this dimension's roster: a guard elsewhere was ordered too.
-			List<GuardEntity> everyone = CommanderService.livingGuards(server, this.owner);
-			GuardEntity anyCommander = com.guardvillagers.command.hierarchy.GuardHierarchy.commanderAmong(server, this.owner, everyone);
-			List<ActiveOrder> stillActive = context.book.active();
 			for (ActiveOrder order : expired) {
-				OrderExecutor.undo(order, everyone, anyCommander, true, stillActive);
+				CommanderService.undoOrder(server, context, order, true);
 				context.attackTargets.remove(order.id());
 			}
 			CommanderService.saveOrders(server, context);
@@ -165,7 +166,7 @@ final class CommanderBrain {
 
 		boolean auto = CommanderService.autoCommand(server, this.owner);
 		List<ActiveOrder> active = context.book.active();
-		this.ownRallies.values().removeIf(until -> until <= now);
+		this.ownRallies.values().removeIf(rally -> rally.until() <= now);
 		for (GuardEntity guard : this.roster) {
 			this.controls.put(guard, auto ? this.controlOf(guard, active, commander, context) : Control.LOCKED);
 			float ratio = guard.getHealth() / guard.getMaxHealth();
@@ -175,8 +176,9 @@ final class CommanderBrain {
 							"%s is wounded. Pulling them back.", guard.getName().getString()), 3);
 				}
 			} else if (ratio > WOUNDED_EXIT) {
-				this.wounded.remove(guard.getUUID());
+				if (this.wounded.remove(guard.getUUID())) this.cancelRally(guard);
 			}
+			guard.setCommanderRecovery(this.wounded.contains(guard.getUUID()) && this.controls.get(guard) == Control.FREE);
 		}
 
 		if (now - this.bellCheckedTick >= BELL_REFRESH_TICKS) {
@@ -195,12 +197,12 @@ final class CommanderBrain {
 				|| CommanderService.isReporting(context, guard)) {
 			return Control.LOCKED;
 		}
-		if (guard.getRallyPoint().isPresent() && !this.ownRallies.containsKey(guard.getUUID())) {
+		if (guard.getRallyPoint().isPresent() && !this.ownsRally(guard)) {
 			return Control.LOCKED;
 		}
 		ActiveOrder best = null;
 		for (ActiveOrder order : active) {
-			if (OrderExecutor.covers(order.order().scope(), guard, commander)
+			if (OrderExecutor.covers(order, guard, commander)
 					&& (best == null || order.priority() > best.priority()
 							|| (order.priority() == best.priority() && order.order().scope().specificity() > best.order().scope().specificity())
 							|| (order.priority() == best.priority() && order.order().scope().specificity() == best.order().scope().specificity()
@@ -222,7 +224,7 @@ final class CommanderBrain {
 		// Homed squads far from the owner get their own box (merged by home, at most three).
 		List<BlockPos> homes = new ArrayList<>(MAX_SCAN_BOXES - 1);
 		for (GuardEntity guard : this.roster) {
-			if (boxes.size() + homes.size() >= MAX_SCAN_BOXES) {
+			if (boxes.size() >= MAX_SCAN_BOXES) {
 				break;
 			}
 			Optional<BlockPos> home = guard.getHome();
@@ -247,7 +249,7 @@ final class CommanderBrain {
 		BlockPos reference = this.bell != null ? this.bell : player.blockPosition();
 		for (AABB box : boxes) {
 			for (Mob mob : level.getEntitiesOfClass(Mob.class, box, mob -> mob instanceof Enemy && mob.isAlive())) {
-				if (seen.add(mob)) {
+				if (!seen.contains(mob) && this.observedThreat(mob, player) && seen.add(mob)) {
 					this.addThreat(mob, player, reference);
 				}
 			}
@@ -268,7 +270,8 @@ final class CommanderBrain {
 			byId.put(threat.entity.getUUID(), threat);
 		}
 		for (GuardEntity guard : this.roster) {
-			UUID target = guard.getMainTargetUuid();
+			LivingEntity fighting = guard.getTarget();
+			UUID target = fighting != null && fighting.isAlive() ? fighting.getUUID() : null;
 			Threat threat = target == null ? null : byId.get(target);
 			if (threat != null) {
 				threat.assigned++;
@@ -285,6 +288,23 @@ final class CommanderBrain {
 		this.threats.sort((a, b) -> Integer.compare(b.score, a.score));
 	}
 
+	private boolean observedThreat(Mob threat, ServerPlayer player) {
+		if (player.hasLineOfSight(threat)) {
+			return true;
+		}
+		LivingEntity victim = threat.getTarget();
+		if (victim == player || victim instanceof GuardEntity guard && guard.isOwnedBy(this.owner)) {
+			return true;
+		}
+		for (GuardEntity guard : this.roster) {
+			if (this.controls.get(guard) == Control.FREE && !guard.isTargetSuppressed(threat.getUUID())
+					&& guard.canTargetWithinZone(threat.blockPosition()) && guard.hasLineOfSight(threat)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private void addThreat(LivingEntity entity, ServerPlayer player, BlockPos reference) {
 		if (this.roster.getFirst().isAlly(entity)) {
 			return;
@@ -297,14 +317,14 @@ final class CommanderBrain {
 	// ---- plan ----
 
 	private void plan(MinecraftServer server, ServerPlayer player, CommanderService.OwnerContext context, long now) {
+		this.respondToRaid(server, player, context, now);
+		this.assignments.clear();
 		if (this.roster.isEmpty()) {
 			return;
 		}
-		this.assignments.clear();
 		Set<GuardEntity> busy = new HashSet<>();
 		this.pressAttackOrders(server, player, context, busy);
 		this.guardOwner(player, busy);
-		this.respondToRaid(server, player, context, now);
 		Set<GuardEntity> bodyguards = this.pickBodyguards(player, busy);
 		this.assignThreats(server, player, busy, bodyguards);
 		this.pullBackWounded(player, now);
@@ -335,9 +355,15 @@ final class CommanderBrain {
 				continue;
 			}
 			for (GuardEntity guard : this.roster) {
-				if (OrderExecutor.covers(order.order().scope(), guard, commander) && !guard.isAlly(target.get())) {
+				if (!OrderExecutor.covers(order, guard, commander)) continue;
+				ActiveOrder effective = context.book.effectiveForGuard(guard.getUUID(),
+						scope -> OrderExecutor.covers(scope, guard, commander)).orElse(null);
+				if (effective != null && effective.id() == order.id() && !guard.isAlly(target.get())) {
 					guard.setPriorityTarget(target.get());
 					busy.add(guard);
+				} else if (effective == null || effective.order().action() != Action.ATTACK_TARGET
+						|| !target.get().getUUID().equals(context.attackTargets.get(effective.id()))) {
+					guard.clearPriorityTarget(target.get().getUUID());
 				}
 			}
 		}
@@ -370,7 +396,7 @@ final class CommanderBrain {
 			}
 			// Guards already on it are busy too, so rule 4 does not pull them elsewhere.
 			for (GuardEntity guard : this.roster) {
-				if (threat.entity.getUUID().equals(guard.getMainTargetUuid())) {
+				if (guard.getTarget() == threat.entity) {
 					busy.add(guard);
 				}
 			}
@@ -378,47 +404,89 @@ final class CommanderBrain {
 	}
 
 	private void respondToRaid(MinecraftServer server, ServerPlayer player, CommanderService.OwnerContext context, long now) {
-		Raid raid = player.level().getRaids().getNearbyRaid(player.blockPosition(), RAID_RADIUS * RAID_RADIUS);
-		boolean active = raid != null && raid.isActive();
+		boolean auto = CommanderService.autoCommand(server, this.owner);
+		List<GuardEntity> guards = CommanderService.livingGuards(server, this.owner);
+		GuardEntity commander = GuardHierarchy.commanderAmong(server, this.owner, guards);
+		List<ActiveOrder> orders = context.book.active();
+		GuardCommandState state = GuardHierarchy.state(server);
+		GuardCommandState.OwnerCommand command = state.peek(this.owner);
+		boolean changed = false;
+		boolean active = false;
+		Map<Raid, List<GuardEntity>> localSquads = new IdentityHashMap<>();
+		for (GuardEntity guard : guards) {
+			GuardCommandState.RaidBehavior saved = command == null ? null : command.raidBehaviors().get(guard.getUUID());
+			if (saved != null && (!auto || !raidStillActive(server, guard, saved))) {
+				restoreRaidBehavior(guard, saved, orders, commander);
+				command.clearRaidBehavior(guard.getUUID());
+				this.cancelRally(guard);
+				changed = true;
+			}
+			if (!auto || guard.getHome().isEmpty() || guard.hasFollowOverride()) continue;
+			ServerLevel level = (ServerLevel) guard.level();
+			Raid raid = level.getRaids().getNearbyRaid(guard.getHome().get(), RAID_RADIUS * RAID_RADIUS);
+			if (raid != null && raid.isActive() && guard.blockPosition().distSqr(raid.getCenter()) <= RAID_RADIUS * RAID_RADIUS) {
+				localSquads.computeIfAbsent(raid, ignored -> new ArrayList<>()).add(guard);
+			}
+		}
+		for (Map.Entry<Raid, List<GuardEntity>> entry : localSquads.entrySet()) {
+			active = true;
+			Raid raid = entry.getKey();
+			List<GuardEntity> squad = entry.getValue();
+			Map<Integer, int[]> roles = new HashMap<>();
+			for (GuardEntity guard : squad) {
+				int[] counts = roles.computeIfAbsent(guard.getGroupIndex(), ignored -> new int[2]);
+				counts[guard.getRole() == GuardRole.BOWMAN ? 1 : 0]++;
+			}
+			ServerLevel level = (ServerLevel) squad.getFirst().level();
+			BlockPos post = OrderExecutor.nearestBell(level, raid.getCenter(), BELL_RADIUS).orElse(raid.getCenter());
+			for (GuardEntity guard : squad) {
+				if (this.controlOf(guard, orders, commander, context) != Control.FREE) continue;
+				command = command != null ? command : state.getOrCreate(this.owner);
+				// A saved entry owns the initial change only. Reapplying it would erase a later manual choice.
+				if (command.raidBehaviors().containsKey(guard.getUUID())) continue;
+				int[] counts = roles.get(guard.getGroupIndex());
+				GuardBehavior wanted = counts[0] >= counts[1] ? GuardBehavior.OFFENSIVE : GuardBehavior.DEFENSIVE;
+				changed |= command.recordRaidBehavior(guard.getUUID(), guard.getBehavior(), wanted,
+						level.dimension().identifier().toString(), raid.getCenter());
+				guard.setCommanderRaidBehavior(wanted);
+				if (guard.getTarget() == null && !guard.isCommanderRecovering()) this.rally(guard, post, 240, now);
+			}
+		}
+		if (changed) state.setDirty();
 		if (active && !this.raidActive) {
 			CommanderCallouts.announce(server, this.owner, CommanderCallouts.text("guardvillagers.commander.raid",
 					"Raid at the village. All squads to the bell."), 5);
 		}
-		if (active) {
-			BlockPos post = this.bell != null ? this.bell : raid.getCenter();
-			Map<Integer, int[]> roles = new HashMap<>();
-			for (GuardEntity guard : this.roster) {
-				if (guard.getHome().isPresent() && !guard.hasFollowOverride()) {
-					int[] counts = roles.computeIfAbsent(guard.getGroupIndex(), ignored -> new int[2]);
-					counts[guard.getRole() == GuardRole.BOWMAN ? 1 : 0]++;
-				}
-			}
-			GuardCommandState state = GuardHierarchy.state(server);
-			GuardCommandState.OwnerCommand command = null;
-			boolean changed = false;
-			for (GuardEntity guard : this.roster) {
-				if (this.controls.get(guard) != Control.FREE || guard.getHome().isEmpty() || guard.hasFollowOverride()) {
-					continue;
-				}
-				int[] counts = roles.get(guard.getGroupIndex());
-				GuardBehavior wanted = counts != null && counts[0] >= counts[1] ? GuardBehavior.OFFENSIVE : GuardBehavior.DEFENSIVE;
-				if (guard.getBehavior() != wanted) {
-					// Saved, so the change is put back even if the guard unloads or the owner leaves before the raid ends.
-					command = command != null ? command : state.getOrCreate(this.owner);
-					changed |= command.recordRaidBehavior(guard.getUUID(), guard.getBehavior(), wanted);
-					guard.setBehavior(wanted);
-				}
-				if (!this.raidActive && guard.getTarget() == null) {
-					this.rally(guard, post, 240, now);
-				}
-			}
-			if (changed) {
-				state.setDirty();
-			}
-		} else {
-			restoreRaidBehaviors(server, this.owner, context.book.active());
-		}
 		this.raidActive = active;
+	}
+
+	private static boolean raidStillActive(MinecraftServer server, GuardEntity guard, GuardCommandState.RaidBehavior saved) {
+		for (ServerLevel level : server.getAllLevels()) {
+			if (saved.dimension() != null ? !saved.dimension().equals(level.dimension().identifier().toString()) : level != guard.level()) continue;
+			BlockPos center = saved.raidCenter() != null ? saved.raidCenter() : guard.getHome().orElse(guard.blockPosition());
+			Raid raid = level.getRaids().getNearbyRaid(center, RAID_RADIUS * RAID_RADIUS);
+			return raid != null && raid.isActive();
+		}
+		return false;
+	}
+
+	private static void restoreRaidBehavior(GuardEntity guard, GuardCommandState.RaidBehavior saved,
+			List<ActiveOrder> active, GuardEntity commander) {
+		if (!saved.manuallyChanged() && guard.getBehavior() == saved.applied() && !behaviorOrdered(guard, active, commander)) {
+			guard.setCommanderRaidBehavior(saved.original());
+		}
+	}
+
+	void stopAutomatic(MinecraftServer server, List<ActiveOrder> active) {
+		restoreRaidBehaviors(server, this.owner, active);
+		for (GuardEntity guard : CommanderService.livingGuards(server, this.owner)) {
+			guard.setCommanderRecovery(false);
+			this.cancelRally(guard);
+		}
+		this.wounded.clear();
+		this.assignments.clear();
+		this.raidActive = false;
+		this.requestPlan();
 	}
 
 	/**
@@ -440,9 +508,7 @@ final class CommanderBrain {
 			if (saved == null) {
 				continue;
 			}
-			if (guard.getBehavior() == saved.applied() && !behaviorOrdered(guard, active, commander)) {
-				guard.setBehavior(saved.original());
-			}
+			restoreRaidBehavior(guard, saved, active, commander);
 			command.clearRaidBehavior(guard.getUUID());
 			changed = true;
 		}
@@ -455,7 +521,7 @@ final class CommanderBrain {
 		for (ActiveOrder order : active) {
 			Action action = order.order().action();
 			if ((action == Action.DEFEND_VILLAGE || action == Action.PATROL_HERE)
-					&& OrderExecutor.covers(order.order().scope(), guard, commander)) {
+					&& OrderExecutor.covers(order, guard, commander)) {
 				return true;
 			}
 		}
@@ -530,9 +596,8 @@ final class CommanderBrain {
 			if (!ownerDefence && !this.canReach(guard, threat)) {
 				continue;
 			}
-			UUID current = guard.getMainTargetUuid();
-			if (current != null && !current.equals(threat.entity.getUUID()) && guard.getTarget() != null && guard.getTarget().isAlive()) {
-				// Already fighting something else; leave it to finish.
+			if (guard.isTargetSuppressed(threat.entity.getUUID()) || guard.getTarget() != null && guard.getTarget().isAlive()) {
+				// Existing fighters are already counted. Reinforcement must bring another guard.
 				continue;
 			}
 			candidates.add(guard);
@@ -607,9 +672,11 @@ final class CommanderBrain {
 			if (!this.wounded.contains(guard.getUUID()) || this.controls.get(guard) != Control.FREE) {
 				continue;
 			}
-			BlockPos point = guard.getHome().isPresent() && !guard.hasFollowOverride() && this.bell != null ? this.bell : safe;
+			BlockPos point = guard.getHome().isPresent() && !guard.hasFollowOverride()
+					? OrderExecutor.nearestBell((ServerLevel) guard.level(), guard.getHome().get(), BELL_RADIUS).orElse(guard.getHome().get()) : safe;
 			if (guard.blockPosition().distSqr(point) > 9.0D) {
-				this.rally(guard, point, PLAN_INTERVAL + 20, now);
+				this.rally(guard, point, CommanderService.planIntervalTicks() + SNAPSHOT_INTERVAL, now);
+				guard.setCommanderRecovery(true);
 			}
 		}
 	}
@@ -635,7 +702,7 @@ final class CommanderBrain {
 		double ownerToThreat = Math.sqrt(nearest.ownerDistanceSq);
 		for (GuardEntity guard : this.roster) {
 			if (guard.getRole() != GuardRole.BOWMAN || busy.contains(guard) || this.controls.get(guard) != Control.FREE
-					|| guard.getHome().isPresent() || guard.getTarget() != null) {
+					|| guard.getHome().isPresent() || guard.getTarget() != null || this.wounded.contains(guard.getUUID())) {
 				continue;
 			}
 			if (Math.sqrt(guard.distanceToSqr(nearest.entity)) < ownerToThreat + 2.0D) {
@@ -655,7 +722,8 @@ final class CommanderBrain {
 		for (GuardEntity guard : this.roster) {
 			Optional<BlockPos> home = guard.getHome();
 			if (home.isEmpty() || guard.hasFollowOverride() || guard.getPatrolRadius() < 8
-					|| this.controls.get(guard) != Control.FREE || guard.getBehavior() == GuardBehavior.CROWD_CONTROL) {
+					|| this.controls.get(guard) != Control.FREE || this.wounded.contains(guard.getUUID())
+					|| guard.getRallyPoint().isPresent() || guard.getBehavior() == GuardBehavior.CROWD_CONTROL) {
 				continue;
 			}
 			int reach = (int) (guard.getPatrolRadius() * 0.6D);
@@ -674,7 +742,17 @@ final class CommanderBrain {
 
 	private void rally(GuardEntity guard, BlockPos point, int ticks, long now) {
 		guard.rallyTo(point, ticks);
-		this.ownRallies.put(guard.getUUID(), now + ticks);
+		this.ownRallies.put(guard.getUUID(), new Rally(guard.getRallyGeneration(), now + ticks));
+	}
+
+	private boolean ownsRally(GuardEntity guard) {
+		Rally installed = this.ownRallies.get(guard.getUUID());
+		return installed != null && installed.generation() == guard.getRallyGeneration();
+	}
+
+	private void cancelRally(GuardEntity guard) {
+		if (this.ownsRally(guard)) guard.rallyTo(guard.blockPosition(), 0);
+		this.ownRallies.remove(guard.getUUID());
 	}
 
 	// ---- reporting ----

@@ -79,7 +79,7 @@ public final class TargetResolver {
 
 	private static boolean valid(ServerPlayer speaker, Entity entity) {
 		if (!(entity instanceof LivingEntity living) || !living.isAlive() || living == speaker || living.isSpectator()
-				|| living.level() != speaker.level()) {
+				|| living.isRemoved() || !living.attackable() || !living.canBeSeenAsEnemy() || living.level() != speaker.level()) {
 			return false;
 		}
 		if (living instanceof GuardEntity guard && guard.isOwnedBy(speaker.getUUID())) {

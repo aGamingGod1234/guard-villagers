@@ -38,7 +38,11 @@ public final class OrderExecutor {
 	 * @param commander current commander among {@code guards}, or null
 	 * @param ticks     how long timed orders last
 	 */
-	public record Context(ServerPlayer speaker, List<GuardEntity> guards, @Nullable GuardEntity commander, int ticks) {
+	public record Context(ServerPlayer speaker, List<GuardEntity> guards, @Nullable GuardEntity commander, int ticks,
+			Optional<LivingEntity> attackTarget) {
+		public Context(ServerPlayer speaker, List<GuardEntity> guards, @Nullable GuardEntity commander, int ticks) {
+			this(speaker, guards, commander, ticks, Optional.empty());
+		}
 	}
 
 	/**
@@ -66,6 +70,22 @@ public final class OrderExecutor {
 		};
 	}
 
+	public static boolean covers(ActiveOrder order, GuardEntity guard, @Nullable GuardEntity commander) {
+		return order.recipients().map(ids -> ids.contains(guard.getUUID()))
+				.orElseGet(() -> covers(order.order().scope(), guard, commander));
+	}
+
+	public static boolean canAttack(GuardEntity guard, LivingEntity target) {
+		return target.isAlive() && !target.isRemoved() && target.level() == guard.level()
+				&& target.attackable() && target.canBeSeenAsEnemy() && !guard.isAlly(target)
+				&& guard.canTargetWithinZone(target.blockPosition());
+	}
+
+	private static Optional<LivingEntity> attackTarget(Order order, Context context) {
+		return context.attackTarget().or(() -> TargetResolver.resolve(context.speaker(),
+				order.target().orElse(TargetRef.MY_TARGET)));
+	}
+
 	public static List<GuardEntity> inScope(Scope scope, List<GuardEntity> guards, @Nullable GuardEntity commander) {
 		List<GuardEntity> matched = new ArrayList<>();
 		for (GuardEntity guard : guards) {
@@ -90,7 +110,8 @@ public final class OrderExecutor {
 					Optional.empty(), false));
 		}
 		if (action == Action.ATTACK_TARGET
-				&& TargetResolver.resolve(context.speaker(), order.target().orElse(TargetRef.MY_TARGET)).isEmpty()) {
+				&& attackTarget(order, context).filter(target -> inScope(order.scope(), context.guards(), context.commander())
+						.stream().anyMatch(guard -> canAttack(guard, target))).isEmpty()) {
 			return Optional.of(new Result(0, CommanderCallouts.text("guardvillagers.order.no_target", "I don't see a target."),
 					Optional.empty(), false));
 		}
@@ -99,11 +120,18 @@ public final class OrderExecutor {
 
 	public static Result execute(Order order, Context context) {
 		List<GuardEntity> targets = inScope(order.scope(), context.guards(), context.commander());
+		if (order.action() == Action.ATTACK_TARGET) {
+			Optional<LivingEntity> target = attackTarget(order, context);
+			targets = targets.stream().filter(guard -> target.filter(entity -> canAttack(guard, entity)).isPresent()).toList();
+		}
 		boolean commanderIncluded = context.commander() != null && targets.contains(context.commander());
 		String prefix = prefix(order.scope());
 		if (targets.isEmpty() && !order.action().isAppointment() && order.action() != Action.STATUS_REPORT
 				&& order.action() != Action.AS_YOU_WERE) {
 			return precheck(order, context).orElseThrow();
+		}
+		if (!order.action().isAppointment() && order.action() != Action.STATUS_REPORT) {
+			targets.forEach(guard -> guard.setCommanderRecovery(false));
 		}
 		ServerPlayer speaker = context.speaker();
 		Optional<LivingEntity> resolvedTarget = Optional.empty();
@@ -131,16 +159,19 @@ public final class OrderExecutor {
 				BlockPos here = speaker.blockPosition();
 				for (GuardEntity guard : targets) {
 					guard.setHoldPosition(false);
+					guard.setStaying(false);
 					guard.resumeCombat();
 					// The commander gets its own exact post in front of the speaker (see CommanderService).
 					if (guard != context.commander()) {
 						guard.rallyTo(here, context.ticks());
+					} else {
+						cancelRally(guard);
 					}
 				}
 				obeys = false;
 			}
 			case ATTACK_TARGET -> {
-				resolvedTarget = TargetResolver.resolve(speaker, order.target().orElse(TargetRef.MY_TARGET));
+				resolvedTarget = attackTarget(order, context);
 				if (resolvedTarget.isEmpty()) {
 					return new Result(0, CommanderCallouts.text("guardvillagers.order.no_target", "I don't see a target."),
 							Optional.empty(), false);
@@ -237,7 +268,7 @@ public final class OrderExecutor {
 	public static void undo(ActiveOrder removed, List<GuardEntity> guards, @Nullable GuardEntity commander, boolean expired,
 			List<ActiveOrder> stillActive) {
 		for (GuardEntity guard : guards) {
-			if (!covers(removed.order().scope(), guard, commander) || stillCovered(removed, guard, commander, stillActive)) {
+			if (!covers(removed, guard, commander) || stillCovered(removed, guard, commander, stillActive)) {
 				continue;
 			}
 			switch (removed.order().action()) {
@@ -275,7 +306,7 @@ public final class OrderExecutor {
 			List<ActiveOrder> stillActive) {
 		for (ActiveOrder other : stillActive) {
 			if (other.id() != removed.id() && other.order().action() == removed.order().action()
-					&& covers(other.order().scope(), guard, commander)) {
+					&& covers(other, guard, commander)) {
 				return true;
 			}
 		}

@@ -12,7 +12,6 @@ import com.guardvillagers.command.commander.VoiceCommandBridge;
 import com.guardvillagers.voice.VoicePipeline;
 import com.guardvillagers.voice.VoiceRuntime;
 import com.guardvillagers.command.hierarchy.GuardHierarchy;
-import com.guardvillagers.command.order.Scope;
 import com.guardvillagers.data.GuardDiplomacyState;
 import com.guardvillagers.data.GuardTacticsState;
 import com.guardvillagers.entity.GuardEntity;
@@ -186,12 +185,17 @@ public final class GuardCommands {
 	}
 
 	private static int stay(CommandSourceStack source, String groupName) throws CommandSyntaxException {
+		return stay(source, groupName, null);
+	}
+
+	private static int stay(CommandSourceStack source, String groupName, Integer row) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
+		List<GuardEntity> recipients = ownedGuards(player).stream()
+				.filter(guard -> row != null ? guard.getGroupIndex() == row
+						: groupName == null || guard.getGroupName().equalsIgnoreCase(groupName.trim())).toList();
+		CommanderService.onTypedOrder(player, recipients);
 		int changed = 0;
-		for (GuardEntity guard : ownedGuards(player)) {
-			if (groupName != null && !guard.getGroupName().equalsIgnoreCase(groupName.trim())) {
-				continue;
-			}
+		for (GuardEntity guard : recipients) {
 			guard.setStaying(true);
 			changed++;
 		}
@@ -199,7 +203,6 @@ public final class GuardCommands {
 			source.sendFailure(Component.translatable("commands.guardvillagers.stay.no_group", groupName.trim()));
 			return 0;
 		}
-		CommanderService.onTypedOrder(player, typedScope(groupName));
 		Component message = groupName == null
 				? Component.translatable("commands.guardvillagers.stay", changed)
 				: Component.translatable("commands.guardvillagers.stay.group", changed, groupName.trim());
@@ -210,10 +213,10 @@ public final class GuardCommands {
 	private static int hold(CommandSourceStack source) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
 		List<GuardEntity> guards = ownedGuards(player);
+		CommanderService.onTypedOrder(player, guards);
 		for (GuardEntity guard : guards) {
 			guard.setHoldPosition(true);
 		}
-		CommanderService.onTypedOrder(player, Scope.ALL);
 		return reportOrders(source, guards.size(), Component.translatable("commands.guardvillagers.hold", guards.size()));
 	}
 
@@ -227,12 +230,17 @@ public final class GuardCommands {
 	}
 
 	private static int follow(CommandSourceStack source, String groupName) throws CommandSyntaxException {
+		return follow(source, groupName, null);
+	}
+
+	private static int follow(CommandSourceStack source, String groupName, Integer row) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
+		List<GuardEntity> recipients = ownedGuards(player).stream()
+				.filter(guard -> row != null ? guard.getGroupIndex() == row
+						: groupName == null || guard.getGroupName().equalsIgnoreCase(groupName.trim())).toList();
+		CommanderService.onTypedOrder(player, recipients);
 		int changed = 0;
-		for (GuardEntity guard : ownedGuards(player)) {
-			if (groupName != null && !guard.getGroupName().equalsIgnoreCase(groupName.trim())) {
-				continue;
-			}
+		for (GuardEntity guard : recipients) {
 			guard.setStaying(false);
 			guard.setFollowOverride(true);
 			guard.clearCombatTarget();
@@ -242,7 +250,6 @@ public final class GuardCommands {
 			source.sendFailure(Component.translatable("commands.guardvillagers.follow.no_group", groupName.trim()));
 			return 0;
 		}
-		CommanderService.onTypedOrder(player, typedScope(groupName));
 		int finalChanged = changed;
 		Component message = groupName == null
 				? Component.translatable("commands.guardvillagers.follow.all", finalChanged)
@@ -549,10 +556,6 @@ public final class GuardCommands {
 			source.sendSuccess(() -> Component.translatable("commands.guardvillagers.debug.enabled", shownRange), false);
 		}
 		return Command.SINGLE_SUCCESS;
-	}
-
-	private static Scope typedScope(String groupName) {
-		return groupName == null || groupName.isBlank() ? Scope.ALL : Scope.group(groupName.trim());
 	}
 
 	private static int say(CommandSourceStack source, String text) throws CommandSyntaxException {

@@ -591,7 +591,8 @@ public class GuardCommanderGameTest {
 					guard.setHealth(guard.getMaxHealth());
 					healed[0] = true;
 				}
-			} else if (assigned) {
+			} else if (guard.getTarget() != null && zombie[0].equals(guard.getTarget().getUUID())) {
+				helper.assertFalse(guard.isCommanderRecovering(), "healed guard remained in commander recovery");
 				helper.succeed();
 			}
 		});
