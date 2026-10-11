@@ -305,7 +305,12 @@ public final class GuardCommands {
 			return 0;
 		}
 		tactics = state.getOrCreate(player.getUUID());
-		tactics.setGroupName(row, requestedName);
+		if (!tactics.setGroupName(row, requestedName)) {
+			source.sendFailure(Component.translatable("commands.guardvillagers.groups.name_unavailable"));
+			GuardTacticsMenus.sendGroupResult(player, GuardGroupResultPayload.Action.RENAME, row, 0, 1,
+					"commands.guardvillagers.groups.name_unavailable");
+			return 0;
+		}
 		String normalizedName = tactics.getGroupName(row);
 		for (GuardEntity guard : ownedGuards(player)) {
 			if (guard.getGroupIndex() == row) {

@@ -21,6 +21,7 @@
 	"commands.guardvillagers.groups.added": "Added group %s (%s).",
 	"commands.guardvillagers.groups.limit": "You already have the maximum of %s groups.",
 	"commands.guardvillagers.groups.renamed": "Renamed group %s to \"%s\".",
+	"commands.guardvillagers.groups.name_unavailable": "Group names must be unique and cannot be Unassigned.",
 	"commands.guardvillagers.groups.invalid_name": "Group names cannot be blank.",
 	"commands.guardvillagers.groups.no_such_row": "Group %s does not exist. You have %s groups.",
 	"commands.guardvillagers.groups.assigned": "Assigned guard to group %s (%s).",
