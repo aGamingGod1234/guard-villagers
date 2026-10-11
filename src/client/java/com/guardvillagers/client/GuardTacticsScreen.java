@@ -2088,7 +2088,8 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		}
 		for (UiButton button : this.buttons) {
 			if (button.contains(mouseX, mouseY) && !button.tooltip.isEmpty()) {
-				graphics.setComponentTooltipForNextFrame(this.font, button.tooltip, mouseX, mouseY);
+				// Vanilla shifts tooltips up 12px without clamping the top; toolbar buttons sit above that margin.
+				graphics.setComponentTooltipForNextFrame(this.font, button.tooltip, mouseX, Math.max(16, mouseY));
 				return;
 			}
 		}

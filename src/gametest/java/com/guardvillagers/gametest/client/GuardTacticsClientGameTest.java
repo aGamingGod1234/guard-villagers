@@ -19,6 +19,7 @@ import java.util.UUID;
 public class GuardTacticsClientGameTest implements FabricClientGameTest {
 	@Override
 	public void runTest(ClientGameTestContext context) {
+		GuardTacticsScaleClientTest.run(context);
 		try (TestSingleplayerContext singleplayer = ClientTestSupport.createWorld(context)) {
 			BlockPos feet = ClientTestSupport.playerFeet(singleplayer);
 			UUID owner = singleplayer.getServer().computeOnServer(server -> ClientTestSupport.player(server).getUUID());
