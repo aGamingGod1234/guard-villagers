@@ -35,7 +35,7 @@ final class AnchorHold {
 			return;
 		}
 		if (this.moving && distanceSq <= FINAL_STEP_DISTANCE_SQUARED && guard.getNavigation().isDone()
-				&& guard.blockPosition().distManhattan(slot) <= 1 && Math.abs(guard.getY() - standAt.y) < 0.5D) {
+				&& guard.blockPosition().equals(slot) && Math.abs(guard.getY() - standAt.y) < 0.5D) {
 			// Last stretch inside or next to the slot block: no pathfinding needed.
 			guard.getMoveControl().setWantedPosition(standAt.x, standAt.y, standAt.z, speed);
 			if (distanceSq <= ARRIVE_DISTANCE_SQUARED && guard.getDeltaMovement().horizontalDistanceSqr() < 1.0E-4D) {
@@ -44,7 +44,7 @@ final class AnchorHold {
 			return;
 		}
 		this.moving = true;
-		guard.getGuardNavigation().startMovingToStatic(slot, speed);
+		guard.getGuardNavigation().startMovingToStatic(slot, speed, 0);
 		if (guard.getGuardNavigation().isLastTargetUnreachable() && guard.getNavigation().isDone()) {
 			// Already at the closest reachable point: stand here instead of re-pathing.
 			this.moving = false;

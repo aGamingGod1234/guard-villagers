@@ -240,7 +240,7 @@ public final class GuardAiController {
 		if (rallyPoint == null) {
 			return;
 		}
-		this.rallyPoint = rallyPoint.immutable();
+		this.rallyPoint = ticks > 0 ? rallyPoint.immutable() : null;
 		this.rallyTicks = Math.max(0, ticks);
 		this.rallyExact = exact;
 	}

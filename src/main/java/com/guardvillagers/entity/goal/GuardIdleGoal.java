@@ -51,6 +51,15 @@ public final class GuardIdleGoal extends WaterAvoidingRandomStrollGoal {
 	}
 
 	@Override
+	public void start() {
+		if (this.guard.isHoldingPosition()) {
+			this.guard.getGuardNavigation().startMovingToStatic(this.guard.getHoldOrigin(), this.speedModifier, 0);
+		} else {
+			super.start();
+		}
+	}
+
+	@Override
 	public boolean canContinueToUse() {
 		if (!this.guard.isAiIntent(GuardAiIntent.IDLE)) {
 			return false;
