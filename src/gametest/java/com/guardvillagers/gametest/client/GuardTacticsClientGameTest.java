@@ -226,8 +226,10 @@ public class GuardTacticsClientGameTest implements FabricClientGameTest {
 			store.replaceGroupNames(world, names);
 
 			var snapshot = roster.roster(world).stream().filter(guard -> guard.groupIndex() == 0).findFirst().orElseThrow();
+			boolean checkedHiddenName = false;
 			for (net.minecraft.world.entity.Entity entity : client.level.entitiesForRendering()) {
 				if (entity.getUUID().equals(snapshot.guardUuid()) && entity instanceof com.guardvillagers.entity.GuardEntity guard) {
+					checkedHiddenName = true;
 					var dispatcher = client.getEntityRenderDispatcher();
 					var previousPick = dispatcher.crosshairPickEntity;
 					var scoreboard = client.level.getScoreboard();
@@ -248,6 +250,28 @@ public class GuardTacticsClientGameTest implements FabricClientGameTest {
 					}
 					break;
 				}
+			}
+			if (!checkedHiddenName) throw new AssertionError("Named guard is missing from the client render fixture");
+			var countField = GuardTacticsScreen.class.getDeclaredField("viewGroupCount");
+			var menuField = GuardTacticsScreen.class.getDeclaredField("followMenuOpen");
+			var offsetField = GuardTacticsScreen.class.getDeclaredField("followMenuOffset");
+			var visibleCount = GuardTacticsScreen.class.getDeclaredMethod("followMenuVisibleCount");
+			countField.setAccessible(true);
+			menuField.setAccessible(true);
+			offsetField.setAccessible(true);
+			visibleCount.setAccessible(true);
+			int previousCount = countField.getInt(screen);
+			try {
+				countField.setInt(screen, 64);
+				menuField.setBoolean(screen, true);
+				for (int scroll = 0; scroll < 64; scroll++) screen.mouseScrolled(0, 0, 0, -1);
+				if (offsetField.getInt(screen) + (int) visibleCount.invoke(screen) != 64) {
+					throw new AssertionError("Follow dropdown cannot reach its last group");
+				}
+			} finally {
+				countField.setInt(screen, previousCount);
+				menuField.setBoolean(screen, false);
+				offsetField.setInt(screen, 0);
 			}
 			var pendingField = GuardTacticsScreen.class.getDeclaredField("pendingAssignments");
 			var awaitingField = GuardTacticsScreen.class.getDeclaredField("awaitingConfirmation");
