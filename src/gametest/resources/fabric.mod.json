@@ -7,6 +7,7 @@
 	"entrypoints": {
 		"fabric-gametest": [
 			"com.guardvillagers.gametest.GuardCombatGameTest",
+			"com.guardvillagers.gametest.GuardHuntGameTest",
 			"com.guardvillagers.gametest.GuardCombatReviewGameTest",
 			"com.guardvillagers.gametest.GuardCombatScenariosGameTest",
 			"com.guardvillagers.gametest.GuardOwnershipGameTest",
