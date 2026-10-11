@@ -83,7 +83,7 @@ Shop hires alternate between the two roles.
 
 ### Behaviors
 
-Sneak + right-click your guard with an empty hand to cycle: Perimeter, Crowd Control, Offensive, Defensive. New and hired guards start as Defensive.
+Sneak + right-click your guard with an empty hand to cycle: Perimeter, Crowd Control, Offensive, Defensive. Purchased and claimed guards start as Defensive. Village guards use the village behavior pattern; spawn eggs and summoned guards pick a random behavior.
 
 | Behavior | What the guard does |
 | --- | --- |
@@ -178,7 +178,7 @@ An order is `[who] <what> [who]`, in either order: `alpha, hold the line`, `hold
 
 | Say | Reaches |
 | --- | --- |
-| nothing, or guards, guard, everyone, everybody, all, squad, team, men, troops, soldiers, units, boys, lads, y'all | All your loaded guards |
+| nothing, or guards, guard, everyone, everybody, all, squad, team, men, troops, soldiers, units, boys, lads, y'all | All your loaded guards in your current dimension |
 | commander | Your commander only |
 | a group name, with or without "squad", "team" or "group" in front ("alpha", "squad blue") | That group |
 | a guard's name ("Liam") | That guard |
@@ -214,7 +214,7 @@ Details:
 - **Retreat** pulls guards to you and stops them fighting for up to 10 s.
 - **Timed** orders end after 60 s (configurable) or when done. **As you were** clears orders and hands control back to the commander.
 - Typed `/guards follow`, `stay` and `hold` replace voice orders on the same guards.
-- Speech that is not addressed to your guards and does not parse as an order is ignored, so talking to friends does nothing. If you address them ("commander, ...") and the grammar cannot parse it, the commander says "I did not catch that." With an OpenAI key configured, those addressed but unparsed lines go to an optional LLM fallback first ([details](docs/voice.md#privacy)).
+- Speech that is not addressed to your guards and does not parse as an order issues no guard command. Eligible proximity speech still goes to transcription while voice is enabled. If you address them ("commander, ...") and the grammar cannot parse it, the commander says "I did not catch that." With an OpenAI key configured, those addressed but unparsed lines go to an optional LLM fallback first ([details](docs/voice.md#privacy)).
 
 ## Command post (tactics screen)
 
@@ -254,7 +254,9 @@ Zones save automatically. Only explored chunks are shown.
 | `Ctrl` + `S` | Save group moves |
 | `Esc` | Cancel the current action, then close |
 
-A group's colour links it to the zones painted in that colour. Group moves are saved in one batch; closing with unsaved moves asks first. The roster shows every guard you own, including unloaded ones, with level, health, gear, distance and current orders. You can have up to 64 groups.
+A group's colour links it to the zones painted in that colour. Group moves are saved in one batch; closing with unsaved moves asks first. The roster shows every guard you own. Loaded guards show level, health, gear, distance and current orders; unloaded guards show their saved name and group. You can have up to 64 groups.
+
+Singleplayer map notes are stored per save folder, so renaming a world keeps its notes and worlds with the same display name stay separate. Older notes keyed by display name migrate to the first matching save opened.
 
 ## Shop and upgrades
 
@@ -264,7 +266,7 @@ A group's colour links it to the zones painted in that colour. Group moves are s
 
 **Hiring.** Click the card to hire one guard, shift-click to hire as many as you can afford (up to your 16-guard limit). The guard spawns in your own block column or the hire fails and you are refunded. Free in creative.
 
-Hire price is `4 + 2 x (hire level - 1)`, where hire level is `1 + armor + weapon + support` upgrade levels. Reputation scales it: `1.5x` at `0.00`, `1.125x` at `0.50`, `0.75x` at `1.00`, never below 1 block. New guards start at the hire level.
+Hire price is `4 + 2 x (loadout tier - 1)`, where loadout tier is `1 + armor + weapon + support` upgrade levels. Reputation scales it: `1.5x` at `0.00`, `1.125x` at `0.50`, `0.75x` at `1.00`, never below 1 block. Recruits receive the purchased equipment and support upgrades, but start at XP level 1 with zero experience. The loadout tier is a price factor, not the guard's XP level.
 
 | Upgrade | Levels | Cost per level | Effect |
 | --- | --- | --- | --- |
@@ -331,8 +333,8 @@ Everything is under `/guards`. Player commands only affect your own guards.
 | `/guards commander auto on\|off` | Let the commander act on its own, or only on your orders. |
 | `/guards voice on\|off` | Allow or stop voice orders for you. |
 | `/guards voice status` | What voice needs to work for you. |
-| `/guards trust add <players>` | Your guards treat these players as friends. |
-| `/guards trust remove <players>` | Remove them. |
+| `/guards trust add <player>` | Your guards treat this player as a friend. |
+| `/guards trust remove <player>` | Remove this player from your trusted list. |
 | `/guards trust list` | Show your trusted players. |
 
 ### Operator commands (permission level 2)
