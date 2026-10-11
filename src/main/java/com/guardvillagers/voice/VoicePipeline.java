@@ -61,6 +61,7 @@ public final class VoicePipeline implements AutoCloseable {
 	private final VoiceRateLimiter limiter;
 	private final Executor serverExecutor;
 	private final LongSupplier clockMillis;
+	private final java.util.function.BiConsumer<Runnable, Long> schedule;
 	private final Set<SpeechException.Channel> rejectedKey = Collections.synchronizedSet(
 			EnumSet.noneOf(SpeechException.Channel.class));
 	private final Map<UUID, Long> lastFailureNotice = new LinkedHashMap<>();
@@ -81,6 +82,13 @@ public final class VoicePipeline implements AutoCloseable {
 	 */
 	public VoicePipeline(VoiceConfig config, SpeechToText stt, TextToSpeech tts, VoiceRateLimiter limiter,
 			Executor serverExecutor, LongSupplier clockMillis) {
+		this(config, stt, tts, limiter, serverExecutor, clockMillis,
+				(task, delay) -> CompletableFuture.delayedExecutor(delay, TimeUnit.MILLISECONDS).execute(task));
+	}
+
+	VoicePipeline(VoiceConfig config, SpeechToText stt, TextToSpeech tts, VoiceRateLimiter limiter,
+			Executor serverExecutor, LongSupplier clockMillis, java.util.function.BiConsumer<Runnable, Long> schedule) {
+		this.schedule = Objects.requireNonNull(schedule, "schedule");
 		this.config = Objects.requireNonNull(config, "config");
 		this.stt = stt;
 		this.tts = tts;
@@ -193,10 +201,10 @@ public final class VoicePipeline implements AutoCloseable {
 		// sentence instead of dropping it. Cancelling the returned future before the wait ends skips the request;
 		// cancelling it later cancels the request itself.
 		CompletableFuture<Void> result = new CompletableFuture<>();
-		CompletableFuture.delayedExecutor(wait, TimeUnit.MILLISECONDS).execute(() -> {
+		this.schedule.accept(() -> {
 			if (result.isDone()) return;
 			link(result, startTranscription(player, pcm48k, endpointMs + wait));
-		});
+		}, wait);
 		return result;
 	}
 

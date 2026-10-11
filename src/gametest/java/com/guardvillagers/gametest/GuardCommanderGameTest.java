@@ -547,6 +547,8 @@ public class GuardCommanderGameTest {
 				owned(helper, owner, CENTER - 1.5, CENTER - 0.5, GuardRole.BOWMAN, 0),
 				owned(helper, owner, CENTER - 2.5, CENTER + 2.5, GuardRole.SWORDSMAN, 300),
 				owned(helper, owner, CENTER - 2.5, CENTER - 1.5, GuardRole.SWORDSMAN, 0));
+		// Keep the measured distances fixed and prevent an AI attack from satisfying assignment checks.
+		guards.forEach(guard -> guard.setNoAi(true));
 		Zombie[] zombie = new Zombie[1];
 		int[] spawnedAt = {-1};
 		// Owner idle; once the squad has gathered, a zombie appears 23 blocks east: beyond every guard's own 20-block
@@ -557,11 +559,14 @@ public class GuardCommanderGameTest {
 		});
 		helper.succeedWhen(() -> {
 			helper.assertTrue(zombie[0] != null, "waiting for the zombie");
-			boolean targeted = false;
-			for (GuardEntity guard : guards) {
-				targeted |= zombie[0].getUUID().equals(guard.getMainTargetUuid()) || !zombie[0].isAlive();
-			}
-			helper.assertTrue(targeted, "no guard sent at the zombie");
+			helper.assertTrue(zombie[0].isAlive(), "target must remain alive for role selection");
+			java.util.Map<UUID, UUID> assignments = CommanderService.lastAssignments(owner.getUUID());
+			helper.assertTrue(guards.stream().filter(guard -> guard.getRole() == GuardRole.BOWMAN)
+					.anyMatch(guard -> zombie[0].getUUID().equals(assignments.get(guard.getUUID()))),
+					"commander did not assign a bowman to the melee threat: " + assignments);
+			helper.assertTrue(guards.stream().filter(guard -> guard.getRole() == GuardRole.SWORDSMAN)
+					.noneMatch(guard -> zombie[0].getUUID().equals(assignments.get(guard.getUUID()))),
+					"swordsman chosen over available, similarly distant bowmen: " + assignments);
 			helper.assertTrue(helper.getTick() - spawnedAt[0] <= 60, "took longer than 60 ticks");
 			helper.assertTrue(calloutContains(owner, "east"), "callout does not mention east: " + CommanderCallouts.recent(owner.getUUID()));
 		});
@@ -571,8 +576,11 @@ public class GuardCommanderGameTest {
 	public void woundedGuardPulledBack(GameTestHelper helper) {
 		walledFloor(helper);
 		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER - 0.5, 1, CENTER + 0.5);
-		GuardEntity guard = owned(helper, owner, CENTER - 1.5, CENTER + 1.5, GuardRole.BOWMAN, 0);
+		GuardEntity guard = owned(helper, owner, CENTER - 10.5, CENTER + 0.5, GuardRole.BOWMAN, 0);
 		guard.setHealth(guard.getMaxHealth() * 0.2F);
+		guard.setNoAi(true);
+		double startDistance = guard.distanceToSqr(owner);
+		boolean[] retreatOrdered = {false};
 		UUID[] zombie = new UUID[1];
 		helper.runAfterDelay(40, () -> zombie[0] = statue(helper, CENTER + 22.5, CENTER + 0.5).getUUID());
 		boolean[] healed = {false};
@@ -586,7 +594,14 @@ public class GuardCommanderGameTest {
 				if (assigned) {
 					helper.fail("wounded guard was sent at the zombie at " + guard.getHealth() + " hp");
 				}
+				if (!retreatOrdered[0] && guard.getRallyPoint().isPresent()) {
+					helper.assertValueEqual(guard.getRallyPoint().orElseThrow(), owner.blockPosition(), "wounded retreat destination");
+					retreatOrdered[0] = true;
+					guard.setNoAi(false);
+				}
 				if (helper.getTick() >= 160) {
+					helper.assertTrue(retreatOrdered[0], "commander never ordered a retreat");
+					helper.assertTrue(guard.distanceToSqr(owner) < startDistance / 2, "wounded guard made no retreat progress");
 					helper.assertTrue(CommanderService.isWounded(owner.getUUID(), guard.getUUID()), "guard not marked wounded");
 					guard.setHealth(guard.getMaxHealth());
 					healed[0] = true;
