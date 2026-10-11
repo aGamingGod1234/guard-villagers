@@ -619,6 +619,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	public void setStaying(boolean staying) {
+		this.aiController.rallyTo(this.blockPosition(), 0);
 		this.holdOrigin = null;
 		this.staying = staying;
 		if (staying) {
@@ -646,6 +647,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 			this.setCatchUpSpeedActive(false);
 		}
 		if (followOverride) {
+			this.aiController.rallyTo(this.blockPosition(), 0);
 			this.holdOrigin = null;
 		}
 		if (changed && followOverride) {
@@ -672,6 +674,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	public void setHome(BlockPos home, int patrolRadius) {
+		this.aiController.rallyTo(this.blockPosition(), 0);
 		this.setFollowOverride(false);
 		this.holdOrigin = null;
 		this.home = home.immutable();
@@ -743,6 +746,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	 * (bowmen shoot from position) and never paths away. Follow, stay and home orders clear it.
 	 */
 	public void setHoldPosition(boolean hold) {
+		this.aiController.rallyTo(this.blockPosition(), 0);
 		if (hold) {
 			this.staying = false;
 			this.stayOrigin = null;
@@ -757,7 +761,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	public boolean isHoldingPosition() {
-		return this.holdOrigin != null;
+		// Temporary rallies suspend Hold; the saved origin resumes when the rally expires.
+		return this.holdOrigin != null && this.getRallyPoint().isEmpty();
 	}
 
 	public BlockPos getHoldOrigin() {
@@ -1267,6 +1272,9 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		}
 
 		if (this.ownerUuid != null && this.ownerUuid.equals(player.getUUID()) && !stack.isEmpty()) {
+			if (stack.is(GuardVillagersMod.GUARD_WHISTLE)) {
+				return InteractionResult.PASS;
+			}
 			if (this.tryApplyPlayerUpgrade(player, hand, stack)) {
 				return InteractionResult.SUCCESS;
 			}
@@ -1625,8 +1633,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	/**
-	 * Guards with nothing to do that end up boxed in (inside a house, wedged in a doorway or a
-	 * 1-wide gap) for 5 seconds walk out to the nearest standing spot under open sky.
+	 * Guards whose requested movement makes no progress under cover for 5 seconds try an
+	 * open-sky exit. Deliberately stationary guards have no unfinished route to recover.
 	 */
 	private void tickUnstickWatchdog() {
 		if (this.tickCount % 20 != 0) {
@@ -1635,7 +1643,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		boolean idle = this.aiController.isIntent(GuardAiIntent.IDLE)
 				|| this.aiController.isIntent(GuardAiIntent.BEHAVIOR_PATROL_OR_ANCHOR);
 		BlockPos pos = this.blockPosition();
-		if (!idle || this.staying || this.getTarget() != null || this.isInWater()
+		if (!idle || this.staying || this.isHoldingPosition() || this.getNavigation().isDone()
+				|| this.getTarget() != null || this.isInWater()
 				|| this.level().canSeeSky(pos.above())) {
 			this.unstickSamples = 0;
 			this.unstickSamplePos = pos;
