@@ -105,7 +105,10 @@ final class GuardScaleClientBenchmark {
 			captureProfiles(context);
 			context.runOnClient(client -> GuardDebugLayoutChecks.run());
 			// The reference renderer deliberately lacks Component reuse; its screenshot suite and layout checks still run.
-			if (!Boolean.getBoolean("guardvillagers.clientPerfReference")) GuardRenderCacheChecks.run(context, world, feet);
+			if (!Boolean.getBoolean("guardvillagers.clientPerfReference")) {
+				GuardRenderCacheChecks.run(context, world, feet);
+				context.runOnClient(GuardSkinMeshChecks::run);
+			}
 		} finally {
 			context.runOnClient(client -> {
 				ClientDebugState.reset();

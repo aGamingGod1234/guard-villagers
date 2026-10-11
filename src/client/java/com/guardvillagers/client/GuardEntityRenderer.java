@@ -52,8 +52,8 @@ public class GuardEntityRenderer
 	public GuardEntityRenderer(EntityRendererProvider.Context context) {
 		super(
 				context,
-				new GuardEntityModel(context.bakeLayer(GuardEntityModel.GUARD_LAYER)),
-				new GuardEntityModel(context.bakeLayer(GuardEntityModel.GUARD_BABY_LAYER)),
+				new GuardEntityModel(GuardSkinResolver.prepareSkinModel(context.bakeLayer(GuardEntityModel.GUARD_LAYER), context.getResourceManager())),
+				new GuardEntityModel(GuardSkinResolver.prepareSkinModel(context.bakeLayer(GuardEntityModel.GUARD_BABY_LAYER), context.getResourceManager())),
 				0.5F,
 				VillagerRenderer.CUSTOM_HEAD_TRANSFORMS);
 		// Zombie-villager armor geometry fits the 10px villager head: the iron/gold/diamond/netherite helmet faces are
