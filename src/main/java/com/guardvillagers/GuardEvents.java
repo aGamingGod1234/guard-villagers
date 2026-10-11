@@ -33,14 +33,14 @@ final class GuardEvents {
 	}
 
 	static void register() {
+		GuardTacticsManager.register();
 		AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
 			if (world.isClientSide() || !(player instanceof ServerPlayer serverPlayer) || !(entity instanceof LivingEntity target)) {
 				return InteractionResult.PASS;
 			}
-			if (target instanceof Villager || target instanceof IronGolem) {
-				GuardReputationManager.recordVillagerHarm(serverPlayer.level(), serverPlayer.getUUID());
+			if (!(target instanceof GuardEntity)) {
+				alertGuardsOfAttackingOwner(serverPlayer, target);
 			}
-			alertGuardsOfAttackingOwner(serverPlayer, target);
 			return InteractionResult.PASS;
 		});
 
@@ -51,10 +51,15 @@ final class GuardEvents {
 			if (entity instanceof ServerPlayer ownerVictim) {
 				alertGuardsOfDamagedOwner(ownerVictim, attacker);
 			}
-			if (attacker instanceof ServerPlayer ownerAttacker) {
+			if (damageTaken > 0.0F) {
+				recordVillageHarm(entity, source.getEntity());
+			}
+			if (attacker instanceof ServerPlayer ownerAttacker && !(entity instanceof GuardEntity)) {
 				alertGuardsOfAttackingOwner(ownerAttacker, entity);
 			}
 		});
+		// Fabric's AFTER_DAMAGE deliberately omits lethal hits.
+		ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> recordVillageHarm(entity, source.getEntity()));
 
 		ServerTickEvents.END_LEVEL_TICK.register(GuardEvents::onLevelTick);
 		ServerTickEvents.END_SERVER_TICK.register(GuardTacticsMenus::tickOpenRosters);
@@ -103,7 +108,7 @@ final class GuardEvents {
 	}
 
 	/** The owner hit something: nearby owned guards join in, unless the target is one of their own or protected by PvP rules. */
-	private static void alertGuardsOfAttackingOwner(ServerPlayer owner, LivingEntity target) {
+	static void alertGuardsOfAttackingOwner(ServerPlayer owner, LivingEntity target) {
 		if (target instanceof GuardEntity guardTarget && guardTarget.isOwnedBy(owner.getUUID())) {
 			return;
 		}
@@ -119,6 +124,13 @@ final class GuardEvents {
 			}
 		} catch (RuntimeException exception) {
 			GuardVillagersMod.LOGGER.error("Failed owner-attack alert for {}", owner.getName().getString(), exception);
+		}
+	}
+
+	private static void recordVillageHarm(LivingEntity victim, net.minecraft.world.entity.Entity attacker) {
+		if ((victim instanceof Villager || victim instanceof IronGolem)
+				&& victim.level() instanceof ServerLevel world && attacker instanceof ServerPlayer player) {
+			GuardReputationManager.recordVillagerHarm(world, player.getUUID());
 		}
 	}
 

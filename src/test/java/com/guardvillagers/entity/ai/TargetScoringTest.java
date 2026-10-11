@@ -40,6 +40,14 @@ final class TargetScoringTest {
 	}
 
 	@Test
+	void ownerDefenseBeatsLiveDirectDamageEvenAgainstAStickyRaider() {
+		int engaged = TargetScoring.score(false, false, DIRECT_DAMAGE, 65, true, 1.0D, 0);
+		int ownerAttacker = TargetScoring.score(false, true, OWNER_DAMAGED, 20, false, FAR, 20);
+		assertTrue(TargetScoring.compare(false, true, ownerAttacker, false, false, engaged) > 0);
+		assertTrue(TargetScoring.compare(true, false, 0, false, true, ownerAttacker) > 0);
+	}
+
+	@Test
 	void currentTargetIsNotDroppedForACloserScannedHostile() {
 		int current = TargetScoring.score(false, false, CURRENT_TARGET, MONSTER, true, 15.0D * 15.0D, 0);
 		int closerScan = TargetScoring.score(false, false, HOSTILE_SCAN, MONSTER, false, 1.0D, 0);

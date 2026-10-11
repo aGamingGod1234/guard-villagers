@@ -33,7 +33,9 @@ public final class GrammarInterpreter {
 		/** A name matched two scopes equally, or the utterance named two different scopes for one order. */
 		AMBIGUOUS,
 		/** More than {@link #MAX_ORDERS} orders. */
-		TOO_MANY_ORDERS
+		TOO_MANY_ORDERS,
+		/** An appointment qualifier cannot be represented by the order model. */
+		UNSUPPORTED_QUALIFIER
 	}
 
 	/**
@@ -99,12 +101,12 @@ public final class GrammarInterpreter {
 
 	/** Parses a transcript or chat line against the speaker's roster. */
 	public Result parse(String text, OwnerRoster roster) {
-		List<String> tokens = Normalizer.tokens(text);
+		List<String> tokens = Normalizer.tokens(text, roster);
 		if (tokens.isEmpty()) {
 			return Result.fail(Failure.EMPTY, false, 0.0);
 		}
 		boolean addressed = startsWithAddress(tokens, roster);
-		List<List<String>> clauses = split(tokens);
+		List<List<String>> clauses = split(tokens, roster);
 		if (clauses.isEmpty()) {
 			return Result.fail(Failure.EMPTY, addressed, 0.0);
 		}
@@ -136,15 +138,15 @@ public final class GrammarInterpreter {
 
 	/** True when the utterance opens with something that names guards ("commander", "alpha", "guards", "Liam"). */
 	public boolean isAddressed(String text, OwnerRoster roster) {
-		return startsWithAddress(Normalizer.tokens(text), roster);
+		return startsWithAddress(Normalizer.tokens(text, roster), roster);
 	}
 
 	private boolean startsWithAddress(List<String> tokens, OwnerRoster roster) {
 		int start = 0;
-		while (start < tokens.size() && SOFT.contains(tokens.get(start))) {
+		while (start < tokens.size() && SOFT.contains(tokens.get(start)) && Normalizer.nameLengthAt(tokens, start, roster) == 0) {
 			start++;
 		}
-		for (int n = Math.min(3, tokens.size() - start); n >= 1; n--) {
+		for (int n = tokens.size() - start; n >= 1; n--) {
 			Optional<ScopeMatch> match = resolveScope(tokens.subList(start, start + n), roster);
 			if (match.isPresent() && !match.get().ambiguous() && match.get().weight() / n >= FuzzyMatcher.ONE_EDIT) {
 				return true;
@@ -153,10 +155,16 @@ public final class GrammarInterpreter {
 		return false;
 	}
 
-	private static List<List<String>> split(List<String> tokens) {
+	private static List<List<String>> split(List<String> tokens, OwnerRoster roster) {
 		List<List<String>> clauses = new ArrayList<>();
 		List<String> current = new ArrayList<>();
 		for (int i = 0; i < tokens.size(); i++) {
+			int nameLength = Normalizer.nameLengthAt(tokens, i, roster);
+			if (nameLength > 0) {
+				current.addAll(tokens.subList(i, i + nameLength));
+				i += nameLength - 1;
+				continue;
+			}
 			String token = tokens.get(i);
 			boolean afterThat = token.equals("after") && i + 1 < tokens.size() && tokens.get(i + 1).equals("that");
 			if (SPLITTERS.contains(token) || afterThat) {
@@ -182,77 +190,69 @@ public final class GrammarInterpreter {
 		Radius radius = extractRadius(core);
 		int total = clauseTokens.size();
 
+		if (core.isEmpty()) return Clause.fail(Failure.NO_ORDER, 0.0);
+		if (core.size() > 1 && (core.getFirst().equals("commander") || core.getFirst().equals("you"))
+				&& APPOINT_VERBS.contains(core.get(1))) {
+			core.removeFirst();
+			total--;
+		}
 		if (APPOINT_VERBS.contains(core.getFirst())) {
 			Clause appointment = parseAppointment(core, total, roster);
-			if (appointment != null) {
-				return appointment;
-			}
+			if (appointment != null) return appointment;
 		}
 
-		Phrase bestPhrase = null;
-		int bestStart = -1;
-		double bestSum = 0.0;
-		boolean bestStrong = false;
+		Clause best = null;
+		Failure failure = Failure.NO_ORDER;
+		int bestLength = 0;
+		boolean[] named = new boolean[core.size()];
+		for (int i = 0; i < core.size();) {
+			int n = Normalizer.nameLengthAt(core, i, roster);
+			if (n == 0) { i++; continue; }
+			Arrays.fill(named, i, i + n, true);
+			i += n;
+		}
 		for (Phrase phrase : PHRASES) {
 			int length = phrase.tokens().size();
 			for (int start = 0; start + length <= core.size(); start++) {
 				double sum = 0.0;
-				boolean strong = false;
 				boolean ok = true;
 				for (int k = 0; k < length; k++) {
-					double s = FuzzyMatcher.wordScore(core.get(start + k), phrase.tokens().get(k));
-					if (s <= 0.0) {
+					double score = FuzzyMatcher.wordScore(core.get(start + k), phrase.tokens().get(k));
+					if (score <= 0 || named[start + k]) { ok = false; break; }
+					sum += score;
+				}
+				if (!ok) continue;
+				failure = failure == Failure.AMBIGUOUS ? failure : Failure.LOW_SCORE;
+				Side prefix = resolveSide(core.subList(0, start), roster);
+				Side suffix = resolveSide(core.subList(start + length, core.size()), roster);
+				if (prefix.weight() < 0 || suffix.weight() < 0) continue;
+				ScopeMatch scope = null;
+				for (Side side : List.of(prefix, suffix)) {
+					if (side.match().isEmpty()) continue;
+					ScopeMatch match = side.match().get();
+					if (match.ambiguous() || (scope != null && !scope.scope().sameAs(match.scope()))) {
+						failure = Failure.AMBIGUOUS;
 						ok = false;
 						break;
 					}
-					sum += s;
-					strong |= FuzzyMatcher.isStrong(s);
+					scope = match;
 				}
-				if (!ok) {
-					continue;
+				if (!ok) continue;
+				// A pronoun or particle cannot legitimize an unrelated fuzzy action verb.
+				boolean strongVerb = FuzzyMatcher.isStrong(FuzzyMatcher.wordScore(core.get(start), phrase.tokens().getFirst()));
+				if (!strongVerb && (scope == null || !scope.strong())) continue;
+				boolean usesRadius = phrase.action() == Action.PATROL_HERE && radius != null;
+				if (radius != null && !usesRadius) continue;
+				double score = (sum + prefix.weight() + suffix.weight() + (usesRadius ? radius.tokenCount() : 0)) / total;
+				if (score < MIN_SCORE) continue;
+				if (best == null || length > bestLength || (length == bestLength && score > best.score())) {
+					best = new Clause(phrase.build(scope == null ? Scope.ALL : scope.scope(),
+							usesRadius ? OptionalInt.of(radius.value()) : OptionalInt.empty()), scope != null, score, null);
+					bestLength = length;
 				}
-				int bestLength = bestPhrase == null ? 0 : bestPhrase.tokens().size();
-				if (length > bestLength || (length == bestLength && sum > bestSum)) {
-					bestPhrase = phrase;
-					bestStart = start;
-					bestSum = sum;
-					bestStrong = strong;
-				}
 			}
 		}
-		if (bestPhrase == null) {
-			return Clause.fail(Failure.NO_ORDER, 0.0);
-		}
-
-		int end = bestStart + bestPhrase.tokens().size();
-		Side prefix = resolveSide(core.subList(0, bestStart), roster);
-		Side suffix = resolveSide(core.subList(end, core.size()), roster);
-		Optional<ScopeMatch> scopeMatch = Optional.empty();
-		for (Side side : List.of(prefix, suffix)) {
-			if (side.match().isEmpty()) {
-				continue;
-			}
-			ScopeMatch match = side.match().get();
-			if (match.ambiguous()) {
-				return Clause.fail(Failure.AMBIGUOUS, 0.0);
-			}
-			if (scopeMatch.isPresent() && !scopeMatch.get().scope().sameAs(match.scope())) {
-				return Clause.fail(Failure.AMBIGUOUS, 0.0);
-			}
-			scopeMatch = Optional.of(match);
-		}
-
-		boolean usesRadius = bestPhrase.action() == Action.PATROL_HERE && radius != null;
-		double accounted = bestSum + prefix.weight() + suffix.weight() + (usesRadius ? radius.tokenCount() : 0);
-		double score = accounted / total;
-		boolean strong = bestStrong || scopeMatch.map(ScopeMatch::strong).orElse(false);
-		if (!strong || score < MIN_SCORE) {
-			return Clause.fail(Failure.LOW_SCORE, score);
-		}
-
-		Scope scope = scopeMatch.map(ScopeMatch::scope).orElse(Scope.ALL);
-		OptionalInt radiusValue = usesRadius ? OptionalInt.of(radius.value()) : OptionalInt.empty();
-		return new Clause(bestPhrase.build(scope, radiusValue), scopeMatch.isPresent(), score, null);
+		return best == null ? Clause.fail(failure, 0.0) : best;
 	}
 
 	/** "make Liam commander", "promote Ava to captain of alpha". Returns null when this is not an appointment. */
@@ -293,15 +293,11 @@ public final class GrammarInterpreter {
 		}
 		double accounted = 1.0 + glue + guard.get().weight() + rankScore;
 		List<String> rest = core.subList(rankIndex + 1, core.size());
-		if (!rest.isEmpty() && (rest.getFirst().equals("of") || rest.getFirst().equals("for")) && rest.size() > 1) {
-			// The captain's group follows from the guard's own group; the spoken group is only checked, not used.
-			Optional<ScopeMatch> group = matchNames(rest.subList(1, rest.size()), roster.groupNames(), List.of());
-			if (group.isPresent() && !group.get().ambiguous()) {
-				accounted += 1.0 + group.get().weight();
-			}
-		}
+		// The order model has no requested-group field. Refuse a qualifier rather than appointing
+		// a different group's captain; unqualified appointments use the guard's actual group.
+		if (!rest.isEmpty()) return Clause.fail(Failure.UNSUPPORTED_QUALIFIER, 0.0);
 		double score = accounted / total;
-		if (score < MIN_SCORE) {
+		if (score < MIN_SCORE || core.size() != total) {
 			return Clause.fail(Failure.LOW_SCORE, score);
 		}
 		return new Clause(Order.of(action, guard.get().scope()), true, score, null);
@@ -348,6 +344,10 @@ public final class GrammarInterpreter {
 		if (side.isEmpty()) {
 			return Side.EMPTY;
 		}
+		Optional<ScopeMatch> exactName = matchNames(side, roster.groupNames(), roster.guardNames());
+		if (exactName.isPresent() && exactName.get().weight() == side.size()) {
+			return new Side(exactName, side.size());
+		}
 		int start = 0;
 		int end = side.size();
 		while (start < end && SOFT.contains(side.get(start))) {
@@ -361,13 +361,15 @@ public final class GrammarInterpreter {
 			return new Side(Optional.empty(), soft);
 		}
 		Optional<ScopeMatch> match = resolveScope(side.subList(start, end), roster);
-		return new Side(match, soft + match.map(ScopeMatch::weight).orElse(0.0));
+		return new Side(match, match.isPresent() ? soft + match.get().weight() : -1.0);
 	}
 
 	private Optional<ScopeMatch> resolveScope(List<String> tokens, OwnerRoster roster) {
 		if (tokens.isEmpty()) {
 			return Optional.empty();
 		}
+		Optional<ScopeMatch> exactName = matchNames(tokens, roster.groupNames(), roster.guardNames());
+		if (exactName.isPresent() && exactName.get().weight() == tokens.size()) return exactName;
 		double commander = FuzzyMatcher.wordScore(tokens.getFirst(), "commander");
 		if (commander > 0.0) {
 			if (tokens.size() == 1) {

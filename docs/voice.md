@@ -56,19 +56,19 @@ Voice is optional. Without SVC or without an OpenAI key, players still give the 
     "timeoutsMs": { "stt": 15000, "tts": 15000, "llm": 8000 }
   },
   "tts": { "enabled": true, "distance": 32, "cacheMiB": 16, "tone": "serious" },
-  "llm": { "enabled": true, "model": "gpt-6-luna", "maxPerPlayerPerMinute": 6 },
+  "llm": { "enabled": true, "model": "gpt-6-luna", "maxPerPlayerPerMinute": 6, "maxPerMinuteGlobal": 60, "maxInFlight": 4 },
   "rateLimits": { "sttMinIntervalMs": 1000, "sttSecondsPerPlayerPerHour": 300, "sttGlobalInFlight": 4, "ttsGlobalInFlight": 4, "calloutMinIntervalMs": 4000 },
-  "chat": { "prefix": "!g ", "prefixEnabled": true, "showTranscripts": true }
+  "chat": { "prefix": "!g ", "prefixEnabled": true, "showTranscripts": false }
 }
 ```
 
 | Field | Default | Range | What it does |
 | --- | --- | --- | --- |
 | `voiceInput.enabled` | `true` | | Turns voice capture on or off for the whole server. |
-| `voiceInput.consentDefault` | `false` | | Consent for players who never ran `/guards voice on` or `off`. Leave it `false` on shared servers. |
+| `voiceInput.consentDefault` | `false` | | Legacy compatibility field. Capture and upload always require the player's explicit `/guards voice on` choice; `true` cannot opt players in. |
 | `voiceInput.captureRangeToOwnGuards` | `48` | 4 to 256 | Speech is only captured when the speaker has a loaded guard of their own within this many blocks. |
 | `voiceInput.maxUtteranceMs` | `10000` | 1000 to 20000 | Longest single utterance. |
-| `voiceInput.endpointSilenceMs` | `300` | 160 to 2000 | Silence that ends an utterance. |
+| `voiceInput.endpointSilenceMs` | `300` | 160 to 2000 | Silence that ends a short utterance. After 24,000 samples (0.5 seconds at 48 kHz), the endpoint uses 160 ms instead. |
 | `commander.autoCommandDefault` | `true` | | Whether commanders act on their own by default. Players change it with `/guards commander auto on\|off`. |
 | `commander.planIntervalTicks` | `40` | 10 to 400 | How often the commander re-plans (20 ticks = 1 s). |
 | `commander.voiceOrderExpirySeconds` | `60` | 5 to 3600 | How long timed orders last (come here, attack, form, retreat). |
@@ -85,19 +85,21 @@ Voice is optional. Without SVC or without an OpenAI key, players still give the 
 | `llm.enabled` | `true` | | Optional fallback that interprets orders the built-in grammar does not understand. |
 | `llm.model` | `gpt-6-luna` | | Model for that fallback. |
 | `llm.maxPerPlayerPerMinute` | `6` | 0 to 60 | Fallback calls per player per minute. |
+| `llm.maxPerMinuteGlobal` | `60` | 0 to 600 | Fallback calls per minute across the server. |
+| `llm.maxInFlight` | `4` | 1 to 32 | Concurrent fallback requests across the server. |
 | `rateLimits.sttMinIntervalMs` | `1000` | 0 to 60000 | Minimum gap between transcriptions for one player. |
 | `rateLimits.sttSecondsPerPlayerPerHour` | `300` | 0 to 3600 | Seconds of audio each player may send per hour. |
 | `rateLimits.sttGlobalInFlight` / `ttsGlobalInFlight` | `4` / `4` | 1 to 32 | Concurrent requests across the server. |
 | `rateLimits.calloutMinIntervalMs` | `4000` | 0 to 60000 | Minimum gap between commander callouts for one player. |
 | `chat.prefix` | `!g ` | 1 to 16 characters | Chat messages starting with this are orders. They are not broadcast. |
 | `chat.prefixEnabled` | `true` | | Turns the chat prefix on or off. |
-| `chat.showTranscripts` | `true` | | Shows the player a grey `Heard: ...` line for each transcript. |
+| `chat.showTranscripts` | `false` | | Shows the player a temporary `Heard: ...` overlay when enabled; it is not added to chat. |
 
 ## Privacy
 
-- **Consent first.** Audio from a player is decoded only after they opt in, and only while they own a loaded guard within `captureRangeToOwnGuards` blocks. Everything else is dropped on the server before decoding.
+- **Consent first.** Audio from a player is decoded only after they explicitly opt in, and only while they own a loaded guard within `captureRangeToOwnGuards` blocks. Only public proximity speech is eligible: group speech (including open groups) and whispers are excluded. Consent, connection, proximity and channel are checked again before upload; losing eligibility cancels capture.
 - **No audio is stored.** Audio exists in memory until the transcription request finishes. It is not written to disk or logs. `/guards voice off` drops any utterance in flight.
-- **Transcripts are not saved.** The speaker sees them in their own chat (if `showTranscripts` is on). The server log records them only at DEBUG level.
+- **Transcript feedback.** Disabled by default. With `showTranscripts` enabled, the speaker sees a temporary overlay instead of a chat message, so Minecraft's normal chat logger does not record it. The mod does not log raw transcripts, including at DEBUG level.
 - **What is sent to OpenAI:**
   - Transcription: the utterance audio (48 kHz mono WAV) plus the speaker's own group and guard names as a spelling hint.
   - Optional LLM fallback: the transcript (at most 512 characters) and the speaker's group and guard names. No coordinates, no other players, no world data. The model can only fill in a fixed order schema; its output is validated and its text is never run as a command.

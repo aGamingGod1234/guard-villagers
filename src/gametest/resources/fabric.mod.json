@@ -7,17 +7,21 @@
 	"entrypoints": {
 		"fabric-gametest": [
 			"com.guardvillagers.gametest.GuardCombatGameTest",
+			"com.guardvillagers.gametest.GuardCombatReviewGameTest",
 			"com.guardvillagers.gametest.GuardCombatScenariosGameTest",
 			"com.guardvillagers.gametest.GuardOwnershipGameTest",
 			"com.guardvillagers.gametest.GuardMovementGameTest",
+			"com.guardvillagers.gametest.GuardNavigationRegressionGameTest",
 			"com.guardvillagers.gametest.GuardPersistenceGameTest",
+			"com.guardvillagers.gametest.GuardTacticsServerGameTest",
 			"com.guardvillagers.gametest.GuardReputationGameTest",
 			"com.guardvillagers.gametest.GuardVillageGameTest",
 			"com.guardvillagers.gametest.perf.GuardPerfBenchmark",
 			"com.guardvillagers.gametest.GuardAiGameTest",
 			"com.guardvillagers.gametest.GuardCommanderGameTest",
 			"com.guardvillagers.gametest.GuardOrderRegressionGameTest",
-			"com.guardvillagers.gametest.GuardCommanderRegressionGameTest"
+			"com.guardvillagers.gametest.GuardCommanderRegressionGameTest",
+			"com.guardvillagers.gametest.GuardBehaviorRegressionGameTest"
 		],
 		"fabric-client-gametest": [
 			"com.guardvillagers.gametest.client.GuardRenderClientGameTest",

@@ -5,6 +5,7 @@ import static com.guardvillagers.gametest.GuardTestSupport.CENTER;
 import static com.guardvillagers.gametest.GuardTestSupport.ENV;
 
 import com.guardvillagers.GuardOwnershipIndex;
+import com.guardvillagers.data.GuardOwnershipState;
 import com.guardvillagers.GuardVillagersMod;
 import com.guardvillagers.entity.FormationType;
 import com.guardvillagers.entity.GuardBehavior;
@@ -34,6 +35,30 @@ public class GuardPersistenceGameTest {
 		GuardEntity copy = GuardVillagersMod.GUARD_ENTITY_TYPE.create(level, EntitySpawnReason.LOAD);
 		copy.load(TagValueInput.create(ProblemReporter.DISCARDING, level.registryAccess(), tag));
 		return copy;
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void deathReleasesOwnershipBeforeCorpseRemovalAndAfterReload(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerLevel level = helper.getLevel();
+		UUID owner = UUID.randomUUID();
+		GuardEntity guard = GuardTestSupport.swordsman(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		guard.setOwnerUuid(owner);
+		GuardOwnershipState state = level.getServer().getDataStorage().computeIfAbsent(GuardOwnershipState.TYPE);
+		helper.assertValueEqual(state.countOwned(owner), 1, "ownership before death");
+		guard.hurtServer(level, level.damageSources().genericKill(), Float.MAX_VALUE);
+		helper.assertFalse(guard.isAlive(), "lethal damage must kill the guard");
+		helper.assertFalse(guard.isRemoved(), "test must run before the corpse removal tick");
+		helper.assertValueEqual(state.countOwned(owner), 0, "death must immediately release the saved slot");
+		// Simulate an old saved ownership row paired with a corpse saved before its removal tick.
+		state.record(guard.getUUID(), owner, 0L);
+		GuardEntity copy = roundTrip(level, guard);
+		helper.assertFalse(copy.isAlive(), "reloaded corpse must remain dead");
+		helper.assertValueEqual(state.countOwned(owner), 0, "loading a corpse must remove its stale row");
+		GuardOwnershipIndex.track(copy);
+		helper.assertValueEqual(state.countOwned(owner), 0, "periodic tracking must not restore a dead row");
+		helper.assertTrue(GuardOwnershipIndex.getOwnedGuards(level.getServer(), owner).isEmpty(), "dead guard in loaded roster");
+		helper.succeed();
 	}
 
 	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
@@ -117,4 +142,26 @@ public class GuardPersistenceGameTest {
 		helper.assertValueEqual(copy.getFormationType(), FormationType.FOLLOW, "formation");
 		helper.succeed();
 	}
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void offlineOwnerReloadReconcilesStaleCommander(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		UUID owner = UUID.randomUUID();
+		GuardEntity incumbent = GuardTestSupport.swordsman(helper, CENTER - 2.5, 1, CENTER + 0.5);
+		GuardEntity stale = GuardTestSupport.swordsman(helper, CENTER + 2.5, 1, CENTER + 0.5);
+		incumbent.setOwnerUuid(owner);
+		stale.setOwnerUuid(owner);
+		var hierarchy = com.guardvillagers.command.hierarchy.GuardHierarchy.state(helper.getLevel().getServer());
+		hierarchy.getOrCreate(owner).setPinnedCommander(incumbent.getUUID());
+		com.guardvillagers.command.hierarchy.GuardHierarchy.elect(helper.getLevel().getServer(), owner);
+		com.guardvillagers.command.hierarchy.GuardHierarchy.tick(helper.getLevel().getServer());
+		stale.setRank(com.guardvillagers.command.hierarchy.GuardRank.COMMANDER);
+		GuardEntity copy = roundTrip(helper.getLevel(), stale);
+		helper.succeedWhen(() -> {
+			helper.assertTrue(copy.getRank() == com.guardvillagers.command.hierarchy.GuardRank.SOLDIER, "loaded stale rank never reconciled");
+			helper.assertTrue(incumbent.getRank() == com.guardvillagers.command.hierarchy.GuardRank.COMMANDER, "incumbent changed");
+			GuardOwnershipIndex.untrack(copy);
+			GuardOwnershipIndex.track(stale);
+		});
+	}
+
 }

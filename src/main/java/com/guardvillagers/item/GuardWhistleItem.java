@@ -76,7 +76,6 @@ public final class GuardWhistleItem extends Item {
 
 		LivingEntity threat = caller.getLastHurtByMob();
 		for (GuardEntity leader : leaders) {
-			leader.setStaying(false);
 			leader.rallyTo(caller.blockPosition(), 240);
 			if (threat != null && threat.isAlive()) {
 				leader.setPriorityTarget(threat);

@@ -540,6 +540,8 @@ public class GuardCommanderGameTest {
 	@GameTest(structure = ARENA, environment = ENV, maxTicks = 200)
 	public void autoAssignsArchersToThreat(GameTestHelper helper) {
 		walledFloor(helper);
+		// Nearby tests can have bells within the commander's 64-block search; own the direction reference.
+		helper.setBlock(new net.minecraft.core.BlockPos(CENTER - 6, 1, CENTER), Blocks.BELL);
 		// Owner in the middle of the arena: the commander's 24-block owner scan then stays inside this test.
 		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER - 0.5, 1, CENTER + 0.5);
 		List<GuardEntity> guards = List.of(
@@ -547,9 +549,12 @@ public class GuardCommanderGameTest {
 				owned(helper, owner, CENTER - 1.5, CENTER - 0.5, GuardRole.BOWMAN, 0),
 				owned(helper, owner, CENTER - 2.5, CENTER + 2.5, GuardRole.SWORDSMAN, 300),
 				owned(helper, owner, CENTER - 2.5, CENTER - 1.5, GuardRole.SWORDSMAN, 0));
+		// Keep the measured distances fixed and prevent an AI attack from satisfying assignment checks.
+		guards.forEach(guard -> guard.setNoAi(true));
 		Zombie[] zombie = new Zombie[1];
 		int[] spawnedAt = {-1};
-		// Owner idle; once the squad has gathered, a zombie appears 23 blocks east: beyond every guard's own 20-block
+		int[] assignedAt = {-1};
+		// Owner idle; a zombie appears 23 blocks east: beyond every guard's own 20-block
 		// scan, inside the commander's 24-block owner box and leash.
 		helper.runAfterDelay(60, () -> {
 			zombie[0] = statue(helper, CENTER + 22.5, CENTER + 0.5);
@@ -557,12 +562,16 @@ public class GuardCommanderGameTest {
 		});
 		helper.succeedWhen(() -> {
 			helper.assertTrue(zombie[0] != null, "waiting for the zombie");
-			boolean targeted = false;
-			for (GuardEntity guard : guards) {
-				targeted |= zombie[0].getUUID().equals(guard.getMainTargetUuid()) || !zombie[0].isAlive();
-			}
-			helper.assertTrue(targeted, "no guard sent at the zombie");
-			helper.assertTrue(helper.getTick() - spawnedAt[0] <= 60, "took longer than 60 ticks");
+			helper.assertTrue(zombie[0].isAlive(), "target must remain alive for role selection");
+			java.util.Map<UUID, UUID> assignments = CommanderService.lastAssignments(owner.getUUID());
+			helper.assertTrue(guards.stream().filter(guard -> guard.getRole() == GuardRole.BOWMAN)
+					.anyMatch(guard -> zombie[0].getUUID().equals(assignments.get(guard.getUUID()))),
+					"commander did not assign a bowman to the melee threat: " + assignments);
+			helper.assertTrue(guards.stream().filter(guard -> guard.getRole() == GuardRole.SWORDSMAN)
+					.noneMatch(guard -> zombie[0].getUUID().equals(assignments.get(guard.getUUID()))),
+					"swordsman chosen over available, similarly distant bowmen: " + assignments);
+			if (assignedAt[0] < 0) assignedAt[0] = (int) helper.getTick();
+			helper.assertTrue(assignedAt[0] - spawnedAt[0] <= 60, "took longer than 60 ticks");
 			helper.assertTrue(calloutContains(owner, "east"), "callout does not mention east: " + CommanderCallouts.recent(owner.getUUID()));
 		});
 	}
@@ -571,8 +580,11 @@ public class GuardCommanderGameTest {
 	public void woundedGuardPulledBack(GameTestHelper helper) {
 		walledFloor(helper);
 		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER - 0.5, 1, CENTER + 0.5);
-		GuardEntity guard = owned(helper, owner, CENTER - 1.5, CENTER + 1.5, GuardRole.BOWMAN, 0);
+		GuardEntity guard = owned(helper, owner, CENTER - 10.5, CENTER + 0.5, GuardRole.BOWMAN, 0);
 		guard.setHealth(guard.getMaxHealth() * 0.2F);
+		guard.setNoAi(true);
+		double startDistance = guard.distanceToSqr(owner);
+		boolean[] retreatOrdered = {false};
 		UUID[] zombie = new UUID[1];
 		helper.runAfterDelay(40, () -> zombie[0] = statue(helper, CENTER + 22.5, CENTER + 0.5).getUUID());
 		boolean[] healed = {false};
@@ -586,7 +598,14 @@ public class GuardCommanderGameTest {
 				if (assigned) {
 					helper.fail("wounded guard was sent at the zombie at " + guard.getHealth() + " hp");
 				}
+				if (!retreatOrdered[0] && guard.getRallyPoint().isPresent()) {
+					helper.assertValueEqual(guard.getRallyPoint().orElseThrow(), owner.blockPosition(), "wounded retreat destination");
+					retreatOrdered[0] = true;
+					guard.setNoAi(false);
+				}
 				if (helper.getTick() >= 160) {
+					helper.assertTrue(retreatOrdered[0], "commander never ordered a retreat");
+					helper.assertTrue(guard.distanceToSqr(owner) < startDistance / 2, "wounded guard made no retreat progress");
 					helper.assertTrue(CommanderService.isWounded(owner.getUUID(), guard.getUUID()), "guard not marked wounded");
 					guard.setHealth(guard.getMaxHealth());
 					healed[0] = true;
@@ -650,4 +669,107 @@ public class GuardCommanderGameTest {
 			helper.succeed();
 		});
 	}
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 60)
+	public void captainPinsPreserveCommanderAndStayWithTheirGroup(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		GuardEntity commander = owned(helper, owner, CENTER - 3.5, CENTER + 0.5, GuardRole.SWORDSMAN, 0);
+		GuardEntity alpha = owned(helper, owner, CENTER - 1.5, CENTER + 0.5, GuardRole.SWORDSMAN, 600);
+		GuardEntity beta = owned(helper, owner, CENTER + 2.5, CENTER + 0.5, GuardRole.SWORDSMAN, 0);
+		group(commander, 0, "Alpha");
+		group(alpha, 0, "Alpha");
+		group(beta, 1, "Beta");
+		var server = helper.getLevel().getServer();
+		GuardHierarchy.appointCommander(server, owner.getUUID(), commander);
+		GuardHierarchy.appointCaptain(server, owner.getUUID(), alpha);
+		GuardHierarchy.appointCaptain(server, owner.getUUID(), beta);
+		helper.assertTrue(commander.getRank() == GuardRank.COMMANDER, "captain appointment revoked commander pin");
+		group(alpha, 1, "Beta");
+		GuardHierarchy.elect(server, owner.getUUID());
+		helper.assertTrue(beta.getRank() == GuardRank.CAPTAIN, "moving captain stole destination group's appointment");
+		helper.assertFalse(GuardHierarchy.isPinned(server, owner.getUUID(), alpha.getUUID()), "old group pin survived move");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 60)
+	public void pinnedCaptainSuccessionRemainsStable(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		GuardEntity commander = owned(helper, owner, CENTER - 3.5, CENTER + 0.5, GuardRole.SWORDSMAN, 1000);
+		GuardEntity alpha = owned(helper, owner, CENTER - 1.5, CENTER + 0.5, GuardRole.SWORDSMAN, 600);
+		GuardEntity beta = owned(helper, owner, CENTER + 2.5, CENTER + 0.5, GuardRole.SWORDSMAN, 300);
+		owned(helper, owner, CENTER + 4.5, CENTER + 0.5, GuardRole.SWORDSMAN, 0);
+		group(alpha, 0, "Alpha");
+		group(beta, 1, "Beta");
+		var server = helper.getLevel().getServer();
+		GuardHierarchy.appointCommander(server, owner.getUUID(), commander);
+		GuardHierarchy.appointCaptain(server, owner.getUUID(), alpha);
+		GuardHierarchy.appointCaptain(server, owner.getUUID(), beta);
+		commander.kill(helper.getLevel());
+		GuardHierarchy.elect(server, owner.getUUID());
+		helper.assertTrue(alpha.getRank() == GuardRank.COMMANDER, "senior captain did not succeed");
+		for (int i = 0; i < 4; i++) GuardHierarchy.elect(server, owner.getUUID());
+		helper.assertTrue(alpha.getRank() == GuardRank.COMMANDER, "successor alternated with another pinned captain");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 60)
+	public void broaderOrderLeavesNarrowerHoldIntact(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		GuardEntity liam = owned(helper, owner, CENTER - 2.5, CENTER + 0.5, GuardRole.SWORDSMAN, 0);
+		GuardEntity ava = owned(helper, owner, CENTER + 2.5, CENTER + 0.5, GuardRole.SWORDSMAN, 600);
+		group(liam, 0, "Alpha");
+		group(ava, 0, "Alpha");
+		liam.setCustomName(net.minecraft.network.chat.Component.literal("Liam"));
+		CommanderService.hear(owner, "Liam hold", true);
+		CommanderService.hear(owner, "Alpha follow", true);
+		helper.assertTrue(liam.isHoldingPosition(), "broader follow cleared Liam's specific hold");
+		helper.assertTrue(ava.hasFollowOverride(), "broader follow did not reach the remaining guard");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void delayedLanguageCannotReplaceNewerOrderOrMoveItsAnchor(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		GuardEntity guard = owned(helper, owner, CENTER - 2.5, CENTER + 0.5, GuardRole.SWORDSMAN, 0);
+		group(guard, 0, "Alpha");
+		var previous = CommanderService.interpreter();
+		var pending = new java.util.ArrayDeque<java.util.concurrent.CompletableFuture<String>>();
+		var llm = new com.guardvillagers.command.language.llm.LlmInterpreter(body -> {
+			var future = new java.util.concurrent.CompletableFuture<String>();
+			pending.add(future);
+			return future;
+		}, com.guardvillagers.command.language.llm.LlmConfig.defaults(), System::currentTimeMillis);
+		CommanderService.setInterpreter(new com.guardvillagers.command.language.OrderInterpreter(
+				new com.guardvillagers.command.language.GrammarInterpreter(), new com.guardvillagers.command.order.OrderValidator(),
+				java.util.Optional.of(llm)));
+		GuardTestSupport.onFinish(helper, () -> CommanderService.setInterpreter(previous));
+		CommanderService.hear(owner, "Alpha dig in", true);
+		helper.assertTrue(pending.size() == 1, "first request did not reach fake transport");
+		CommanderService.hear(owner, "Alpha follow", true);
+		pending.remove().complete(delayedOrder("hold"));
+		// No newer command supersedes this request: only its spatial context becomes invalid.
+		CommanderService.hear(owner, "Alpha establish a post", true);
+		helper.assertTrue(pending.size() == 1, "second request did not reach fake transport");
+		GuardTestSupport.moveTo(helper, owner, CENTER + 5.5, 1, CENTER + 0.5);
+		pending.remove().complete(delayedOrder("patrol_here"));
+		helper.runAfterDelay(2, () -> {
+			helper.assertFalse(guard.isHoldingPosition(), "older delayed hold replaced the newer follow");
+			helper.assertTrue(guard.hasFollowOverride(), "follow did not survive delayed results");
+			helper.assertTrue(guard.getHome().isEmpty(), "delayed patrol silently used the player's new location");
+			helper.succeed();
+		});
+	}
+
+	private static String delayedOrder(String action) {
+		var call = new com.google.gson.JsonObject();
+		call.addProperty("type", "function_call");
+		call.addProperty("name", "issue_orders");
+		call.addProperty("arguments", "{\"orders\":[{\"action\":\"" + action
+				+ "\",\"scope_kind\":\"group\",\"scope_name\":\"Alpha\",\"formation\":null,\"target\":null,\"radius\":null}],\"reply\":\"\"}");
+		return "{\"output\":[" + call + "]}";
+	}
+
 }

@@ -74,13 +74,10 @@ import net.minecraft.world.entity.ai.goal.FloatGoal;
 import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
 import net.minecraft.world.entity.ai.goal.OpenDoorGoal;
 import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
-import net.minecraft.world.entity.ai.village.poi.PoiManager;
-import net.minecraft.world.entity.ai.village.poi.PoiTypes;
 import net.minecraft.world.entity.animal.golem.IronGolem;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.monster.RangedAttackMob;
 import net.minecraft.world.entity.npc.villager.Villager;
-import net.minecraft.world.entity.npc.villager.VillagerProfession;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
 import net.minecraft.world.entity.raid.Raider;
@@ -637,6 +634,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 
 	public void setStaying(boolean staying) {
 		this.setCommanderRecovery(false);
+		this.aiController.rallyTo(this.blockPosition(), 0);
 		this.holdOrigin = null;
 		this.staying = staying;
 		if (staying) {
@@ -665,6 +663,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 			this.setCatchUpSpeedActive(false);
 		}
 		if (followOverride) {
+			this.aiController.rallyTo(this.blockPosition(), 0);
 			this.holdOrigin = null;
 		}
 		if (changed && followOverride) {
@@ -691,6 +690,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	public void setHome(BlockPos home, int patrolRadius) {
+		this.aiController.rallyTo(this.blockPosition(), 0);
 		this.setFollowOverride(false);
 		this.holdOrigin = null;
 		this.home = home.immutable();
@@ -762,6 +762,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	 * (bowmen shoot from position) and never paths away. Follow, stay and home orders clear it.
 	 */
 	public void setHoldPosition(boolean hold) {
+		this.aiController.rallyTo(this.blockPosition(), 0);
 		if (hold) {
 			this.staying = false;
 			this.stayOrigin = null;
@@ -776,7 +777,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	public boolean isHoldingPosition() {
-		return this.holdOrigin != null;
+		// Temporary rallies suspend Hold; the saved origin resumes when the rally expires.
+		return this.holdOrigin != null && this.getRallyPoint().isEmpty();
 	}
 
 	public BlockPos getHoldOrigin() {
@@ -972,53 +974,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	public BlockPos findSafeRetreatPoint(ServerLevel world) {
-		Villager bestCleric = null;
-		double bestDistance = Double.MAX_VALUE;
-		for (Villager villager : world.getEntitiesOfClass(Villager.class,
-				this.getBoundingBox().inflate(32.0D), Villager::isAlive)) {
-			if (!villager.getVillagerData().profession().is(VillagerProfession.CLERIC)) {
-				continue;
-			}
-			double distanceSq = this.distanceToSqr(villager);
-			if (distanceSq < bestDistance) {
-				bestDistance = distanceSq;
-				bestCleric = villager;
-			}
-		}
-		if (bestCleric != null) {
-			return this.resolveAnchorSlot(GuardMovementSlotResolver.AnchorKind.RETREAT, bestCleric.blockPosition(), false);
-		}
-
-		Optional<BlockPos> bedPos = world.getPoiManager().findClosest(
-				entry -> entry.is(PoiTypes.HOME),
-				this.blockPosition(),
-				48,
-				PoiManager.Occupancy.ANY);
-		if (bedPos.isPresent()) {
-			return this.resolveAnchorSlot(GuardMovementSlotResolver.AnchorKind.RETREAT, bedPos.get(), false);
-		}
-
-		if (this.home != null) {
-			return this.resolveAnchorSlot(GuardMovementSlotResolver.AnchorKind.RETREAT, this.home, false);
-		}
-
-		LivingEntity target = this.aiController.getTrackedCombatTarget(world);
-		if (target != null) {
-			Vec3 away = this.position().subtract(target.position());
-			away = new Vec3(away.x, 0.0D, away.z);
-			if (away.lengthSqr() < 1.0E-4D) {
-				away = new Vec3(1.0D, 0.0D, 0.0D);
-			}
-			Vec3 destination = this.position().add(away.normalize().scale(12.0D));
-			// Ground near the guard's own height (path-safe), not the heightmap top.
-			BlockPos grounded = GuardGrounding.findStandableNear(this, Mth.floor(destination.x), Mth.floor(destination.z),
-					this.getBlockY(), 4, 4, 2);
-			if (grounded != null) {
-				return grounded;
-			}
-		}
-
-		return this.blockPosition();
+		return TacticalRetreatGoal.findSafePoint(this, world, this.aiController.getTrackedCombatTarget(world));
 	}
 
 	public ServerPlayer resolveOwner(ServerLevel world) {
@@ -1093,7 +1049,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		this.equipGuardGear(world, storedUpgrades.getWeaponLevel(), storedUpgrades);
 	}
 
-	private void equipGuardGear(ServerLevel world, int weaponLevel, GuardPlayerUpgrades upgrades) {
+	private void equipWeapon(ServerLevel world, int weaponLevel) {
 		if (this.getRole() == GuardRole.SWORDSMAN) {
 			Item sword = switch (weaponLevel) {
 				case 1 -> Items.IRON_SWORD;
@@ -1119,6 +1075,10 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 
 		this.setDropChance(EquipmentSlot.MAINHAND, 0.0F);
 		this.playerMainHand = false;
+	}
+
+	private void equipGuardGear(ServerLevel world, int weaponLevel, GuardPlayerUpgrades upgrades) {
+		this.equipWeapon(world, weaponLevel);
 		if (upgrades.hasShieldUpgrade()) {
 			this.setItemSlot(EquipmentSlot.OFFHAND, new ItemStack(Items.SHIELD));
 			this.setDropChance(EquipmentSlot.OFFHAND, 0.0F);
@@ -1150,8 +1110,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 
 	/**
 	 * Guards created without finalizeSpawn (structure placement, EntityType.create, game tests) had
-	 * no weapon or armor and fought bare-handed. Equip the role's default gear once if the main
-	 * hand is empty; never touches player-provided gear or the role/behavior.
+	 * no weapon and fought bare-handed. Fill only the missing weapon; existing armor, offhand
+	 * equipment, player-gear flags and drop chances must survive loading.
 	 */
 	private void ensureWeapon(ServerLevel world) {
 		if (!this.getMainHandItem().isEmpty() || this.playerMainHand) {
@@ -1163,7 +1123,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		if (upgrades == null) {
 			upgrades = new GuardPlayerUpgrades();
 		}
-		this.equipGuardGear(world, upgrades.getWeaponLevel(), upgrades);
+		this.equipWeapon(world, upgrades.getWeaponLevel());
 	}
 
 	private void storeLoadoutUpgrades(GuardPlayerUpgrades upgrades) {
@@ -1352,6 +1312,9 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		}
 
 		if (this.ownerUuid != null && this.ownerUuid.equals(player.getUUID()) && !stack.isEmpty()) {
+			if (stack.is(GuardVillagersMod.GUARD_WHISTLE)) {
+				return InteractionResult.PASS;
+			}
 			if (this.tryApplyPlayerUpgrade(player, hand, stack)) {
 				return InteractionResult.SUCCESS;
 			}
@@ -1553,8 +1516,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		this.aiController.receiveAlliedAlert(target, alertTick);
 	}
 
-	public void receiveUrgentPeel(LivingEntity urgentThreat, ServerLevel world) {
-		this.aiController.receiveUrgentPeel(urgentThreat, world);
+	public boolean receiveUrgentPeel(LivingEntity urgentThreat, ServerLevel world) {
+		return this.aiController.receiveUrgentPeel(urgentThreat, world);
 	}
 
 	public int scoreTarget(LivingEntity target) {
@@ -1710,8 +1673,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	/**
-	 * Guards with nothing to do that end up boxed in (inside a house, wedged in a doorway or a
-	 * 1-wide gap) for 5 seconds walk out to the nearest standing spot under open sky.
+	 * Guards whose requested movement makes no progress under cover for 5 seconds try an
+	 * open-sky exit. Deliberately stationary guards have no unfinished route to recover.
 	 */
 	private void tickUnstickWatchdog() {
 		if (this.tickCount % 20 != 0) {
@@ -1720,7 +1683,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		boolean idle = this.aiController.isIntent(GuardAiIntent.IDLE)
 				|| this.aiController.isIntent(GuardAiIntent.BEHAVIOR_PATROL_OR_ANCHOR);
 		BlockPos pos = this.blockPosition();
-		if (!idle || this.staying || this.getTarget() != null || this.isInWater()
+		if (!idle || this.staying || this.isHoldingPosition() || this.getNavigation().isDone()
+				|| this.getTarget() != null || this.isInWater()
 				|| this.level().canSeeSky(pos.above())) {
 			this.unstickSamples = 0;
 			this.unstickSamplePos = pos;
@@ -1996,6 +1960,9 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	@Override
 	public void die(DamageSource damageSource) {
 		super.die(damageSource);
+		if (this.level() instanceof ServerLevel && !this.isAlive()) {
+			GuardOwnershipIndex.untrack(this);
+		}
 		if (this.ownerUuid != null && this.level() instanceof ServerLevel) {
 			GuardHierarchy.onGuardLost(this, true);
 		}
@@ -2045,6 +2012,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		if (this.hasStoredShieldUpgrade() && activelyBlockingWithShield) {
 			amount *= 0.55F;
 		}
+		float healthBefore = this.getHealth();
+		float absorptionBefore = this.getAbsorptionAmount();
 		boolean damaged = super.hurtServer(world, source, amount);
 		if (!damaged) {
 			return false;
@@ -2065,8 +2034,11 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 				return true;
 			}
 			// A forgiven accidental hit from a player triggers neither retaliation nor a group rally.
+			// Absorbed damage counts as damage dealt; armor, resistance and cooldown reductions do not.
+			float damageDealt = Math.max(0.0F, healthBefore - this.getHealth())
+					+ Math.max(0.0F, absorptionBefore - this.getAbsorptionAmount());
 			boolean retaliate = !(attacker instanceof Player player)
-					|| GuardReputationManager.onGuardHitByPlayer(world, player.getUUID(), amount);
+					|| GuardReputationManager.onGuardHitByPlayer(world, player, this, damageDealt);
 			if (retaliate && !this.isAlly(attacker)) {
 				this.aiController.receiveDamageAlert(attacker, world.getGameTime());
 				this.rallyNearbyGuards(world, attacker);
@@ -2127,11 +2099,11 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 				guard -> guard != this && guard.isAlive() && this.isSameGroup(guard));
 
 		int groupSize = nearby.size() + 1;
-		int peeling = this.getUrgentTargetUuid() != null ? 1 : 0;
+		int peeling = this.aiController.hasAcceptedPeel(world) ? 1 : 0;
 		List<GuardEntity> peelCandidates = new ArrayList<>();
 		for (GuardEntity guard : nearby) {
 			guard.receiveAlliedAlert(attacker, now);
-			if (guard.getUrgentTargetUuid() != null) {
+			if (guard.aiController.hasAcceptedPeel(world)) {
 				peeling++;
 			} else if (guard.getMainTargetUuid() != null && !attacker.getUUID().equals(guard.getMainTargetUuid())) {
 				peelCandidates.add(guard);
@@ -2139,12 +2111,24 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		}
 
 		int toAssign = TargetScoring.peelCap(groupSize) - peeling;
+		// Allocate close self-defense from the same budget, before offering remaining slots to allies.
+		if (toAssign > 0 && !this.aiController.hasAcceptedPeel(world)
+				&& this.getMainTargetUuid() != null && !attacker.getUUID().equals(this.getMainTargetUuid())
+				&& this.distanceToSqr(attacker) <= TargetScoring.MELEE_ENGAGED_DISTANCE_SQUARED
+				&& this.receiveUrgentPeel(attacker, world)) {
+			toAssign--;
+		}
 		if (toAssign <= 0 || peelCandidates.isEmpty()) {
 			return;
 		}
 		peelCandidates.sort((a, b) -> Double.compare(a.distanceToSqr(attacker), b.distanceToSqr(attacker)));
-		for (int i = 0; i < peelCandidates.size() && i < toAssign; i++) {
-			peelCandidates.get(i).receiveUrgentPeel(attacker, world);
+		for (GuardEntity candidate : peelCandidates) {
+			if (toAssign <= 0) {
+				break;
+			}
+			if (candidate.receiveUrgentPeel(attacker, world)) {
+				toAssign--;
+			}
 		}
 	}
 
@@ -2359,6 +2343,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 				this.ensureHireIdentity((ServerLevel) this.level());
 			}
 			GuardOwnershipIndex.track(this);
+			GuardHierarchy.requestElection(this.getOwnerUuid());
 		}
 	}
 

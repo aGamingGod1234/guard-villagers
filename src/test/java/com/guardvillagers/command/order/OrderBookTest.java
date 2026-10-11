@@ -1,6 +1,7 @@
 package com.guardvillagers.command.order;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.guardvillagers.entity.FormationType;
@@ -64,15 +65,15 @@ final class OrderBookTest {
 	}
 
 	@Test
-	void narrowerScopeWinsAtEqualPriorityAndAllReplacesNarrower() {
+	void narrowerScopeWinsAtEqualPriorityInEitherIssueOrder() {
 		this.book.issue(Order.of(Action.FOLLOW, Scope.ALL), OrderSource.VOICE);
 		this.book.issue(Order.of(Action.HOLD, Scope.group("Alpha")), OrderSource.VOICE);
 		assertEquals(Action.HOLD, this.book.effectiveFor(LIAM).orElseThrow().order().action());
 		assertEquals(Action.FOLLOW, this.book.effectiveFor(scope -> scope.kind() == Scope.Kind.ALL).orElseThrow().order().action());
 
 		OrderBook.IssueResult all = this.book.issue(Order.form(Scope.ALL, FormationType.LINE), OrderSource.VOICE);
-		assertEquals(2, all.removed().size());
-		assertEquals(Action.FORM, this.book.effectiveFor(LIAM).orElseThrow().order().action());
+		assertEquals(1, all.removed().size());
+		assertEquals(Action.HOLD, this.book.effectiveFor(LIAM).orElseThrow().order().action());
 	}
 
 	@Test
@@ -227,6 +228,56 @@ final class OrderBookTest {
 		assertEquals(OrderBook.Status.STORED, accepted.status());
 		assertEquals(List.of(oldest), accepted.removed());
 		assertEquals(OrderBook.MAX_ACTIVE, this.book.active().size());
+	}
+
+	@Test
+	void admissionUsesBoundRecipientsAfterScopeChanges() {
+		UUID original = new UUID(30, 1);
+		UUID newlyNamed = new UUID(30, 2);
+		this.book.issue(Order.of(Action.HOLD, Scope.guard("Liam")), OrderSource.TYPED, Set.of(original));
+		Order incoming = Order.of(Action.FOLLOW, Scope.ALL);
+		assertFalse(this.book.wouldBeEffectiveForGuard(incoming, OrderSource.VOICE, original,
+				scope -> scope.kind() == Scope.Kind.ALL), "renaming does not evade the guard's bound typed order");
+		assertTrue(this.book.wouldBeEffectiveForGuard(incoming, OrderSource.VOICE, newlyNamed, LIAM),
+				"a newly matching name does not inherit someone else's bound order");
+	}
+
+	@Test
+	void allOrderPreservesNarrowerBoundOrderAndAdmitsOnlyOtherRecipients() {
+		UUID liam = new UUID(31, 1);
+		UUID other = new UUID(31, 2);
+		ActiveOrder hold = this.book.issue(Order.of(Action.HOLD, Scope.guard("Liam")), OrderSource.VOICE,
+				Set.of(liam)).order().orElseThrow();
+		Order follow = Order.of(Action.FOLLOW, Scope.ALL);
+		assertFalse(this.book.wouldBeEffectiveForGuard(follow, OrderSource.VOICE, liam, LIAM));
+		assertTrue(this.book.wouldBeEffectiveForGuard(follow, OrderSource.VOICE, other,
+				scope -> scope.kind() == Scope.Kind.ALL));
+		var result = this.book.issue(follow, OrderSource.VOICE, Set.of(other));
+		assertTrue(result.removed().isEmpty());
+		assertEquals(Optional.of(hold), this.book.effectiveForGuard(liam, LIAM));
+		assertEquals(Action.FOLLOW, this.book.effectiveForGuard(other, scope -> true).orElseThrow().order().action());
+	}
+
+	@Test
+	void interveningIssuesDoNotConsumeExpiryNotifications() {
+		for (Action action : List.of(Action.STATUS_REPORT, Action.FOLLOW, Action.AS_YOU_WERE)) {
+			var book = new OrderBook(now::get, 10);
+			var expired = book.issue(Order.form(Scope.group("Alpha"), FormationType.CIRCLE), OrderSource.VOICE).order().orElseThrow();
+			now.addAndGet(10);
+			book.issue(Order.of(action, Scope.ALL), OrderSource.VOICE);
+			assertEquals(List.of(expired), book.expire());
+			assertTrue(book.expire().isEmpty());
+		}
+	}
+
+	@Test
+	void weakCandidateCannotEvictHigherPriority() {
+		for (int i = 0; i < OrderBook.MAX_ACTIVE; i++) {
+			book.issue(Order.of(Action.HOLD, Scope.guard("guard" + i)), OrderSource.TYPED);
+		}
+		var before = book.active();
+		assertEquals(OrderBook.Status.OUTRANKED, book.issue(Order.of(Action.FOLLOW, Scope.ALL), OrderSource.VOICE).status());
+		assertEquals(before, book.active());
 	}
 
 }

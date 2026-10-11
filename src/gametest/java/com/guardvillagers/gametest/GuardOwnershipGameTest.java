@@ -187,7 +187,7 @@ public class GuardOwnershipGameTest {
 
 	/**
 	 * Solid stone block, 25 wide and 26 tall, with a single 1-high air cell for the player at y=13.
-	 * The spawn search covers +-10 blocks vertically and horizontally, all solid, so the hire must fail
+	 * The spawn search covers the buyer column within three blocks vertically, all solid, so the hire must fail
 	 * and the emerald blocks must go back into the inventory.
 	 */
 	private static ServerPlayer entombedBuyer(GameTestHelper helper) {
@@ -214,25 +214,77 @@ public class GuardOwnershipGameTest {
 	}
 
 	/**
-	 * Same tomb, plus a sealed 3x3x2 air pocket 8 blocks under the player's feet with no way out.
+	 * Same tomb, plus a sealed 3x3x2 air pocket three blocks under the player's feet with no way out.
 	 * README: "If the exact player X/Z column cannot support a spawn, the purchase fails cleanly".
 	 * The hired guard must not be dropped into a cavity it can never leave.
 	 */
 	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
 	public void shopHireDoesNotSpawnIntoSealedCavity(GameTestHelper helper) {
 		ServerPlayer player = entombedBuyer(helper);
-		GuardTestSupport.fill(helper, CENTER - 1, 4, CENTER - 1, CENTER + 1, 5, CENTER + 1, Blocks.AIR);
+		GuardTestSupport.fill(helper, CENTER - 1, 10, CENTER - 1, CENTER + 1, 11, CENTER + 1, Blocks.AIR);
 		int cost = com.guardvillagers.GuardHiring.getAdjustedGuardCost(player);
 		player.getInventory().add(new ItemStack(Items.EMERALD_BLOCK, cost));
 		GuardShopScreenHandler shop = openShop(helper, player);
 
 		shop.clicked(GuardShopInventory.SLOT_BUY_GUARD, 0, ContainerInput.PICKUP, player);
 
-		for (GuardEntity guard : owned(helper, player)) {
-			helper.assertTrue(Math.abs(guard.getY() - player.getY()) < 2.0D,
-					"hired guard was placed in a sealed cavity at " + GuardTestSupport.relative(helper, guard)
-							+ ", player at " + GuardTestSupport.relative(helper, player));
-		}
+		helper.assertTrue(GuardVillagersMod.canGuardSpawnAt(helper.getLevel(), helper.absolutePos(new BlockPos(CENTER, 10, CENTER))),
+				"control: pocket must otherwise be a valid spawn candidate inside the search range");
+		helper.assertTrue(owned(helper, player).isEmpty(), "guard spawned into the disconnected pocket");
+		helper.assertValueEqual(emeraldBlocks(player), cost, "failed hire refunded in full");
+		helper.assertValueEqual(droppedEmeraldBlocks(helper), 0, "refund must not spill onto the floor");
+		helper.assertValueEqual(GuardOwnershipIndex.countOwnedGuards(helper.getLevel().getServer(), player.getUUID()), 0,
+				"failed hire must leave no persisted ownership row");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void upgradedHireReceivesGearButStartsAtXpLevelOne(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer player = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		com.guardvillagers.GuardPlayerUpgrades upgrades = GuardVillagersMod.getUpgrades(player);
+		upgrades.upgradeWeapon();
+		upgrades.unlockHealingUpgrade();
+		upgrades.unlockHealingUpgrade();
+		int cost = GuardHiring.getAdjustedGuardCost(player);
+		player.getInventory().add(new ItemStack(Items.EMERALD_BLOCK, cost));
+		openShop(helper, player).clicked(GuardShopInventory.SLOT_BUY_GUARD, 0, ContainerInput.PICKUP, player);
+		helper.assertValueEqual(owned(helper, player).size(), 1, "upgraded recruit count");
+		GuardEntity recruit = owned(helper, player).getFirst();
+		helper.assertValueEqual(recruit.getLevel(), 1, "loadout price tier must not imply XP level");
+		helper.assertValueEqual(recruit.getExperience(), 0, "new recruit XP");
+		helper.assertTrue(recruit.getOffhandItem().is(Items.SHIELD), "support upgrade shield missing");
+		helper.assertValueEqual(emeraldBlocks(player), 0, "upgraded hire price charged");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void rowOrdersDoNotMatchAnotherGroupsDisplayName(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		ServerPlayer other = GuardTestSupport.survivalPlayer(helper, CENTER + 4.5, 1, CENTER + 0.5);
+		GuardEntity first = GuardTestSupport.ownedGuard(helper, CENTER + 1.5, 1, CENTER + 0.5, owner);
+		GuardEntity second = GuardTestSupport.ownedGuard(helper, CENTER + 2.5, 1, CENTER + 0.5, owner);
+		GuardEntity foreign = GuardTestSupport.ownedGuard(helper, CENTER + 3.5, 1, CENTER + 0.5, other);
+		GuardTestSupport.runCommand(owner, "guards groups add");
+		GuardTestSupport.runCommand(owner, "guards groups add");
+		GuardTestSupport.runCommand(owner, "guards groups assign " + first.getUUID() + " 1");
+		GuardTestSupport.runCommand(owner, "guards groups assign " + second.getUUID() + " 2");
+		// Simulate legacy colliding/stale display names even if group creation later enforces uniqueness.
+		first.setGroupName("Alpha");
+		second.setGroupName("alpha");
+		foreign.setGroupIndex(1);
+		foreign.setGroupName("Alpha");
+		first.setStaying(false);
+		second.setStaying(false);
+		foreign.setStaying(false);
+		helper.assertValueEqual(GuardTestSupport.runCommand(owner, "guards groups stay 2"), 1, "one row receives stay");
+		helper.assertTrue(!first.isStaying() && second.isStaying() && !foreign.isStaying(), "stay leaked to another row or owner");
+		first.setStaying(true);
+		foreign.setStaying(true);
+		helper.assertValueEqual(GuardTestSupport.runCommand(owner, "guards groups follow 2"), 1, "one row receives follow");
+		helper.assertTrue(first.isStaying() && !second.isStaying() && foreign.isStaying(), "follow leaked to another row or owner");
+		helper.assertTrue(second.hasFollowOverride(), "selected row did not follow");
 		helper.succeed();
 	}
 

@@ -2,6 +2,7 @@ package com.guardvillagers.entity.goal;
 
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.ai.GuardAiIntent;
+import com.guardvillagers.navigation.GuardGrounding;
 import java.util.EnumSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.ai.goal.Goal;
@@ -53,13 +54,26 @@ public final class ReturnToLandGoal extends Goal {
 	@Override
 	public void tick() {
 		long now = this.guard.level().getGameTime();
-		if (this.destination == null || now >= this.nextRetarget || this.guard.getNavigation().isDone()) {
+		if (now >= this.nextRetarget) {
 			this.nextRetarget = now + RETARGET_TICKS;
-			BlockPos exit = this.guard.getGuardNavigation().findNearbyDryExit();
-			this.destination = exit != null ? exit : this.guard.getLastLandPos();
+			BlockPos exit = this.guard.getGuardNavigation().findNearbyDryExit(this::canReachDryGround);
+			BlockPos lastLand = this.guard.getLastLandPos();
+			this.destination = exit;
+			if (this.destination == null && lastLand != null && this.canReachDryGround(lastLand)) {
+				this.destination = lastLand;
+			}
 		}
 		if (this.destination != null) {
-			this.guard.getGuardNavigation().startMovingToStatic(this.destination, this.speed);
+			this.guard.getGuardNavigation().startMovingToStatic(this.destination, this.speed, 0);
 		}
+	}
+
+	private boolean canReachDryGround(BlockPos pos) {
+		if (!this.guard.level().isLoaded(pos) || !this.guard.level().getFluidState(pos).isEmpty()
+				|| !GuardGrounding.isStandable(this.guard, pos)) {
+			return false;
+		}
+		var path = this.guard.getNavigation().createPath(pos, 0);
+		return path != null && path.canReach() && path.getEndNode() != null && path.getEndNode().asBlockPos().equals(pos);
 	}
 }

@@ -86,6 +86,12 @@ public final class GuardCommands {
 							return Command.SINGLE_SUCCESS;
 						})
 						.then(Commands.literal("add").executes(context -> addGroup(context.getSource())))
+						.then(Commands.literal("follow")
+								.then(Commands.argument("groupRow", IntegerArgumentType.integer(0, MAX_GROUP_ROW))
+										.executes(context -> orderGroup(context.getSource(), IntegerArgumentType.getInteger(context, "groupRow") - 1, true))))
+						.then(Commands.literal("stay")
+								.then(Commands.argument("groupRow", IntegerArgumentType.integer(0, MAX_GROUP_ROW))
+										.executes(context -> orderGroup(context.getSource(), IntegerArgumentType.getInteger(context, "groupRow") - 1, false))))
 						.then(Commands.literal("rename")
 								.then(Commands.argument("row", IntegerArgumentType.integer(1, MAX_GROUP_ROW))
 										.then(Commands.argument("name", StringArgumentType.greedyString())
@@ -278,9 +284,27 @@ public final class GuardCommands {
 		return changed;
 	}
 
+	/** Row 0 in the command explicitly targets unassigned guards; positive rows are stable group identities. */
+	private static int orderGroup(CommandSourceStack source, int row, boolean following) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		var tactics = GuardTacticsManager.getState(source.getServer()).getOrDefault(player.getUUID());
+		if (row >= tactics.groupCount()) {
+			source.sendFailure(Component.translatable("commands.guardvillagers.groups.no_such_row", row + 1, tactics.groupCount()));
+			return 0;
+		}
+		String name = row < 0 ? "Unassigned" : tactics.getGroupName(row);
+		return following ? follow(source, name, row) : stay(source, name, row);
+	}
+
 	private static int addGroup(CommandSourceStack source) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
 		GuardTacticsState state = GuardTacticsManager.getState(source.getServer());
+		if (!state.canCreate(player.getUUID())) {
+			source.sendFailure(Component.translatable("commands.guardvillagers.groups.owner_limit"));
+			GuardTacticsMenus.sendGroupResult(player, GuardGroupResultPayload.Action.ADD, -1, 0, 1,
+					"commands.guardvillagers.groups.owner_limit");
+			return 0;
+		}
 		GuardTacticsState.PlayerTactics tactics = state.getOrCreate(player.getUUID());
 		int row = tactics.addGroup();
 		if (row < 0) {
@@ -312,7 +336,12 @@ public final class GuardCommands {
 			return 0;
 		}
 		tactics = state.getOrCreate(player.getUUID());
-		tactics.setGroupName(row, requestedName);
+		if (!tactics.setGroupName(row, requestedName)) {
+			source.sendFailure(Component.translatable("commands.guardvillagers.groups.duplicate_name"));
+			GuardTacticsMenus.sendGroupResult(player, GuardGroupResultPayload.Action.RENAME, row, 0, 1,
+					"commands.guardvillagers.groups.duplicate_name");
+			return 0;
+		}
 		String normalizedName = tactics.getGroupName(row);
 		for (GuardEntity guard : ownedGuards(player)) {
 			if (guard.getGroupIndex() == row) {

@@ -31,7 +31,7 @@ Port to Minecraft 26.1.2 with a new command system, a rebuilt tactics screen and
 ### Changed
 
 - **Command post:** the tactics and groups screens are now one screen with a paintable chunk map, a drag-and-drop group roster, a bottom bar for zone tools and orders, keyboard shortcuts and an in-game legend (`H`). Unsaved moves are batched and confirmed on close.
-- The roster now lists every owned guard, including unloaded ones, with gear, health, distance and current orders.
+- The roster now lists every owned guard. Loaded guards show gear, health, distance and current orders; unloaded guards show their saved name and group.
 - Guard AI rework: one controller per guard, target scoring, formation slots, shared squad routes, path-safe grounding, bowmen engagement, swordsmen back off swelling creepers, retreat fights back when cornered.
 - Reputation now decays toward `0.50` from both sides instead of toward `0.00`.
 - Trade and raid reputation rewards fixed (raid bonus only during an active raid; trade reward at most every 10 s per villager).

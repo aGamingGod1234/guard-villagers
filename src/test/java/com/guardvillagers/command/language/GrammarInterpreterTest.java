@@ -150,7 +150,7 @@ final class GrammarInterpreterTest {
 		assertEquals(Action.APPOINT_CAPTAIN, captain.action());
 		assertEquals(Scope.guard("Ava"), captain.scope());
 
-		assertEquals(Scope.guard("Ava"), single("make ava captain of alpha").scope());
+		assertNoMatch("make ava captain of alpha", null);
 		assertEquals(Action.APPOINT_CAPTAIN, single("promote Noah to captain").action());
 		assertEquals(Action.APPOINT_COMMANDER, single("make Liam the new commander").action());
 		assertNoMatch("make Steve commander", null);
@@ -265,4 +265,28 @@ final class GrammarInterpreterTest {
 		assertFalse(this.grammar.parse("hold", ROSTER).addressed());
 		assertTrue(this.grammar.isAddressed("Guards, dance", ROSTER));
 	}
+	@ParameterizedTest
+	@ValueSource(strings = {"never attack my target", "don't get whoever hit me", "Steve attack my target",
+			"make Liam commander later", "fill it", "bill it", "call back", "radius 20", "within 20 blocks",
+			"20 blocks", "radius of twenty", "hold and 20 blocks", "make Liam captain of Beta"})
+	void rejectsIncompleteOrUnintendedCommands(String text) {
+		assertNoMatch(text, null);
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {"Now", "Alpha Now", "Go", "\u674e", "\u0131", "Hold the Line", "Form a Line", "Stay",
+			"Then", "After That", "Rock and Roll", "Commandos"})
+	void exactRosterNamesSurviveGrammar(String name) {
+		Order order = single(name + " retreat", OwnerRoster.of(List.of(name), List.of()));
+		assertEquals(Action.RETREAT, order.action());
+		assertEquals(Scope.group(name), order.scope());
+	}
+
+	@Test
+	void longAddressAndPrefixedAppointments() {
+		assertTrue(grammar.isAddressed("Red Fox Guard Squad dig in", OwnerRoster.of(List.of("Red Fox Guard Squad"), List.of())));
+		assertEquals(Action.APPOINT_COMMANDER, single("commander make Liam commander").action());
+		assertEquals(Action.APPOINT_COMMANDER, single("you make Liam commander").action());
+	}
+
 }

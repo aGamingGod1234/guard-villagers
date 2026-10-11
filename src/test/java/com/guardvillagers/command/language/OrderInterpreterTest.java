@@ -129,4 +129,26 @@ final class OrderInterpreterTest {
 		assertEquals(Optional.of(Duration.ofSeconds(3)), result.retryAfter());
 		assertTrue(result.llmTemporarilyUnavailable());
 	}
+	@Test
+	void longRosterAddressActivatesFallback() throws Exception {
+		var roster = OwnerRoster.of(List.of("Red Fox Guard Squad"), List.of("Liam"));
+		withLlm().interpret(PLAYER, "Red Fox Guard Squad dig in", roster, false).get();
+		assertEquals(1, calls.get());
+	}
+
+	@Test
+	void appointmentQualifiersNeverReachFallback() throws Exception {
+		var result = withLlm().interpret(PLAYER, "make Liam captain of Beta", ROSTER, true).get();
+		assertFalse(result.understood());
+		assertEquals(0, calls.get());
+	}
+
+	@Test
+	void highSeverityMisparsesNeverExecuteThroughFacade() throws Exception {
+		for (String text : List.of("never attack my target", "don't get whoever hit me", "Steve attack my target",
+				"make Liam commander later", "fill it", "bill it", "call back")) {
+			assertFalse(OrderInterpreter.grammarOnly().interpret(PLAYER, text, ROSTER, false).get().understood(), text);
+		}
+	}
+
 }

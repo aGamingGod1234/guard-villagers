@@ -53,6 +53,11 @@ public final class GuardOwnershipIndex {
 			return;
 		}
 
+		if (!guard.isAlive()) {
+			untrack(guard);
+			return;
+		}
+
 		UUID previousOwner = GUARD_TO_OWNER.put(guardId, ownerUuid);
 		if (previousOwner != null && !previousOwner.equals(ownerUuid)) {
 			removeFromOwner(previousOwner, guardId);
@@ -74,7 +79,7 @@ public final class GuardOwnershipIndex {
 		persisted(guard).ifPresent(state -> state.remove(guard.getUUID()));
 	}
 
-	/** Loaded, living-or-not-yet-removed guards owned by {@code ownerUuid}. Never scans worlds. */
+	/** Loaded, living guards owned by {@code ownerUuid}. Never scans worlds. */
 	public static List<GuardEntity> getOwnedGuards(MinecraftServer server, UUID ownerUuid) {
 		if (server == null || ownerUuid == null) {
 			return List.of();
@@ -88,6 +93,10 @@ public final class GuardOwnershipIndex {
 		for (UUID guardId : List.copyOf(indexedIds)) {
 			GuardEntity guard = resolveLoadedGuard(server, guardId);
 			if (guard == null) {
+				continue;
+			}
+			if (!guard.isAlive()) {
+				untrack(guard);
 				continue;
 			}
 			if (!ownerUuid.equals(guard.getOwnerUuid())) {
@@ -104,9 +113,9 @@ public final class GuardOwnershipIndex {
 		if (server == null || ownerUuid == null) {
 			return 0;
 		}
-		int persisted = state(server).countOwned(ownerUuid);
-		// Loaded guards always have a row; the max only matters if the state was reset under us.
-		return Math.max(persisted, getOwnedGuards(server, ownerUuid).size());
+		int loaded = getOwnedGuards(server, ownerUuid).size();
+		// Resolving loaded guards also removes any dead rows before the persisted count is read.
+		return Math.max(state(server).countOwned(ownerUuid), loaded);
 	}
 
 	/**

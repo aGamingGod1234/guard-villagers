@@ -103,39 +103,35 @@ final class GuardOwnershipStateTest {
 	}
 
 	@Test
-	void perOwnerCapOnlyEvictsThatOwnersOldestRow() {
+	void overflowRowsSurviveRoundTripAndDeathsOfTheOtherGuards() {
 		GuardOwnershipState state = new GuardOwnershipState();
-		UUID otherGuard = UUID.randomUUID();
-		state.record(otherGuard, this.otherOwner, 0L);
 		UUID oldest = UUID.randomUUID();
-		state.record(oldest, this.owner, 1L);
-		for (int i = 1; i < GuardOwnershipState.MAX_ROWS_PER_OWNER; i++) {
+		state.record(oldest, this.owner, 0L);
+		for (int i = 0; i < 64; i++) {
 			state.record(UUID.randomUUID(), this.owner, 10L + i);
 		}
-		assertEquals(GuardOwnershipState.MAX_ROWS_PER_OWNER, state.countOwned(this.owner));
-
-		UUID newest = UUID.randomUUID();
-		state.record(newest, this.owner, 1_000L);
-
-		assertEquals(GuardOwnershipState.MAX_ROWS_PER_OWNER, state.countOwned(this.owner));
-		assertFalse(state.guardsOf(this.owner).contains(oldest));
-		assertTrue(state.guardsOf(this.owner).contains(newest));
-		assertEquals(1, state.countOwned(this.otherOwner));
-		assertTrue(GuardOwnershipState.MAX_ROWS_PER_OWNER > GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER,
-				"eviction must only ever hit owners already past the personal limit");
+		state = GuardOwnershipState.CODEC.parse(NbtOps.INSTANCE,
+				GuardOwnershipState.CODEC.encodeStart(NbtOps.INSTANCE, state).getOrThrow()).getOrThrow();
+		assertEquals(65, state.countOwned(this.owner));
+		for (UUID id : java.util.Set.copyOf(state.guardsOf(this.owner))) {
+			if (!id.equals(oldest)) {
+				state.remove(id);
+			}
+		}
+		assertEquals(1, state.countOwned(this.owner), "the unloaded survivor must still consume a personal slot");
+		assertTrue(state.get(oldest).isPresent());
 	}
 
 	@Test
-	void ownerChangeIntoAFullOwnerMakesRoom() {
+	void ownerChangePreservesEveryGuardEvenAboveTheHiringLimit() {
 		GuardOwnershipState state = new GuardOwnershipState();
-		for (int i = 0; i < GuardOwnershipState.MAX_ROWS_PER_OWNER; i++) {
+		for (int i = 0; i < 64; i++) {
 			state.record(UUID.randomUUID(), this.owner, i);
 		}
 		UUID moved = UUID.randomUUID();
 		state.record(moved, this.otherOwner, 0L);
 		state.record(moved, this.owner, 500L);
-
-		assertEquals(GuardOwnershipState.MAX_ROWS_PER_OWNER, state.countOwned(this.owner));
+		assertEquals(65, state.countOwned(this.owner));
 		assertEquals(0, state.countOwned(this.otherOwner));
 	}
 

@@ -13,6 +13,7 @@ import com.guardvillagers.command.order.Order;
 import com.guardvillagers.command.order.OrderExecutor;
 import com.guardvillagers.command.order.OrderSource;
 import com.guardvillagers.command.order.Scope;
+import com.guardvillagers.command.order.TargetRef;
 import com.guardvillagers.entity.FormationType;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.voice.VoiceConfig;
@@ -139,7 +140,10 @@ public class GuardOrderRegressionGameTest {
 		helper.runAfterDelay(5, () -> {
 			command(helper, squad.owner(), "guards say commander come here");
 			helper.assertTrue(squad.alpha().getRallyPoint().isPresent(), "setup: commander did not approach");
-			command(helper, squad.owner(), "guards say form a line");
+			long approachGeneration = squad.alpha().getRallyGeneration();
+			command(helper, squad.owner(), "guards say commander form a line");
+			helper.assertTrue(squad.alpha().getRallyGeneration() != approachGeneration,
+					"setup: formation did not replace the reporting approach");
 			post[0] = squad.alpha().getRallyPoint().orElseThrow();
 			generation[0] = squad.alpha().getRallyGeneration();
 			GuardTestSupport.moveTo(helper, squad.owner(), CENTER + 8.5, 1, CENTER + 0.5);
@@ -189,6 +193,70 @@ public class GuardOrderRegressionGameTest {
 				helper.assertFalse(cow.getUUID().equals(guard.getMainTargetUuid()), "cancelled attack directive survived");
 				helper.assertTrue(guard.getTarget() != cow, "cancelled attack kept the passive target");
 			}
+			helper.succeed();
+		});
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 60)
+	public void lowerPriorityClearPreservesTypedAttackDirective(GameTestHelper helper) {
+		Squad squad = squad(helper);
+		var cow = helper.spawn(EntityType.COW, new Vec3(CENTER + 12.5, 1, CENTER + 0.5));
+		cow.setNoAi(true);
+		helper.runAfterDelay(5, () -> {
+			squad.owner().lookAt(EntityAnchorArgument.Anchor.EYES, cow.getEyePosition());
+			int reached = CommanderService.submit(squad.owner(),
+					List.of(Order.attack(Scope.ALL, TargetRef.MY_TARGET)), OrderSource.TYPED);
+			helper.assertTrue(reached == 2, "setup: typed attack did not reach both guards");
+		});
+		helper.runAfterDelay(10, () -> {
+			List<ActiveOrder> before = orders(squad);
+			for (GuardEntity guard : List.of(squad.alpha(), squad.bravo())) {
+				helper.assertTrue(cow.getUUID().equals(guard.getMainTargetUuid()), "setup: typed attack directive missing");
+			}
+			command(helper, squad.owner(), "guards say as you were");
+			helper.assertTrue(orders(squad).equals(before), "voice clear removed a higher-priority typed attack");
+			// Assert in the same tick so a later attack refresh cannot hide incorrect directive cleanup.
+			for (GuardEntity guard : List.of(squad.alpha(), squad.bravo())) {
+				helper.assertTrue(cow.getUUID().equals(guard.getMainTargetUuid()), "voice clear withdrew the surviving typed attack directive");
+			}
+			helper.succeed();
+		});
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 120)
+	public void broaderAttackReachesOriginalRecipientAfterNarrowerOrderExpires(GameTestHelper helper) {
+		Squad squad = squad(helper);
+		var cow = helper.spawn(EntityType.COW, new Vec3(CENTER + 12.5, 1, CENTER + 0.5));
+		cow.setNoAi(true);
+		cow.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.MAX_HEALTH).setBaseValue(1000);
+		cow.setHealth(1000);
+		helper.runAfterDelay(5, () -> {
+			try {
+				CommanderService.configure(new VoiceConfig.Commander(false, 20, 1));
+				CommanderService.submit(squad.owner(), List.of(Order.form(Scope.group("Alpha"), FormationType.LINE)),
+						OrderSource.VOICE);
+			} finally {
+				CommanderService.configure(VoiceConfig.defaults().commander());
+			}
+			helper.assertTrue(squad.alpha().getRallyPoint().isPresent(), "setup: narrower formation did not reach Alpha");
+			squad.owner().lookAt(EntityAnchorArgument.Anchor.EYES, cow.getEyePosition());
+			int reached = CommanderService.submit(squad.owner(),
+					List.of(Order.attack(Scope.ALL, TargetRef.MY_TARGET)), OrderSource.VOICE);
+			helper.assertTrue(reached == 1, "broader attack must initially reach only Bravo");
+			ActiveOrder attack = orders(squad).stream().filter(order -> order.order().action() == Action.ATTACK_TARGET)
+					.findFirst().orElseThrow();
+			helper.assertTrue(attack.recipients().orElseThrow().equals(Set.of(squad.alpha().getUUID(), squad.bravo().getUUID())),
+					"broader order lost its temporarily overridden original recipient");
+		});
+		helper.runAfterDelay(10, () -> {
+			helper.assertFalse(cow.getUUID().equals(squad.alpha().getMainTargetUuid()), "attack overrode Alpha's narrower formation");
+			helper.assertTrue(cow.getUUID().equals(squad.bravo().getMainTargetUuid()), "setup: Bravo did not attack");
+		});
+		helper.runAfterDelay(70, () -> {
+			helper.assertTrue(orders(squad).stream().noneMatch(order -> order.order().action() == Action.FORM),
+					"narrower timed order did not expire");
+			helper.assertTrue(cow.getUUID().equals(squad.alpha().getMainTargetUuid()),
+					"broader attack did not resume for Alpha after the narrower order expired");
 			helper.succeed();
 		});
 	}

@@ -127,7 +127,7 @@ public final class VoiceCommandBridge {
 			VoiceConfig voice = config.get();
 			LlmConfig llm = new LlmConfig(voice.llm().enabled(), voice.llm().model(), voice.openai().apiKeyEnv(),
 					voice.openai().baseUrl(), Duration.ofMillis(voice.openai().llmTimeoutMs()), voice.llm().maxPerPlayerPerMinute(),
-					LlmConfig.DEFAULT_REASONING_EFFORT, LlmConfig.DEFAULT_MAX_OUTPUT_TOKENS);
+					voice.llm().reasoningEffort(), LlmConfig.DEFAULT_MAX_OUTPUT_TOKENS);
 			Optional<LlmInterpreter> interpreter = LlmInterpreter.create(llm, System::getenv);
 			CommanderService.setInterpreter(new OrderInterpreter(new GrammarInterpreter(), new OrderValidator(), interpreter));
 		}

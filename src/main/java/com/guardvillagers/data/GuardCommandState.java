@@ -16,7 +16,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -35,12 +34,12 @@ import net.minecraft.world.level.saveddata.SavedDataType;
  * Per-owner chain of command ({@code guardvillagers:command}): current and pinned commander, captain per tactics group,
  * pinned captains, the commander's auto-command switch and the active player orders. This is the source of truth
  * while guards are unloaded; loaded guards whose NBT rank disagrees are corrected by the next election.
- * Bounded at {@link #MAX_OWNERS}; when full, the least recently written row that holds no player choice is dropped
- * first. Reads ({@link #peek}, {@link #getOrDefault}) never reorder or create rows. Server thread only.
+ * At {@link #MAX_OWNERS}, the least recently written row without player choices is dropped.
+ * Explicit choices are durable, so the store may exceed that soft limit when every row carries a choice. Reads ({@link #peek}, {@link #getOrDefault}) never reorder or create rows. Server thread only.
  */
 public final class GuardCommandState extends SavedData {
 	public static final int MAX_CAPTAINS = GuardTacticsState.PlayerTactics.MAX_GROUPS;
-	/** Rows are small, so this is well above the tactics cap; eviction prefers rows without player choices. */
+	/** Soft capacity: only rows without explicit player choices may be evicted. */
 	public static final int MAX_OWNERS = GuardSecurityLimits.MAX_TACTICS_PLAYERS * 4;
 
 	public static final Codec<GuardCommandState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
@@ -108,10 +107,7 @@ public final class GuardCommandState extends SavedData {
 					break;
 				}
 			}
-			if (victim == null) {
-				Iterator<UUID> oldest = this.entries.keySet().iterator();
-				victim = oldest.hasNext() ? oldest.next() : null;
-			}
+
 			if (victim != null) {
 				this.entries.remove(victim);
 			}
@@ -134,13 +130,17 @@ public final class GuardCommandState extends SavedData {
 				UUIDUtil.STRING_CODEC.optionalFieldOf("pinnedCommander").forGetter(command -> Optional.ofNullable(command.pinnedCommander)),
 				CAPTAIN_CODEC.listOf(0, MAX_CAPTAINS).optionalFieldOf("captains", List.of()).forGetter(OwnerCommand::captainList),
 				UUIDUtil.STRING_CODEC.listOf(0, MAX_CAPTAINS).optionalFieldOf("pinnedCaptains", List.of())
-						.forGetter(command -> List.copyOf(command.pinnedCaptains)),
+						.forGetter(command -> command.pinnedCaptains.stream()
+								.filter(guard -> !command.pinnedCaptainByGroup.containsValue(guard)).toList()),
 				Codec.BOOL.optionalFieldOf("autoCommand").forGetter(OwnerCommand::autoCommandChoice),
 				SavedOrder.CODEC.listOf(0, OrderBook.MAX_ACTIVE).optionalFieldOf("orders", List.of()).forGetter(command -> command.orders),
 				Codec.BOOL.optionalFieldOf("voiceConsent").forGetter(command -> Optional.ofNullable(command.voiceConsent)),
 				RaidEntry.CODEC.listOf(0, MAX_RAID_BEHAVIORS).optionalFieldOf("raidBehaviors", List.of())
 						.forGetter(OwnerCommand::raidEntryList),
-				SavedOrder.CODEC.listOf().optionalFieldOf("pendingCleanup", List.of()).forGetter(command -> command.pendingCleanup)
+				SavedOrder.CODEC.listOf().optionalFieldOf("pendingCleanup", List.of()).forGetter(command -> command.pendingCleanup),
+				CAPTAIN_CODEC.listOf(0, MAX_CAPTAINS).optionalFieldOf("pinnedCaptainGroups", List.of())
+						.forGetter(command -> command.pinnedCaptainByGroup.entrySet().stream()
+								.map(entry -> new CaptainEntry(entry.getKey(), entry.getValue())).toList())
 		).apply(instance, OwnerCommand::new));
 
 
@@ -150,6 +150,7 @@ public final class GuardCommandState extends SavedData {
 		private final Set<UUID> pinnedCaptains = new HashSet<>();
 		private Boolean autoCommand;
 		private List<SavedOrder> pendingCleanup = List.of();
+		private final Map<Integer, UUID> pinnedCaptainByGroup = new HashMap<>();
 		private List<SavedOrder> orders = List.of();
 		/** Null until the player chooses; then the config default no longer applies. */
 		private Boolean voiceConsent;
@@ -161,7 +162,7 @@ public final class GuardCommandState extends SavedData {
 
 		private OwnerCommand(Optional<UUID> commander, Optional<UUID> pinnedCommander, List<CaptainEntry> captains,
 				List<UUID> pinnedCaptains, Optional<Boolean> autoCommand, List<SavedOrder> orders, Optional<Boolean> voiceConsent,
-				List<RaidEntry> raidEntries, List<SavedOrder> pendingCleanup) {
+				List<RaidEntry> raidEntries, List<SavedOrder> pendingCleanup, List<CaptainEntry> pinnedGroups) {
 			this.commander = commander.orElse(null);
 			this.pinnedCommander = pinnedCommander.orElse(null);
 			for (CaptainEntry entry : captains) {
@@ -170,6 +171,16 @@ public final class GuardCommandState extends SavedData {
 			this.pinnedCaptains.addAll(pinnedCaptains);
 			this.autoCommand = autoCommand.orElse(null);
 			this.pendingCleanup = List.copyOf(pendingCleanup);
+			for (CaptainEntry entry : pinnedGroups) {
+				this.pinnedCaptainByGroup.put(entry.group(), entry.guard());
+				this.pinnedCaptains.add(entry.guard());
+			}
+			// Older saves already record the elected captain's group.
+			for (CaptainEntry entry : captains) {
+				if (this.pinnedCaptains.contains(entry.guard()) && !this.pinnedCaptainByGroup.containsValue(entry.guard())) {
+					this.pinnedCaptainByGroup.putIfAbsent(entry.group(), entry.guard());
+				}
+			}
 			this.orders = List.copyOf(orders);
 			this.voiceConsent = voiceConsent.orElse(null);
 			for (RaidEntry entry : raidEntries) {
@@ -183,6 +194,7 @@ public final class GuardCommandState extends SavedData {
 			copy.pinnedCommander = this.pinnedCommander;
 			copy.captainByGroup.putAll(this.captainByGroup);
 			copy.pinnedCaptains.addAll(this.pinnedCaptains);
+			copy.pinnedCaptainByGroup.putAll(this.pinnedCaptainByGroup);
 			copy.autoCommand = this.autoCommand;
 			copy.orders = this.orders;
 			copy.pendingCleanup = this.pendingCleanup;
@@ -243,8 +255,26 @@ public final class GuardCommandState extends SavedData {
 			return true;
 		}
 
-		public void unpin(UUID guard) {
+		public Map<Integer, UUID> pinnedCaptainByGroup() {
+			return Collections.unmodifiableMap(this.pinnedCaptainByGroup);
+		}
+
+		/** Appointment belongs to its group and replaces even an unloaded predecessor. */
+		public void pinCaptain(int group, UUID guard) {
+			if (group < 0 || group >= MAX_CAPTAINS) throw new IllegalArgumentException("Invalid captain group");
+			unpinCaptain(guard);
+			UUID previous = this.pinnedCaptainByGroup.put(group, guard);
+			if (previous != null) this.pinnedCaptains.remove(previous);
+			this.pinnedCaptains.add(guard);
+		}
+
+		public void unpinCaptain(UUID guard) {
 			this.pinnedCaptains.remove(guard);
+			this.pinnedCaptainByGroup.values().removeIf(guard::equals);
+		}
+
+		public void unpin(UUID guard) {
+			unpinCaptain(guard);
 			if (guard.equals(this.pinnedCommander)) {
 				this.pinnedCommander = null;
 			}
@@ -252,6 +282,7 @@ public final class GuardCommandState extends SavedData {
 
 		public void clearPins() {
 			this.pinnedCaptains.clear();
+			this.pinnedCaptainByGroup.clear();
 			this.pinnedCommander = null;
 		}
 
@@ -406,7 +437,7 @@ public final class GuardCommandState extends SavedData {
 				Codec.LONG.fieldOf("id").forGetter(SavedOrder::id),
 				Codec.string(1, 32).fieldOf("action").forGetter(SavedOrder::action),
 				Codec.string(1, 16).fieldOf("scope").forGetter(SavedOrder::scopeKind),
-				Codec.string(1, 64).optionalFieldOf("scopeName").forGetter(SavedOrder::scopeName),
+				Codec.STRING.optionalFieldOf("scopeName").forGetter(SavedOrder::scopeName),
 				Codec.string(1, 16).optionalFieldOf("formation").forGetter(SavedOrder::formation),
 				Codec.string(1, 32).optionalFieldOf("target").forGetter(SavedOrder::target),
 				Codec.intRange(Order.MIN_RADIUS, Order.MAX_RADIUS).optionalFieldOf("radius").forGetter(SavedOrder::radius),

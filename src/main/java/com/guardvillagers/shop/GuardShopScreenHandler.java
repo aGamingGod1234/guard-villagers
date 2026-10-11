@@ -24,8 +24,7 @@ public class GuardShopScreenHandler extends ChestMenu {
 
 	private final GuardShopInventory shopInventory;
 	private final ServerPlayer owner;
-	/** -1 = no action yet. A MIN_VALUE sentinel would overflow in {@code now - last} and block the first click. */
-	private int lastActionTick = -1;
+	private final ActionCooldown actionCooldown = new ActionCooldown();
 
 	public GuardShopScreenHandler(int syncId, Inventory playerInventory, ServerPlayer owner) {
 		this(syncId, playerInventory, new GuardShopInventory(owner), owner);
@@ -51,10 +50,9 @@ public class GuardShopScreenHandler extends ChestMenu {
 			return;
 		}
 		int now = this.owner.level().getServer().getTickCount();
-		if (this.lastActionTick >= 0 && now >= this.lastActionTick && now - this.lastActionTick < ACTION_COOLDOWN_TICKS) {
+		if (!this.actionCooldown.tryAction(now)) {
 			return;
 		}
-		this.lastActionTick = now;
 
 		try {
 			if (this.shopInventory.handleClick(slotIndex, actionType == ContainerInput.QUICK_MOVE)) {
@@ -63,6 +61,21 @@ public class GuardShopScreenHandler extends ChestMenu {
 			}
 		} catch (RuntimeException exception) {
 			LOGGER.error("Shop click failed for {} on slot {}", this.owner.getName().getString(), slotIndex, exception);
+		}
+	}
+
+	static final class ActionCooldown {
+		private boolean hasAction;
+		private int lastActionTick;
+
+		boolean tryAction(int now) {
+			// Tick counters wrap; no valid timestamp can double as the uninitialized value.
+			if (this.hasAction && Integer.compareUnsigned(now - this.lastActionTick, ACTION_COOLDOWN_TICKS) < 0) {
+				return false;
+			}
+			this.hasAction = true;
+			this.lastActionTick = now;
+			return true;
 		}
 	}
 

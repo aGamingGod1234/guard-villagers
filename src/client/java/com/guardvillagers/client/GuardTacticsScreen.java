@@ -232,6 +232,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private boolean eraseTool;
 	private boolean paletteOpen;
 	private boolean followMenuOpen;
+	private int followMenuOffset;
 	private int orderGroupRow = -1;
 	// Right-click rank menu on a guard card; a snapshot, since the roster entry is replaced on every sync.
 	private ClientGuardRosterStore.GuardRosterEntry guardMenuGuard;
@@ -678,7 +679,12 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 	@Override
 	public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
-		if (this.showUnsavedDialog || this.helpVisible || this.paletteOpen || this.followMenuOpen || this.guardMenuGuard != null) {
+		if (this.followMenuOpen && !this.showUnsavedDialog && !this.helpVisible) {
+			this.followMenuOffset = Mth.clamp(this.followMenuOffset - (int) Math.signum(verticalAmount), 0,
+				Math.max(0, this.viewGroupCount - this.followMenuVisibleCount()));
+			return true;
+		}
+		if (this.showUnsavedDialog || this.helpVisible || this.paletteOpen || this.guardMenuGuard != null) {
 			return true;
 		}
 		if (this.contains(this.sideX, this.sideY, this.sideW, this.sideH, mouseX, mouseY)) {
@@ -1279,10 +1285,14 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		return 12;
 	}
 
+	private int followMenuVisibleCount() {
+		return Math.min(this.viewGroupCount, Math.max(1, (this.barY - this.panelY - 20) / this.followMenuItemHeight()));
+	}
+
 	private void renderFollowMenu(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
 		int itemH = this.followMenuItemHeight();
-		int maxItems = Math.max(1, (this.barY - this.panelY - 20) / itemH);
-		int count = Math.min(this.viewGroupCount, maxItems);
+		int count = this.followMenuVisibleCount();
+		this.followMenuOffset = Mth.clamp(this.followMenuOffset, 0, Math.max(0, this.viewGroupCount - count));
 		int w = Math.max(this.followGroupButton.w, 100);
 		int x = Math.min(this.followGroupButton.x, this.barX + this.barW - w);
 		int h = count * itemH + 4;
@@ -1290,8 +1300,9 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		graphics.fill(x, y, x + w, y + h, 0xF60F151D);
 		graphics.outline(x, y, w, h, ACCENT_GROUPS);
 		ClientTacticsDataStore.WorldContext context = this.worldContext();
-		for (int row = 0; row < count; row++) {
-			int iy = y + 2 + row * itemH;
+		for (int item = 0; item < count; item++) {
+			int row = this.followMenuOffset + item;
+			int iy = y + 2 + item * itemH;
 			boolean hovered = this.contains(x + 1, iy, w - 2, itemH, mouseX, mouseY);
 			if (hovered || row == this.orderGroupRow) {
 				graphics.fill(x + 1, iy, x + w - 1, iy + itemH, hovered ? HEADER_ROW_HOVER_BACKGROUND : HEADER_ROW_OPEN_BACKGROUND);
@@ -1304,8 +1315,8 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 	private void handleFollowMenuClick(double mouseX, double mouseY) {
 		int itemH = this.followMenuItemHeight();
-		int maxItems = Math.max(1, (this.barY - this.panelY - 20) / itemH);
-		int count = Math.min(this.viewGroupCount, maxItems);
+		int count = this.followMenuVisibleCount();
+		this.followMenuOffset = Mth.clamp(this.followMenuOffset, 0, Math.max(0, this.viewGroupCount - count));
 		int w = Math.max(this.followGroupButton.w, 100);
 		int x = Math.min(this.followGroupButton.x, this.barX + this.barW - w);
 		int h = count * itemH + 4;
@@ -1314,8 +1325,9 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		if (!this.contains(x, y, w, h, mouseX, mouseY)) {
 			return;
 		}
-		int row = (int) ((mouseY - y - 2) / itemH);
-		if (row >= 0 && row < count) {
+		int item = (int) Math.floor((mouseY - y - 2) / itemH);
+		if (item >= 0 && item < count) {
+			int row = this.followMenuOffset + item;
 			this.orderGroupRow = row;
 			this.orderGroup(row, true);
 		}
@@ -1385,9 +1397,9 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			return;
 		}
 		String name = this.groupNames.get(row);
-		// Follow/stay match guards by group name on the server (same as typing /guards follow <name>).
+		// Row identity stays unambiguous even when display names collide.
 		this.sendOrder(
-			(follow ? "guards follow " : "guards stay ") + name,
+			(follow ? "guards groups follow " : "guards groups stay ") + (row + 1),
 			Component.translatable(KEY + (follow ? "status.follow_group" : "status.stay_group"), name)
 		);
 	}
@@ -1440,7 +1452,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		for (ClientGuardRosterStore.GuardRosterEntry guard : roster) {
 			// The roster is re-sent about once a second; a pending move the server now matches is no longer a change.
 			Integer pending = this.pendingAssignments.get(guard.guardUuid());
-			if (pending != null && pending == guard.groupIndex()) {
+			if (pending != null && pending == guard.groupIndex() && !this.awaitingConfirmation.containsKey(guard.guardUuid())) {
 				this.pendingAssignments.remove(guard.guardUuid());
 			}
 			int group = this.displayGroup(guard);
@@ -2052,7 +2064,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		}
 		int nextRow = this.dataStore.groupCount(worldContext);
 		if (this.sendCommand("guards groups add")) {
-			this.dataStore.ensureGroupCount(worldContext, nextRow + 1);
+			this.dataStore.expectGroup(worldContext, nextRow);
 			this.localRevision++;
 			this.setStatus(Component.translatable(KEY + "status.group_added", nextRow + 1), STATUS_SUCCESS);
 		}
@@ -2366,7 +2378,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			if (targetGroup >= ClientTacticsDataStore.MAX_GROUPS || !this.sendCommand("guards groups add")) {
 				return;
 			}
-			this.dataStore.ensureGroupCount(worldContext, targetGroup + 1);
+			this.dataStore.expectGroup(worldContext, targetGroup);
 			this.localRevision++;
 		} else if (targetGroup >= this.viewGroupCount) {
 			return;
@@ -2376,9 +2388,11 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 
 	private void setPendingAssignment(ClientGuardRosterStore.GuardRosterEntry guard, int targetGroup) {
 		UUID guardId = guard.guardUuid();
-		this.awaitingConfirmation.remove(guardId);
-		// Moving a guard back to where the server has it is not a change.
-		if (targetGroup == guard.groupIndex()) {
+		// The drag snapshot can predate a sync, and an older saved move can still execute.
+		int currentGroup = this.rosterStore.roster(this.worldContext()).stream()
+			.filter(current -> current.guardUuid().equals(guardId)).findFirst().orElse(guard).groupIndex();
+		Integer inFlight = this.awaitingConfirmation.get(guardId);
+		if (targetGroup == (inFlight == null ? currentGroup : inFlight)) {
 			this.pendingAssignments.remove(guardId);
 		} else {
 			this.pendingAssignments.put(guardId, targetGroup);
@@ -2403,19 +2417,13 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			this.setStatus(tr("status.no_connection"), STATUS_ERROR);
 			return;
 		}
-		// One assignmany per target row instead of one command per guard: per-guard commands got
-		// non-operators kicked for chat spam. Rows that no longer exist are dropped, not sent.
+		// Keep edits until the server can validate them; an older roster must never discard a dependent move.
 		Map<Integer, List<UUID>> byRow = new java.util.TreeMap<>();
 		Iterator<Map.Entry<UUID, Integer>> entries = this.pendingAssignments.entrySet().iterator();
 		while (entries.hasNext()) {
 			Map.Entry<UUID, Integer> entry = entries.next();
-			if (entry.getValue() >= this.viewGroupCount) {
-				entries.remove();
-				continue;
-			}
 			byRow.computeIfAbsent(entry.getValue(), ignored -> new ArrayList<>()).add(entry.getKey());
 		}
-		this.awaitingBatches = 0;
 		this.awaitingRejected = 0;
 		this.awaitingReasonKey = null;
 		// Rows with a command the queue refused stay pending (re-sending an assignment is harmless), so the
@@ -2505,6 +2513,10 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 				}
 				case ADD, RENAME -> {
 					if (result.rejected() > 0) {
+						if (result.action() == GuardGroupResultPayload.Action.ADD) {
+							int rejectedRow = result.groupRow();
+							if (rejectedRow >= 0) this.pendingAssignments.entrySet().removeIf(entry -> entry.getValue() == rejectedRow);
+						}
 						// The next roster sync restores the server's group list and names.
 						this.localRevision++;
 						this.setStatus(Component.translatable(KEY + (result.action() == GuardGroupResultPayload.Action.ADD ? "status.add_failed" : "status.rename_failed"),
@@ -2534,8 +2546,9 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			return;
 		}
 		if (GuardCommandQueue.pending() > 0) {
-			// Commands still held back by the spam guard; the fallback timeout starts once they are all sent.
+			// Wait for the server to finish processing queued operations before starting the fallback timeout.
 			this.awaitingSince = System.currentTimeMillis();
+			return;
 		}
 		int revision = this.rosterStore.revision();
 		if (revision != this.awaitingCheckedRevision) {

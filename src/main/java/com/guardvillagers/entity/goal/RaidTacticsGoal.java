@@ -68,12 +68,12 @@ public final class RaidTacticsGoal extends Goal {
 
 		if (this.guard.isBehaviorExecutor(GuardBehaviorExecutor.RAID_OFFENSIVE)) {
 			long now = world.getGameTime();
-			if (now >= this.nextRaiderSearch || this.seekTarget == null || !this.seekTarget.isAlive()) {
+			if (now >= this.nextRaiderSearch || (this.seekTarget != null && !this.seekTarget.isAlive())) {
 				this.nextRaiderSearch = now + RAIDER_SEARCH_TICKS;
 				this.seekTarget = this.findNearestRaider(world);
 			}
 			if (this.seekTarget != null) {
-				if (this.guard.distanceToSqr(this.seekTarget) > 16.0D) {
+				if (this.guard.distanceToSqr(this.seekTarget) > 16.0D || !this.guard.hasLineOfSight(this.seekTarget)) {
 					this.guard.getNavigation().moveTo(this.seekTarget, this.speed);
 				} else {
 					this.guard.getNavigation().stop();

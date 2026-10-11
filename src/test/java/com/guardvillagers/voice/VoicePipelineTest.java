@@ -219,18 +219,23 @@ class VoicePipelineTest {
 		VoiceConfig config = VoiceConfig.parse("{\"rateLimits\": {\"sttMinIntervalMs\": 200}}");
 		VoiceRateLimiter limiter = new VoiceRateLimiter(config.rateLimits(), 6, clock::get);
 		List<Runnable> delayed = new ArrayList<>();
-		VoicePipeline pipeline = new VoicePipeline(config, stt, null, limiter, serverTasks::add, clock::get,
-				(task, delay) -> delayed.add(task));
-		pipeline.setConsent(PLAYER, true);
-		pipeline.transcribe(PLAYER, new short[100], 0).join();
-		CompletableFuture<Void> waiting = pipeline.transcribe(PLAYER, new short[100], 0);
-		assertEquals(1, delayed.size());
-		assertFalse(waiting.isDone());
-		waiting.cancel(true);
-		clock.addAndGet(200);
-		delayed.getFirst().run();
-		assertEquals(1, stt.calls.get(), "a cancelled wait never reaches STT");
-		assertEquals(0, limiter.sttInFlight());
+		List<Long> delays = new ArrayList<>();
+		try (VoicePipeline pipeline = new VoicePipeline(config, stt, null, limiter, serverTasks::add, clock::get,
+				(task, delay) -> { delayed.add(task); delays.add(delay); })) {
+			pipeline.setConsent(PLAYER, true);
+			pipeline.transcribe(PLAYER, new short[100], 0).join();
+			CompletableFuture<Void> waiting = pipeline.transcribe(PLAYER, new short[100], 0);
+			assertEquals(List.of(200L), delays);
+			assertFalse(waiting.isDone(), "second utterance waits out the spacing");
+			waiting.cancel(true);
+			clock.addAndGet(200);
+			delayed.removeFirst().run();
+			assertEquals(1, stt.calls.get(), "a cancelled wait never reaches STT");
+			assertEquals(0, limiter.sttInFlight());
+			// The same now-eligible request succeeds without cancellation, proving spacing alone did not skip STT.
+			pipeline.transcribe(PLAYER, new short[100], 0).join();
+			assertEquals(2, stt.calls.get());
+		}
 	}
 
 	@Test
