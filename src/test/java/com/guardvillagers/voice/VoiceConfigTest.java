@@ -17,6 +17,7 @@ class VoiceConfigTest {
 		VoiceConfig config = VoiceConfig.defaults();
 		assertTrue(config.voiceInput().enabled());
 		assertFalse(config.voiceInput().consentDefault(), "voice consent is opt-in");
+		assertFalse(config.chat().showTranscripts(), "transcript feedback is opt-in");
 		assertEquals(48, config.voiceInput().captureRangeToOwnGuards());
 		assertEquals(10_000, config.voiceInput().maxUtteranceMs());
 		assertEquals("OPENAI_API_KEY", config.openai().apiKeyEnv());

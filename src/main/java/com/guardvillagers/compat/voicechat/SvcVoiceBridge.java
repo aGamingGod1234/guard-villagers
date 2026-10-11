@@ -2,6 +2,7 @@ package com.guardvillagers.compat.voicechat;
 
 import com.guardvillagers.voice.VoiceBridge;
 import de.maxhenkel.voicechat.api.VoicechatServerApi;
+import de.maxhenkel.voicechat.api.VoicechatConnection;
 import de.maxhenkel.voicechat.api.audiochannel.AudioPlayer;
 import de.maxhenkel.voicechat.api.audiochannel.EntityAudioChannel;
 import de.maxhenkel.voicechat.api.opus.OpusEncoder;
@@ -25,6 +26,7 @@ final class SvcVoiceBridge implements VoiceBridge {
 	private final VoicechatServerApi api;
 	private volatile SpeechCaptureEngine engine;
 	private final Map<UUID, ActivePlayback> active = new ConcurrentHashMap<>();
+	private final java.util.Set<UUID> excludedChannels = ConcurrentHashMap.newKeySet();
 
 	SvcVoiceBridge(VoicechatServerApi api, SpeechCaptureEngine engine) {
 		this.api = Objects.requireNonNull(api, "api");
@@ -46,8 +48,9 @@ final class SvcVoiceBridge implements VoiceBridge {
 		channel.setCategory(CATEGORY_ID);
 		OpusEncoder encoder = api.createEncoder();
 		if (encoder == null) throw new IllegalStateException("Simple Voice Chat did not create an Opus encoder");
-		AudioPlayer player = api.createAudioPlayer(channel, encoder, new Frames(pcm48k, speaker));
-		ActivePlayback playback = new ActivePlayback(speakerId, player);
+		Frames frames = new Frames(pcm48k);
+		AudioPlayer player = api.createAudioPlayer(channel, encoder, frames);
+		ActivePlayback playback = new ActivePlayback(speakerId, player, frames);
 		player.setOnStopped(playback::onStopped);
 		active.put(speakerId, playback);
 		player.startPlaying();
@@ -58,6 +61,28 @@ final class SvcVoiceBridge implements VoiceBridge {
 	public void stop(UUID speakerId) {
 		ActivePlayback previous = active.remove(speakerId);
 		if (previous != null) previous.stop();
+	}
+
+	/** Reject every group type and whisper before the packet is copied or decoded. */
+	boolean admitChannel(UUID playerId, VoicechatConnection sender, boolean whispering) {
+		if (whispering || sender.isInGroup() || sender.getGroup() != null) {
+			excludeChannel(playerId);
+			return false;
+		}
+		excludedChannels.remove(playerId);
+		return true;
+	}
+
+	void excludeChannel(UUID playerId) {
+		excludedChannels.add(playerId);
+		cancelCapture(playerId);
+	}
+
+	@Override
+	public boolean isPublicChannel(UUID playerId) {
+		VoicechatConnection connection = api.getConnectionOf(playerId);
+		return connection != null && !excludedChannels.contains(playerId)
+				&& !connection.isInGroup() && connection.getGroup() == null;
 	}
 
 	void accept(UUID playerId, byte[] opus, SpeechCaptureEngine.DecoderFactory decoders) {
@@ -81,20 +106,23 @@ final class SvcVoiceBridge implements VoiceBridge {
 		engine.close();
 	}
 
-	/** Exact 960-sample frames (SVC rejects any other size); ends early if the speaker is removed. */
+	/** Exact 960-sample frames (SVC rejects any other size); ends when the server-thread speaker lifecycle stops playback. */
 	static final class Frames implements Supplier<short[]> {
 		private final short[] samples;
-		private final Entity speaker;
+		private volatile boolean stopped;
 		private int position;
 
-		Frames(short[] samples, Entity speaker) {
+		Frames(short[] samples) {
 			this.samples = samples;
-			this.speaker = speaker;
+		}
+
+		void stop() {
+			stopped = true;
 		}
 
 		@Override
 		public short[] get() {
-			if (position >= samples.length || speaker != null && speaker.isRemoved()) return null;
+			if (stopped || position >= samples.length) return null;
 			short[] frame = new short[FRAME_SAMPLES];
 			int count = Math.min(FRAME_SAMPLES, samples.length - position);
 			System.arraycopy(samples, position, frame, 0, count);
@@ -106,9 +134,11 @@ final class SvcVoiceBridge implements VoiceBridge {
 	private final class ActivePlayback implements Playback {
 		private final UUID speakerId;
 		private final AudioPlayer player;
+		private final Frames frames;
 		private final CompletableFuture<Void> finished = new CompletableFuture<>();
 
-		private ActivePlayback(UUID speakerId, AudioPlayer player) {
+		private ActivePlayback(UUID speakerId, AudioPlayer player, Frames frames) {
+			this.frames = frames;
 			this.speakerId = speakerId;
 			this.player = player;
 		}
@@ -125,6 +155,7 @@ final class SvcVoiceBridge implements VoiceBridge {
 
 		@Override
 		public void stop() {
+			frames.stop();
 			active.remove(speakerId, this);
 			try {
 				if (player.isStarted() && !player.isStopped()) player.stopPlaying();

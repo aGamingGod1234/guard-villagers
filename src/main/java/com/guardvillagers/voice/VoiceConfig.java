@@ -189,7 +189,7 @@ public record VoiceConfig(
 			warnings.add("chat.prefix must be 1 to 16 characters and not blank, using '!g '");
 			prefix = "!g ";
 		}
-		Chat chat = new Chat(prefix, r.bool("chat", "prefixEnabled", true), r.bool("chat", "showTranscripts", true));
+		Chat chat = new Chat(prefix, r.bool("chat", "prefixEnabled", true), r.bool("chat", "showTranscripts", false));
 		return new VoiceConfig(version, voiceInput, commander, openai, tts, llm, rateLimits, chat, warnings);
 	}
 

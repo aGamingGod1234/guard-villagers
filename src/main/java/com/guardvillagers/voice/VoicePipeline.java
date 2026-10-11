@@ -23,7 +23,7 @@ import org.slf4j.LoggerFactory;
 /**
  * One server's voice pipeline: captured PCM -> rate limits -> speech-to-text -> transcript listener, and
  * text -> cached text-to-speech -> {@link VoiceBridge} playback. Audio lives only in memory and is dropped as
- * soon as the request finishes. Transcripts are logged only at DEBUG.
+ * soon as the request finishes. Transcript text is never logged by this pipeline.
  */
 public final class VoicePipeline implements AutoCloseable {
 	private static final Logger LOGGER = LoggerFactory.getLogger("guardvillagers/voice");
@@ -61,6 +61,7 @@ public final class VoicePipeline implements AutoCloseable {
 	private final VoiceRateLimiter limiter;
 	private final Executor serverExecutor;
 	private final LongSupplier clockMillis;
+	private final java.util.function.BiConsumer<Runnable, Long> delayScheduler;
 	private final Set<SpeechException.Channel> rejectedKey = Collections.synchronizedSet(
 			EnumSet.noneOf(SpeechException.Channel.class));
 	private final Map<UUID, Long> lastFailureNotice = new LinkedHashMap<>();
@@ -71,6 +72,14 @@ public final class VoicePipeline implements AutoCloseable {
 	private volatile Function<UUID, String> promptHints = player -> null;
 	private volatile Supplier<Optional<VoiceBridge>> bridge = VoiceBridge::current;
 	private volatile boolean closed;
+	private volatile java.util.function.Predicate<UUID> captureAdmission = player -> true;
+	private volatile Executor admissionExecutor = Runnable::run;
+
+	/** Sets the live capture gate and its server-thread executor, including delayed STT starts. */
+	public void setCaptureAdmission(java.util.function.Predicate<UUID> admission, Executor executor) {
+		captureAdmission = Objects.requireNonNull(admission, "admission");
+		admissionExecutor = Objects.requireNonNull(executor, "executor");
+	}
 	/** The HTTP transport {@link #create} built for this pipeline; closed with it. */
 	private AutoCloseable transport;
 
@@ -81,6 +90,13 @@ public final class VoicePipeline implements AutoCloseable {
 	 */
 	public VoicePipeline(VoiceConfig config, SpeechToText stt, TextToSpeech tts, VoiceRateLimiter limiter,
 			Executor serverExecutor, LongSupplier clockMillis) {
+		this(config, stt, tts, limiter, serverExecutor, clockMillis,
+				(task, delay) -> CompletableFuture.delayedExecutor(delay, TimeUnit.MILLISECONDS).execute(task));
+	}
+
+	VoicePipeline(VoiceConfig config, SpeechToText stt, TextToSpeech tts, VoiceRateLimiter limiter,
+			Executor serverExecutor, LongSupplier clockMillis, java.util.function.BiConsumer<Runnable, Long> delayScheduler) {
+		this.delayScheduler = Objects.requireNonNull(delayScheduler, "delayScheduler");
 		this.config = Objects.requireNonNull(config, "config");
 		this.stt = stt;
 		this.tts = tts;
@@ -150,7 +166,7 @@ public final class VoicePipeline implements AutoCloseable {
 	}
 
 	public boolean isConsented(UUID player) {
-		return consent.get(player).orElse(config.voiceInput().consentDefault());
+		return consent.get(player).orElse(false);
 	}
 
 	/** Stores the choice; revoking also drops any utterance being captured or transcribed for the player. */
@@ -188,24 +204,43 @@ public final class VoicePipeline implements AutoCloseable {
 	public CompletableFuture<Void> transcribe(UUID player, short[] pcm48k, long endpointMs) {
 		if (!inputAvailable() || !isConsented(player) || pcm48k.length == 0) return CompletableFuture.completedFuture(null);
 		long wait = limiter.sttSpacingRemaining(player);
-		if (wait <= 0L) return startTranscription(player, pcm48k, endpointMs);
+		if (wait <= 0L) return admitTranscription(player, pcm48k, endpointMs);
 		// The capture engine runs one request per player at a time, so waiting out the spacing here delays this
 		// sentence instead of dropping it. Cancelling the returned future before the wait ends skips the request;
 		// cancelling it later cancels the request itself.
-		CompletableFuture<Void> result = new CompletableFuture<>();
-		CompletableFuture.delayedExecutor(wait, TimeUnit.MILLISECONDS).execute(() -> {
+		TranscriptionFuture result = new TranscriptionFuture();
+		delayScheduler.accept(() -> {
 			if (result.isDone()) return;
-			link(result, startTranscription(player, pcm48k, endpointMs + wait));
-		});
+			link(result, admitTranscription(player, pcm48k, endpointMs + wait));
+		}, wait);
+		return result;
+	}
+
+	private CompletableFuture<Void> admitTranscription(UUID player, short[] pcm48k, long endpointMs) {
+		TranscriptionFuture result = new TranscriptionFuture();
+		try {
+			admissionExecutor.execute(() -> {
+				if (result.isDone()) return;
+				try {
+					if (!inputAvailable() || !isConsented(player) || !captureAdmission.test(player)) {
+						result.complete(null);
+						return;
+					}
+					link(result, startTranscription(player, pcm48k, endpointMs));
+				} catch (RuntimeException failure) {
+					result.complete(null);
+				}
+			});
+		} catch (RuntimeException rejected) {
+			result.complete(null);
+		}
 		return result;
 	}
 
 	/** Completes {@code outer} with {@code inner}, and cancels {@code inner} when {@code outer} is cancelled. */
-	private static void link(CompletableFuture<Void> outer, CompletableFuture<Void> inner) {
+	private static void link(TranscriptionFuture outer, CompletableFuture<Void> inner) {
+		outer.attach(inner);
 		inner.whenComplete((ignored, failure) -> outer.complete(null));
-		outer.whenComplete((ignored, failure) -> {
-			if (outer.isCancelled()) inner.cancel(true);
-		});
 	}
 
 	/**
@@ -230,22 +265,43 @@ public final class VoicePipeline implements AutoCloseable {
 		}
 		inFlight.add(request);
 		CompletableFuture<SpeechToText.Transcript> tracked = request;
-		request.whenComplete((ignored, failure) -> {
+		TranscriptionFuture result = new TranscriptionFuture();
+		result.attach(request);
+		request.whenComplete((transcript, failure) -> {
 			inFlight.remove(tracked);
 			limiter.releaseStt();
-		});
-		CompletableFuture<Void> result = new CompletableFuture<>();
-		request.whenComplete((transcript, failure) -> {
 			try {
 				deliver(player, transcript, failure, audioMillis, endpointMs, started);
 			} finally {
 				result.complete(null);
 			}
 		});
-		result.whenComplete((ignored, failure) -> {
-			if (result.isCancelled()) tracked.cancel(true);
-		});
 		return result;
+	}
+
+	/** Cancel the provider (and release its permit) before notifying queued-utterance callbacks. */
+	private static final class TranscriptionFuture extends CompletableFuture<Void> {
+		private volatile CompletableFuture<?> source;
+		private volatile boolean cancelling;
+
+		void attach(CompletableFuture<?> source) {
+			this.source = source;
+			if (cancelling) source.cancel(true);
+		}
+
+		@Override
+		public boolean cancel(boolean mayInterruptIfRunning) {
+			if (isDone()) return false;
+			cancelling = true;
+			CompletableFuture<?> current = source;
+			if (current != null) current.cancel(mayInterruptIfRunning);
+			return super.cancel(mayInterruptIfRunning);
+		}
+
+		@Override
+		public boolean complete(Void value) {
+			return !cancelling && super.complete(value);
+		}
 	}
 
 	private void deliver(UUID player, SpeechToText.Transcript transcript, Throwable failure, long audioMillis,
@@ -263,12 +319,11 @@ public final class VoicePipeline implements AutoCloseable {
 				player, audioMillis, endpointMs, sttMs, endpointMs + sttMs,
 				transcript.isBlank() ? "no-speech" : "recognized");
 		if (transcript.isBlank()) return;
-		LOGGER.debug("Voice transcript from {}: {}", player, transcript.text());
 		VoiceTranscriptListener target = listener;
 		VoiceTranscriptListener.VoiceTranscript event = new VoiceTranscriptListener.VoiceTranscript(
 				player, transcript.text(), endpointMs, sttMs, System.nanoTime());
 		runOnServer(() -> {
-			if (!closed && isConsented(player)) target.onTranscript(event);
+			if (!closed && isConsented(player) && captureAdmission.test(player)) target.onTranscript(event);
 		});
 	}
 
@@ -384,7 +439,7 @@ public final class VoicePipeline implements AutoCloseable {
 					SpeechException.Kind.REJECTED, "text-to-speech is unavailable"));
 		}
 		String normalized = text == null ? "" : text.strip();
-		String voice = OpenAiTextToSpeech.voiceFor(speakerId);
+		String voice = OpenAiTextToSpeech.voiceFor(speakerId, config.openai().ttsModel());
 		String key = TtsCache.key(tts.cacheNamespace(), voice, normalized);
 		return cache.getOrSynthesize(key, () -> {
 			VoiceRateLimiter.Decision decision = limiter.acquireTts();

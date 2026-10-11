@@ -17,6 +17,8 @@ import java.util.function.BiPredicate;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
+import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.server.MinecraftServer;
@@ -57,6 +59,12 @@ public final class VoiceRuntime {
 		ServerLifecycleEvents.SERVER_STARTING.register(VoiceRuntime::start);
 		ServerLifecycleEvents.SERVER_STOPPING.register(ignored -> stop());
 		ServerTickEvents.END_SERVER_TICK.register(VoiceRuntime::refreshCaptureEligibility);
+		ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> stopSpeaker(entity));
+		ServerEntityEvents.ENTITY_UNLOAD.register((entity, level) -> stopSpeaker(entity));
+	}
+
+	private static void stopSpeaker(Entity entity) {
+		if (entity instanceof GuardEntity) VoiceBridge.current().ifPresent(bridge -> bridge.stop(entity.getUUID()));
 	}
 
 	/**
@@ -104,6 +112,7 @@ public final class VoiceRuntime {
 		if (currentListener != null) created.setTranscriptListener(currentListener);
 		created.setConsentStore(consent);
 		created.setPromptHints(promptHints);
+		created.setCaptureAdmission(VoiceRuntime::captureEligibleNow, target::execute);
 		VoicePipeline previous = pipeline;
 		pipeline = created;
 		if (previous != null) previous.close();
@@ -170,7 +179,7 @@ public final class VoiceRuntime {
 		if (target.getTickCount() % CAPTURE_REFRESH_TICKS != 0) return;
 		VoicePipeline current = pipeline;
 		if (current == null || target != server || VoiceBridge.current().isEmpty() || !current.inputAvailable()) {
-			CAPTURE_ELIGIBLE.clear();
+			replaceCaptureEligibility(Set.of());
 			return;
 		}
 		Set<UUID> eligible = new HashSet<>();
@@ -178,13 +187,37 @@ public final class VoiceRuntime {
 			UUID id = player.getUUID();
 			if (!current.isConsented(id)) continue;
 			try {
-				if (captureFilter.test(target, id)) eligible.add(id);
+				if (captureEligibleNow(id)) eligible.add(id);
 			} catch (RuntimeException exception) {
 				LOGGER.warn("Guard voice capture filter failed", exception);
 			}
 		}
-		CAPTURE_ELIGIBLE.retainAll(eligible);
+		replaceCaptureEligibility(eligible);
+	}
+
+	private static void replaceCaptureEligibility(Set<UUID> eligible) {
+		for (UUID player : CAPTURE_ELIGIBLE) {
+			if (!eligible.contains(player)) {
+				CAPTURE_ELIGIBLE.remove(player);
+				VoiceBridge.current().ifPresent(bridge -> bridge.cancelCapture(player));
+			}
+		}
 		CAPTURE_ELIGIBLE.addAll(eligible);
+	}
+
+	/** Live privacy gate, evaluated on the server thread before upload and transcript delivery. */
+	private static boolean captureEligibleNow(UUID player) {
+		VoicePipeline current = pipeline;
+		MinecraftServer currentServer = server;
+		if (current == null || currentServer == null || !current.inputAvailable() || !current.isConsented(player)
+				|| currentServer.getPlayerList().getPlayer(player) == null
+				|| !VoiceBridge.current().map(bridge -> bridge.isPublicChannel(player)).orElse(false)) return false;
+		try {
+			return captureFilter.test(currentServer, player);
+		} catch (RuntimeException exception) {
+			LOGGER.warn("Guard voice capture filter failed", exception);
+			return false;
+		}
 	}
 
 	/**
@@ -193,14 +226,7 @@ public final class VoiceRuntime {
 	 */
 	public static boolean shouldCapture(UUID player) {
 		VoicePipeline current = pipeline;
-		MinecraftServer currentServer = server;
-		if (current == null || currentServer == null || !current.shouldCapture(player)) return false;
-		try {
-			return captureFilter.test(currentServer, player);
-		} catch (RuntimeException exception) {
-			LOGGER.warn("Guard voice capture filter failed", exception);
-			return false;
-		}
+		return current != null && current.shouldCapture(player) && captureEligibleNow(player);
 	}
 
 	/** Speaks a line from a guard (see {@link VoicePipeline#speak}). Always show the line in chat as well. */

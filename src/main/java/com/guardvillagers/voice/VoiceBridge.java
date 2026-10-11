@@ -29,6 +29,11 @@ public interface VoiceBridge {
 	/** Drops any utterance being captured or transcribed for this player (consent revoked, logout). */
 	void cancelCapture(UUID playerId);
 
+	/** Whether this player is currently using public proximity speech. */
+	default boolean isPublicChannel(UUID playerId) {
+		return true;
+	}
+
 	interface Playback {
 		/** Completes when the line finishes or is stopped. */
 		CompletableFuture<Void> finished();

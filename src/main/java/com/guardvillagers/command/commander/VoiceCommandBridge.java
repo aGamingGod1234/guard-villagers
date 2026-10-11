@@ -51,6 +51,7 @@ public final class VoiceCommandBridge {
 
 	public static void init() {
 		VoiceRuntime.init();
+		VoiceRuntime.onPipelineChanged(pipeline -> CommanderService.configure(pipeline.config().commander()));
 		VoiceRuntime.setTranscriptListener(new VoiceTranscriptListener() {
 			@Override
 			public void onTranscript(VoiceTranscript transcript) {
@@ -59,7 +60,7 @@ public final class VoiceCommandBridge {
 					if (player != null) {
 						VoicePipeline pipeline = VoiceRuntime.pipeline().orElse(null);
 						if (pipeline != null && pipeline.config().chat().showTranscripts()) {
-							player.sendSystemMessage(Component.literal("Heard: " + transcript.text()).withStyle(ChatFormatting.GRAY));
+							player.sendSystemMessage(Component.literal("Heard: " + transcript.text()).withStyle(ChatFormatting.GRAY), true);
 						}
 						CommanderService.hear(player, transcript.text(), false);
 					}

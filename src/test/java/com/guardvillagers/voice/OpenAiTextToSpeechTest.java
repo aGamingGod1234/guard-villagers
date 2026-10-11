@@ -49,6 +49,22 @@ class OpenAiTextToSpeechTest {
 	}
 
 	@Test
+	void legacyModelsOnlyReceiveSupportedVoicesAndNoInstructions() {
+		server.response = FakeOpenAi.Response.bytes(le(new short[] {100, 200}));
+		for (String model : java.util.List.of("tts-1", "tts-1-hd")) {
+			OpenAiTextToSpeech legacy = new OpenAiTextToSpeech(server.http(), model, "serious", Duration.ofSeconds(5));
+			for (String unsupported : java.util.List.of("cedar", "marin", "ballad", "verse")) {
+				legacy.synthesize("Holding.", unsupported).join();
+				JsonObject body = JsonParser.parseString(new String(server.requests.getLast().body(), StandardCharsets.UTF_8))
+						.getAsJsonObject();
+				assertTrue(OpenAiTextToSpeech.LEGACY_VOICES.contains(body.get("voice").getAsString()));
+				org.junit.jupiter.api.Assertions.assertFalse(body.has("instructions"));
+			}
+			assertTrue(OpenAiTextToSpeech.LEGACY_VOICES.contains(OpenAiTextToSpeech.voiceFor(new UUID(0, 18), model)));
+		}
+	}
+
+	@Test
 	void resamples24kTo48kWithDoubleLengthAndExactBoundaries() {
 		short[] source = {0, 1000, -1000, Short.MAX_VALUE, Short.MIN_VALUE, 42};
 		server.response = FakeOpenAi.Response.bytes(le(source));

@@ -21,6 +21,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Flow;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Minimal OpenAI HTTP transport shared by speech-to-text, text-to-speech and the LLM interpreter.
@@ -33,6 +35,8 @@ public final class OpenAiHttp implements AutoCloseable {
 	private final URI baseUrl;
 	private final String apiKey;
 	private final HttpClient client;
+	private final ScheduledThreadPoolExecutor deadlines = new ScheduledThreadPoolExecutor(1,
+			runnable -> Thread.ofPlatform().daemon().name("guardvillagers-http-deadline").unstarted(runnable));
 	private final java.util.function.LongSupplier wallClockMillis;
 	/** The executor {@link #create} made for the client; null when the caller supplied the client. */
 	private java.util.concurrent.ExecutorService ownedExecutor;
@@ -48,6 +52,7 @@ public final class OpenAiHttp implements AutoCloseable {
 		this.apiKey = apiKey.trim();
 		this.client = Objects.requireNonNull(client, "client");
 		this.wallClockMillis = wallClockMillis;
+		deadlines.setRemoveOnCancelPolicy(true);
 	}
 
 	/** A client on virtual threads with a 5 s connect timeout. */
@@ -67,6 +72,7 @@ public final class OpenAiHttp implements AutoCloseable {
 	@Override
 	public void close() {
 		client.shutdownNow();
+		deadlines.shutdownNow();
 		if (ownedExecutor != null) ownedExecutor.shutdownNow();
 	}
 
@@ -106,8 +112,21 @@ public final class OpenAiHttp implements AutoCloseable {
 			if (failure != null) throw classify(failure, channel);
 			return response.body();
 		});
-		// Cancelling the caller's future aborts the HTTP exchange.
+		// HttpRequest.timeout stops at headers on the JDK transport; cover body consumption as well.
+		java.util.concurrent.ScheduledFuture<?> deadline;
+		try {
+			deadline = deadlines.schedule(() -> {
+				if (result.completeExceptionally(new SpeechException(channel, SpeechException.Kind.TIMEOUT,
+						"request timed out"))) exchange.cancel(true);
+			}, timeout.toNanos(), TimeUnit.NANOSECONDS);
+		} catch (java.util.concurrent.RejectedExecutionException closed) {
+			exchange.cancel(true);
+			result.completeExceptionally(new SpeechException(channel, SpeechException.Kind.UNAVAILABLE,
+					"transport closed"));
+			return result;
+		}
 		result.whenComplete((ignored, failure) -> {
+			deadline.cancel(false);
 			if (result.isCancelled()) exchange.cancel(true);
 		});
 		return result;

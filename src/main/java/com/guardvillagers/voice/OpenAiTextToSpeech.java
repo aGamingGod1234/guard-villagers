@@ -21,6 +21,8 @@ public final class OpenAiTextToSpeech implements TextToSpeech {
 	public static final int MAX_RESPONSE_BYTES = SOURCE_SAMPLE_RATE * 2 * MAX_SECONDS;
 	public static final List<String> VOICES = List.of(
 			"cedar", "marin", "alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse");
+	static final List<String> LEGACY_VOICES = List.of(
+			"alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer");
 	public static final Map<String, String> TONES = Map.of(
 			"neutral", "Speak clearly and naturally.",
 			"warm", "Speak warmly.",
@@ -45,17 +47,33 @@ public final class OpenAiTextToSpeech implements TextToSpeech {
 
 	/** Stable built-in voice for a speaker: each guard sounds the same every time, a successor sounds different. */
 	public static String voiceFor(UUID speaker) {
-		return voiceForProfile(speaker.toString());
+		return voiceFor(speaker, "gpt-4o-mini-tts");
+	}
+
+	public static String voiceFor(UUID speaker, String model) {
+		return voiceForProfile(speaker.toString(), voicesFor(model));
+	}
+
+	private static List<String> voicesFor(String model) {
+		return isLegacyModel(model) ? LEGACY_VOICES : VOICES;
+	}
+
+	private static boolean isLegacyModel(String model) {
+		return "tts-1".equals(model) || "tts-1-hd".equals(model);
 	}
 
 	/** agent-arena {@code openAiVoiceForProfile}: built-in names pass through, anything else hashes into the list. */
 	public static String voiceForProfile(String profile) {
+		return voiceForProfile(profile, VOICES);
+	}
+
+	private static String voiceForProfile(String profile, List<String> voices) {
 		if (profile == null || profile.isBlank()) throw new IllegalArgumentException("profile must not be blank");
-		if (VOICES.contains(profile)) return profile;
+		if (voices.contains(profile)) return profile;
 		try {
 			byte[] digest = MessageDigest.getInstance("SHA-256").digest(profile.getBytes(StandardCharsets.UTF_8));
 			long index = Integer.toUnsignedLong(ByteBuffer.wrap(digest, 0, 4).getInt());
-			return VOICES.get((int) (index % VOICES.size()));
+			return voices.get((int) (index % voices.size()));
 		} catch (NoSuchAlgorithmException impossible) {
 			throw new IllegalStateException(impossible);
 		}
@@ -75,8 +93,8 @@ public final class OpenAiTextToSpeech implements TextToSpeech {
 		JsonObject body = new JsonObject();
 		body.addProperty("model", model);
 		body.addProperty("input", text);
-		body.addProperty("voice", voiceForProfile(voice));
-		body.addProperty("instructions", TONES.get(tone));
+		body.addProperty("voice", voiceForProfile(voice, voicesFor(model)));
+		if (!isLegacyModel(model)) body.addProperty("instructions", TONES.get(tone));
 		body.addProperty("response_format", "pcm");
 		return OpenAiHttp.map(http.postJson("audio/speech", body.toString(), timeout, MAX_RESPONSE_BYTES,
 				SpeechException.Channel.TTS), OpenAiTextToSpeech::decode);

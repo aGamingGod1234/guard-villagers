@@ -98,6 +98,7 @@ dependencies {
 
 	// Optional Simple Voice Chat integration (com.guardvillagers.compat.voicechat only).
 	compileOnly "de.maxhenkel.voicechat:voicechat-api:2.6.20"
+	testImplementation "de.maxhenkel.voicechat:voicechat-api:2.6.20"
 	// voicechat-fabric 2.6.21+26.1.2 (Modrinth project 9eGKb6K1, version BvX8YEGO).
 	voicechatDevRuntime "maven.modrinth:9eGKb6K1:BvX8YEGO"
 

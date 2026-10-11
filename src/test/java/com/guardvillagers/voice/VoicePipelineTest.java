@@ -214,21 +214,103 @@ class VoicePipelineTest {
 	}
 
 	@Test
-	void cancellingDuringTheSpacingWaitSkipsTheRequest() throws Exception {
+	void cancellingDuringTheSpacingWaitSkipsTheRequest() {
 		FakeStt stt = new FakeStt();
-		// Real time for the spacing wait: a 200 ms minimum interval, so the second call waits.
-		AtomicLong realClock = new AtomicLong();
 		VoiceConfig config = VoiceConfig.parse("{\"rateLimits\": {\"sttMinIntervalMs\": 200}}");
-		VoiceRateLimiter limiter = new VoiceRateLimiter(config.rateLimits(), 6, System::currentTimeMillis);
-		VoicePipeline pipeline = new VoicePipeline(config, stt, null, limiter, serverTasks::add, realClock::get);
+		VoiceRateLimiter limiter = new VoiceRateLimiter(config.rateLimits(), 6, clock::get);
+		List<Runnable> delayed = new ArrayList<>();
+		VoicePipeline pipeline = new VoicePipeline(config, stt, null, limiter, serverTasks::add, clock::get,
+				(task, delay) -> delayed.add(task));
 		pipeline.setConsent(PLAYER, true);
 		pipeline.transcribe(PLAYER, new short[100], 0).join();
 		CompletableFuture<Void> waiting = pipeline.transcribe(PLAYER, new short[100], 0);
-		assertFalse(waiting.isDone(), "second utterance waits out the spacing");
+		assertEquals(1, delayed.size());
+		assertFalse(waiting.isDone());
 		waiting.cancel(true);
-		Thread.sleep(400);
+		clock.addAndGet(200);
+		delayed.getFirst().run();
 		assertEquals(1, stt.calls.get(), "a cancelled wait never reaches STT");
 		assertEquals(0, limiter.sttInFlight());
+	}
+
+	@Test
+	void queuedUtteranceGetsTheJustReleasedPermit() {
+		FakeStt stt = new FakeStt();
+		CompletableFuture<SpeechToText.Transcript> first = new CompletableFuture<>();
+		stt.next = first;
+		VoiceConfig config = VoiceConfig.parse("{\"rateLimits\":{\"sttGlobalInFlight\":1,\"sttMinIntervalMs\":0}}");
+		VoicePipeline pipeline = pipeline(config, stt, null);
+		CompletableFuture<Void> done = pipeline.transcribe(PLAYER, new short[100], 0);
+		done.thenRun(() -> pipeline.transcribe(PLAYER, new short[100], 0));
+		stt.next = CompletableFuture.completedFuture(new SpeechToText.Transcript("follow"));
+		first.complete(new SpeechToText.Transcript("hold"));
+		assertEquals(2, stt.calls.get());
+		assertEquals(0, pipeline.rateLimiter().sttInFlight());
+	}
+
+	@Test
+	void cancellationReleasesPermitBeforeStartingTheQueuedUtterance() {
+		FakeStt stt = new FakeStt();
+		CompletableFuture<SpeechToText.Transcript> first = new CompletableFuture<>();
+		stt.next = first;
+		VoicePipeline pipeline = pipeline(VoiceConfig.parse(
+				"{\"rateLimits\":{\"sttGlobalInFlight\":1,\"sttMinIntervalMs\":0}}"), stt, null);
+		CompletableFuture<Void> done = pipeline.transcribe(PLAYER, new short[100], 0);
+		done.whenComplete((ignored, failure) -> pipeline.transcribe(PLAYER, new short[100], 0));
+		stt.next = CompletableFuture.completedFuture(new SpeechToText.Transcript("follow"));
+		done.cancel(true);
+		assertTrue(first.isCancelled());
+		assertEquals(2, stt.calls.get());
+		assertEquals(0, pipeline.rateLimiter().sttInFlight());
+	}
+
+	@Test
+	void serverDefaultCannotSupplyPlayerConsent() {
+		FakeStt stt = new FakeStt();
+		VoicePipeline pipeline = pipeline(VoiceConfig.parse("{\"voiceInput\":{\"consentDefault\":true}}"), stt, null);
+		UUID stranger = new UUID(11, 11);
+		assertFalse(pipeline.isConsented(stranger));
+		pipeline.transcribe(stranger, new short[100], 0).join();
+		assertEquals(0, stt.calls.get());
+	}
+
+	@Test
+	void uploadWaitsForFreshAdmissionAndCancellationSkipsQueuedUpload() {
+		FakeStt stt = new FakeStt();
+		VoicePipeline pipeline = pipeline(VoiceConfig.defaults(), stt, null);
+		java.util.concurrent.atomic.AtomicBoolean eligible = new java.util.concurrent.atomic.AtomicBoolean(true);
+		pipeline.setCaptureAdmission(player -> eligible.get(), serverTasks::add);
+		CompletableFuture<Void> movedAway = pipeline.transcribe(PLAYER, new short[100], 0);
+		assertEquals(0, stt.calls.get());
+		eligible.set(false);
+		runServerTasks();
+		assertTrue(movedAway.isDone());
+		assertEquals(0, stt.calls.get(), "lost proximity or a private channel prevents upload");
+		eligible.set(true);
+		CompletableFuture<Void> switched = pipeline.transcribe(PLAYER, new short[100], 0);
+		switched.cancel(true);
+		runServerTasks();
+		assertEquals(0, stt.calls.get(), "channel-change cancellation also stops queued admission");
+	}
+
+	@Test
+	void delayedUploadRechecksConsentAndLiveEligibility() {
+		FakeStt stt = new FakeStt();
+		VoiceConfig config = VoiceConfig.parse("{\"rateLimits\":{\"sttMinIntervalMs\":200}}");
+		List<Runnable> delayed = new ArrayList<>();
+		VoicePipeline pipeline = new VoicePipeline(config, stt, null,
+				new VoiceRateLimiter(config.rateLimits(), 6, clock::get), serverTasks::add, clock::get,
+				(task, delay) -> delayed.add(task));
+		pipeline.setConsent(PLAYER, true);
+		pipeline.transcribe(PLAYER, new short[100], 0).join();
+		CompletableFuture<Void> waiting = pipeline.transcribe(PLAYER, new short[100], 0);
+		pipeline.setConsent(PLAYER, false);
+		clock.addAndGet(200);
+		delayed.getFirst().run();
+		assertTrue(waiting.isDone());
+		assertEquals(1, stt.calls.get());
+		runServerTasks();
+		assertTrue(transcripts.isEmpty());
 	}
 
 	private static final class NoopBridge implements VoiceBridge {

@@ -10,6 +10,7 @@ import de.maxhenkel.voicechat.api.VoicechatPlugin;
 import de.maxhenkel.voicechat.api.VoicechatServerApi;
 import de.maxhenkel.voicechat.api.VolumeCategory;
 import de.maxhenkel.voicechat.api.events.EventRegistration;
+import de.maxhenkel.voicechat.api.events.JoinGroupEvent;
 import de.maxhenkel.voicechat.api.events.MicrophonePacketEvent;
 import de.maxhenkel.voicechat.api.events.PlayerDisconnectedEvent;
 import de.maxhenkel.voicechat.api.events.VoicechatServerStartedEvent;
@@ -61,6 +62,13 @@ public final class GuardVoicechatPlugin implements VoicechatPlugin {
 		registration.registerEvent(VoicechatServerStartedEvent.class, event -> started(event.getVoicechat()));
 		registration.registerEvent(VoicechatServerStoppedEvent.class, event -> stopped());
 		registration.registerEvent(MicrophonePacketEvent.class, this::onMicrophonePacket);
+		registration.registerEvent(JoinGroupEvent.class, event -> {
+			SvcVoiceBridge current = bridge;
+			VoicechatConnection connection = event.getConnection();
+			if (current != null && connection != null && connection.getPlayer() != null) {
+				current.excludeChannel(connection.getPlayer().getUuid());
+			}
+		});
 		registration.registerEvent(PlayerDisconnectedEvent.class, event -> {
 			SvcVoiceBridge current = bridge;
 			if (current != null && event.getPlayerUuid() != null) current.cancelCapture(event.getPlayerUuid());
@@ -123,10 +131,12 @@ public final class GuardVoicechatPlugin implements VoicechatPlugin {
 			if (current == null || event.getPacket() == null) return;
 			VoicechatConnection sender = event.getSenderConnection();
 			if (sender == null || sender.getPlayer() == null) return;
+			UUID playerId = sender.getPlayer().getUuid();
+			if (playerId == null) return;
+			if (!current.admitChannel(playerId, sender, event.getPacket().isWhispering())) return;
+			if (!VoiceRuntime.mayCapture(playerId)) return;
 			byte[] opus = event.getPacket().getOpusEncodedData();
 			if (opus == null || opus.length == 0 || opus.length > MAX_OPUS_PACKET_BYTES) return;
-			UUID playerId = sender.getPlayer().getUuid();
-			if (playerId == null || !VoiceRuntime.mayCapture(playerId)) return;
 			VoicechatServerApi api = event.getVoicechat();
 			current.accept(playerId, opus.clone(), () -> decoder(api.createDecoder()));
 		} catch (RuntimeException exception) {
