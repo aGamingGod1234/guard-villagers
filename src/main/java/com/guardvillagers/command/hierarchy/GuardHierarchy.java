@@ -131,13 +131,18 @@ public final class GuardHierarchy {
 		}
 		GuardCommandState state = state(server);
 		GuardCommandState.OwnerCommand command = state.getOrCreate(owner);
+		boolean changed = reconcileCaptainPins(server, owner, command);
 		UUID previousCommanderId = command.commander();
 		GuardEntity previousCommander = find(guards, previousCommanderId);
 
 		GuardEntity commander = chooseCommander(server, owner, guards, command, previousCommander);
 		Map<Integer, UUID> captains = chooseCaptains(guards, command, commander);
 
-		boolean changed = false;
+		// Succession releases the old captain appointment so the successor is an eligible incumbent.
+		if (command.pinnedCaptains().contains(commander.getUUID())) {
+			command.unpinCaptain(commander.getUUID());
+			changed = true;
+		}
 		boolean commanderWasCaptain = commander.getRank() == GuardRank.CAPTAIN;
 		for (GuardEntity guard : guards) {
 			GuardRank wanted = guard == commander ? GuardRank.COMMANDER
@@ -213,27 +218,9 @@ public final class GuardHierarchy {
 		}
 		GuardCommandState state = state(server);
 		GuardCommandState.OwnerCommand command = state.getOrCreate(owner);
-		// One pinned captain per group: the new appointment replaces any other pin in the same group.
-		for (GuardEntity other : livingGuards(server, owner)) {
-			if (other != guard && other.getGroupIndex() == guard.getGroupIndex()) {
-				command.unpin(other.getUUID());
-			}
-		}
+		reconcileCaptainPins(server, owner, command);
 		command.unpin(guard.getUUID());
-		if (!command.pinCaptain(guard.getUUID())) {
-			// Full of pins, which means some belong to guards that are not loaded (loaded pins are one per group).
-			// Those go first so the appointment the player just made always takes.
-			Set<UUID> loaded = new java.util.HashSet<>();
-			for (GuardEntity other : livingGuards(server, owner)) {
-				loaded.add(other.getUUID());
-			}
-			for (UUID pinned : List.copyOf(command.pinnedCaptains())) {
-				if (!loaded.contains(pinned)) {
-					command.unpin(pinned);
-				}
-			}
-			command.pinCaptain(guard.getUUID());
-		}
+		command.pinCaptain(guard.getGroupIndex(), guard.getUUID());
 		state.setDirty();
 		elect(server, owner);
 		return AppointResult.APPOINTED;
@@ -271,6 +258,29 @@ public final class GuardHierarchy {
 
 	public static GuardCommandState state(MinecraftServer server) {
 		return server.getDataStorage().computeIfAbsent(GuardCommandState.TYPE);
+	}
+
+	/** Resolve legacy UUID-only pins, then revoke a pin when its guard leaves the appointed group. */
+	private static boolean reconcileCaptainPins(MinecraftServer server, UUID owner, GuardCommandState.OwnerCommand command) {
+		var ownership = server.getDataStorage().computeIfAbsent(com.guardvillagers.data.GuardOwnershipState.TYPE);
+		boolean changed = false;
+		for (UUID guard : List.copyOf(command.pinnedCaptains())) {
+			var entry = ownership.get(guard);
+			if (entry.isEmpty()) continue;
+			GuardEntity loaded = find(livingGuards(server, owner), guard);
+			int group = loaded == null ? entry.get().groupIndex() : loaded.getGroupIndex();
+			Integer appointed = command.pinnedCaptainByGroup().entrySet().stream()
+					.filter(pin -> pin.getValue().equals(guard)).map(Map.Entry::getKey).findFirst().orElse(null);
+			if (!entry.get().owner().equals(owner) || group < 0 || (appointed != null && appointed != group)) {
+				command.unpinCaptain(guard);
+				changed = true;
+			} else if (appointed == null) {
+				if (command.pinnedCaptainByGroup().containsKey(group)) command.unpinCaptain(guard);
+				else command.pinCaptain(group, guard);
+				changed = true;
+			}
+		}
+		return changed;
 	}
 
 	// ---- election rules ----

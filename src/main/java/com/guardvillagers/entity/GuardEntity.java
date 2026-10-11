@@ -2323,6 +2323,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 				this.ensureHireIdentity((ServerLevel) this.level());
 			}
 			GuardOwnershipIndex.track(this);
+			GuardHierarchy.requestElection(this.getOwnerUuid());
 		}
 	}
 

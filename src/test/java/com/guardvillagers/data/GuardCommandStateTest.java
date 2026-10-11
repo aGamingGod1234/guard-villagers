@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 
 final class GuardCommandStateTest {
 	@Test
-	void peekNeitherCreatesNorReordersRows() {
+	void capacityPreservesExplicitChoices() {
 		GuardCommandState state = new GuardCommandState();
 		UUID first = new UUID(1, 0);
 		assertNull(state.peek(first));
@@ -23,7 +23,8 @@ final class GuardCommandStateTest {
 		// Reading the oldest row must not refresh it: only writes count as use.
 		assertNotNull(state.peek(first));
 		state.getOrCreate(new UUID(2, 0)).setVoiceConsent(true);
-		assertNull(state.peek(first), "oldest written row is evicted even though it was just read");
+		assertEquals(java.util.Optional.of(true), state.peek(first).voiceConsent());
+		assertEquals(GuardCommandState.MAX_OWNERS + 1, state.trackedOwnerCount());
 	}
 
 	@Test
@@ -55,4 +56,40 @@ final class GuardCommandStateTest {
 		assertEquals(new GuardCommandState.RaidBehavior(GuardBehavior.PERIMETER, GuardBehavior.OFFENSIVE),
 				loaded.peek(owner).raidBehaviors().get(guard));
 	}
+	@Test
+	void voiceOptOutAndLongOrderNamesSurviveSaving() {
+		GuardCommandState state = new GuardCommandState();
+		UUID owner = new UUID(10, 0);
+		state.getOrCreate(owner).setVoiceConsent(false);
+		for (int i = 1; i <= GuardCommandState.MAX_OWNERS; i++) {
+			state.getOrCreate(new UUID(10, i)).setVoiceConsent(true);
+		}
+		String name = "Long Guard Name ".repeat(8).strip();
+		var book = new com.guardvillagers.command.order.OrderBook(() -> 0L);
+		book.issue(com.guardvillagers.command.order.Order.of(com.guardvillagers.command.order.Action.FOLLOW,
+				com.guardvillagers.command.order.Scope.guard(name)), com.guardvillagers.command.order.OrderSource.VOICE);
+		state.getOrCreate(owner).setOrders(book.active());
+		var nbt = GuardCommandState.CODEC.encodeStart(net.minecraft.nbt.NbtOps.INSTANCE, state).getOrThrow();
+		var loaded = GuardCommandState.CODEC.parse(net.minecraft.nbt.NbtOps.INSTANCE, nbt).getOrThrow();
+		assertEquals(java.util.Optional.of(false), loaded.peek(owner).voiceConsent());
+		assertEquals(name, loaded.peek(owner).orders().getFirst().order().scope().name());
+	}
+
+	@Test
+	void captainReplacementIsGroupSpecificAndPersistent() {
+		var command = new GuardCommandState.OwnerCommand();
+		UUID commander = UUID.randomUUID(), oldCaptain = UUID.randomUUID(), replacement = UUID.randomUUID();
+		command.setPinnedCommander(commander);
+		command.pinCaptain(0, oldCaptain);
+		command.pinCaptain(0, replacement);
+		var json = GuardCommandState.OwnerCommand.CODEC.encodeStart(JsonOps.INSTANCE, command).getOrThrow();
+		var loaded = GuardCommandState.OwnerCommand.CODEC.parse(JsonOps.INSTANCE, json).getOrThrow();
+		assertEquals(commander, loaded.pinnedCommander());
+		assertEquals(java.util.Set.of(replacement), loaded.pinnedCaptains());
+		assertEquals(java.util.Map.of(0, replacement), loaded.pinnedCaptainByGroup());
+		loaded.unpinCaptain(replacement);
+		assertEquals(commander, loaded.pinnedCommander());
+		assertEquals(java.util.Map.of(), loaded.pinnedCaptainByGroup());
+	}
+
 }
