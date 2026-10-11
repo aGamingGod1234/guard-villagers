@@ -6,7 +6,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -53,13 +52,9 @@ public final class GuardDiplomacyState extends SavedData {
 
 	private GuardDiplomacyState(Map<UUID, DiplomacyLists> entries) {
 		this.entries = new HashMap<>();
+		// Limits apply to new additions, never to relationships already saved by an older version.
 		for (Map.Entry<UUID, DiplomacyLists> entry : entries.entrySet()) {
-			if (this.entries.size() >= MAX_OWNERS) {
-				break;
-			}
 			DiplomacyLists lists = entry.getValue().copy();
-			trim(lists.whitelist());
-			trim(lists.blacklist());
 			if (!lists.isEmpty()) {
 				this.entries.put(entry.getKey(), lists);
 			}
@@ -140,19 +135,6 @@ public final class GuardDiplomacyState extends SavedData {
 		}
 		this.setDirty();
 		return Change.REMOVED;
-	}
-
-	private static void trim(Set<UUID> list) {
-		if (list.size() <= MAX_LIST_SIZE) {
-			return;
-		}
-		Iterator<UUID> iterator = list.iterator();
-		for (int i = 0; iterator.hasNext(); i++) {
-			iterator.next();
-			if (i >= MAX_LIST_SIZE) {
-				iterator.remove();
-			}
-		}
 	}
 
 	public boolean isBlacklisted(UUID owner, UUID target) {
