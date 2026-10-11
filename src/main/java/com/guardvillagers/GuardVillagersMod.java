@@ -135,6 +135,7 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	private static void registerPayloads() {
+		com.guardvillagers.tactics.GuardTacticsCommands.register();
 		PayloadTypeRegistry.clientboundPlay().register(GuardDebugSyncPayload.ID, GuardDebugSyncPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(GuardDebugDataPayload.ID, GuardDebugDataPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(GuardRosterSyncPayload.ID, GuardRosterSyncPayload.CODEC);
