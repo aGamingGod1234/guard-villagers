@@ -28,6 +28,11 @@ public final class GuardEngagementTracker {
 	 * guard's rank: how many other live engagers are closer to the target.
 	 */
 	public synchronized int report(UUID target, UUID guard, double distanceSq, long tick) {
+		return this.report(target, guard, distanceSq, true, tick);
+	}
+
+	/** General engagement counts include archers and held guards, but melee ranks only use eligible frontliners. */
+	public synchronized int report(UUID target, UUID guard, double distanceSq, boolean frontlineEligible, long tick) {
 		this.observe(tick);
 		this.maybeSweep(tick);
 		Map<UUID, Engagement> engagers = this.byTarget.get(target);
@@ -44,12 +49,13 @@ public final class GuardEngagementTracker {
 			engagers.put(guard, engagement);
 		}
 		engagement.distanceSq = distanceSq;
+		engagement.frontlineEligible = frontlineEligible;
 		engagement.tick = tick;
 
 		int rank = 0;
 		for (Map.Entry<UUID, Engagement> entry : engagers.entrySet()) {
 			Engagement other = entry.getValue();
-			if (entry.getKey().equals(guard) || tick - other.tick > this.entryTtlTicks) {
+			if (!other.frontlineEligible || entry.getKey().equals(guard) || tick - other.tick > this.entryTtlTicks) {
 				continue;
 			}
 			if (other.distanceSq < distanceSq
@@ -135,6 +141,7 @@ public final class GuardEngagementTracker {
 
 	private static final class Engagement {
 		private double distanceSq;
+		private boolean frontlineEligible;
 		private long tick;
 	}
 }

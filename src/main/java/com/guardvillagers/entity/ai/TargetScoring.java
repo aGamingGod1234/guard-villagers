@@ -4,7 +4,7 @@ package com.guardvillagers.entity.ai;
  * Pure target scoring used by {@link GuardAiController}. Kept free of Minecraft types so the
  * ordering rules can be unit tested.
  *
- * <p>Ordering rules the weights are chosen to satisfy:
+ * <p>Ordering rules enforced by category comparison, then weighted scoring:
  * <ul>
  * <li>An urgent (peel / close self-defense) candidate always wins.</li>
  * <li>An owner-directed alert (owner hit, owner attacked something, whistle order) beats any
@@ -58,6 +58,16 @@ public final class TargetScoring {
 		score -= distancePenalty(distanceSq);
 		score -= overcommitPenalty(otherEngaged);
 		return score;
+	}
+
+	/** Urgency and owner direction are priorities, independent of sticky/threat/distance weights. */
+	public static int compare(boolean urgent, boolean ownerDirected, int score,
+			boolean otherUrgent, boolean otherOwnerDirected, int otherScore) {
+		int category = Boolean.compare(urgent, otherUrgent);
+		if (category == 0) {
+			category = Boolean.compare(ownerDirected, otherOwnerDirected);
+		}
+		return category != 0 ? category : Integer.compare(score, otherScore);
 	}
 
 	public static int distancePenalty(double distanceSq) {

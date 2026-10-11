@@ -183,9 +183,26 @@ public final class GuardBowAttackGoal extends Goal {
 		} else if (distanceSq < this.attackRadiusSq * 0.25F) {
 			this.strafingBackwards = true;
 		}
-		// MoveControl.strafe refuses non-walkable steps on its own (vanilla isWalkable check).
-		this.guard.getMoveControl().strafe(this.strafingBackwards ? -0.5F : 0.5F, this.strafingClockwise ? 0.5F : -0.5F);
 		this.guard.lookAt(target, 30.0F, 30.0F);
+		this.strafeWithinZone(this.strafingBackwards ? -0.5F : 0.5F, this.strafingClockwise ? 0.5F : -0.5F);
+	}
+
+	private void strafeWithinZone(float forward, float sideways) {
+		float yaw = this.guard.getYRot() * Mth.DEG_TO_RAD;
+		Vec3 ahead = new Vec3(-Mth.sin(yaw), 0.0D, Mth.cos(yaw));
+		Vec3 right = new Vec3(Mth.cos(yaw), 0.0D, Mth.sin(yaw));
+		Vec3 step = ahead.scale(forward).add(right.scale(sideways)).normalize();
+		// Leave room to brake existing motion. Vanilla may replace a non-walkable strafe with
+		// forward movement, so that direction must also respect the boundary.
+		Vec3 origin = this.guard.position().add(this.guard.getDeltaMovement().multiply(3.0D, 0.0D, 3.0D));
+		if (this.guard.canTargetWithinZone(BlockPos.containing(origin.add(step)))
+				&& this.guard.canTargetWithinZone(BlockPos.containing(origin.add(ahead)))) {
+			this.guard.getMoveControl().strafe(forward, sideways);
+		} else {
+			this.guard.getMoveControl().setWait();
+			this.guard.setZza(0.0F);
+			this.guard.setXxa(0.0F);
+		}
 	}
 
 	/** Back away from a close target to a walkable spot inside the guard's zone. */
@@ -218,7 +235,7 @@ public final class GuardBowAttackGoal extends Goal {
 		Vec3 to = new Vec3(target.getX(), target.getY(0.5D), target.getZ());
 		AABB sweep = new AABB(from, to).inflate(0.5D);
 		for (Entity entity : world.getEntities(this.guard, sweep,
-				entity -> entity != target && entity instanceof LivingEntity && entity.isAlive())) {
+				entity -> entity != target && entity instanceof LivingEntity && entity.isAlive() && entity.canBeHitByProjectile())) {
 			boolean protectedEntity = this.guard.isAlly(entity) || entity instanceof Player;
 			if (protectedEntity && entity.getBoundingBox().inflate(0.3D).clip(from, to).isPresent()) {
 				return false;

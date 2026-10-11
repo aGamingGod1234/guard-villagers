@@ -1057,7 +1057,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		this.equipGuardGear(world, storedUpgrades.getWeaponLevel(), storedUpgrades);
 	}
 
-	private void equipGuardGear(ServerLevel world, int weaponLevel, GuardPlayerUpgrades upgrades) {
+	private void equipWeapon(ServerLevel world, int weaponLevel) {
 		if (this.getRole() == GuardRole.SWORDSMAN) {
 			Item sword = switch (weaponLevel) {
 				case 1 -> Items.IRON_SWORD;
@@ -1083,6 +1083,10 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 
 		this.setDropChance(EquipmentSlot.MAINHAND, 0.0F);
 		this.playerMainHand = false;
+	}
+
+	private void equipGuardGear(ServerLevel world, int weaponLevel, GuardPlayerUpgrades upgrades) {
+		this.equipWeapon(world, weaponLevel);
 		if (upgrades.hasShieldUpgrade()) {
 			this.setItemSlot(EquipmentSlot.OFFHAND, new ItemStack(Items.SHIELD));
 			this.setDropChance(EquipmentSlot.OFFHAND, 0.0F);
@@ -1114,8 +1118,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 
 	/**
 	 * Guards created without finalizeSpawn (structure placement, EntityType.create, game tests) had
-	 * no weapon or armor and fought bare-handed. Equip the role's default gear once if the main
-	 * hand is empty; never touches player-provided gear or the role/behavior.
+	 * no weapon and fought bare-handed. Fill only the missing weapon; existing armor, offhand
+	 * equipment, player-gear flags and drop chances must survive loading.
 	 */
 	private void ensureWeapon(ServerLevel world) {
 		if (!this.getMainHandItem().isEmpty() || this.playerMainHand) {
@@ -1127,7 +1131,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		if (upgrades == null) {
 			upgrades = new GuardPlayerUpgrades();
 		}
-		this.equipGuardGear(world, upgrades.getWeaponLevel(), upgrades);
+		this.equipWeapon(world, upgrades.getWeaponLevel());
 	}
 
 	private void storeLoadoutUpgrades(GuardPlayerUpgrades upgrades) {
@@ -1517,8 +1521,8 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		this.aiController.receiveAlliedAlert(target, alertTick);
 	}
 
-	public void receiveUrgentPeel(LivingEntity urgentThreat, ServerLevel world) {
-		this.aiController.receiveUrgentPeel(urgentThreat, world);
+	public boolean receiveUrgentPeel(LivingEntity urgentThreat, ServerLevel world) {
+		return this.aiController.receiveUrgentPeel(urgentThreat, world);
 	}
 
 	public int scoreTarget(LivingEntity target) {
@@ -2091,11 +2095,11 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 				guard -> guard != this && guard.isAlive() && this.isSameGroup(guard));
 
 		int groupSize = nearby.size() + 1;
-		int peeling = this.getUrgentTargetUuid() != null ? 1 : 0;
+		int peeling = this.aiController.hasAcceptedPeel(world) ? 1 : 0;
 		List<GuardEntity> peelCandidates = new ArrayList<>();
 		for (GuardEntity guard : nearby) {
 			guard.receiveAlliedAlert(attacker, now);
-			if (guard.getUrgentTargetUuid() != null) {
+			if (guard.aiController.hasAcceptedPeel(world)) {
 				peeling++;
 			} else if (guard.getMainTargetUuid() != null && !attacker.getUUID().equals(guard.getMainTargetUuid())) {
 				peelCandidates.add(guard);
@@ -2103,12 +2107,24 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		}
 
 		int toAssign = TargetScoring.peelCap(groupSize) - peeling;
+		// Allocate close self-defense from the same budget, before offering remaining slots to allies.
+		if (toAssign > 0 && !this.aiController.hasAcceptedPeel(world)
+				&& this.getMainTargetUuid() != null && !attacker.getUUID().equals(this.getMainTargetUuid())
+				&& this.distanceToSqr(attacker) <= TargetScoring.MELEE_ENGAGED_DISTANCE_SQUARED
+				&& this.receiveUrgentPeel(attacker, world)) {
+			toAssign--;
+		}
 		if (toAssign <= 0 || peelCandidates.isEmpty()) {
 			return;
 		}
 		peelCandidates.sort((a, b) -> Double.compare(a.distanceToSqr(attacker), b.distanceToSqr(attacker)));
-		for (int i = 0; i < peelCandidates.size() && i < toAssign; i++) {
-			peelCandidates.get(i).receiveUrgentPeel(attacker, world);
+		for (GuardEntity candidate : peelCandidates) {
+			if (toAssign <= 0) {
+				break;
+			}
+			if (candidate.receiveUrgentPeel(attacker, world)) {
+				toAssign--;
+			}
 		}
 	}
 

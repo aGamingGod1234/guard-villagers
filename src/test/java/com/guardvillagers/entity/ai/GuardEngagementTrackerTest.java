@@ -24,6 +24,21 @@ final class GuardEngagementTrackerTest {
 	}
 
 	@Test
+	void ineligibleEngagersDoNotConsumeFrontlineSlots() {
+		GuardEngagementTracker tracker = new GuardEngagementTracker(30, 64);
+		UUID mobile = new UUID(0L, 9L);
+		for (int i = 1; i <= 5; i++) {
+			tracker.report(TARGET, new UUID(0L, i), 4.0D, false, 0L);
+		}
+		assertEquals(0, tracker.report(TARGET, mobile, 12.25D, true, 0L));
+		assertEquals(5, tracker.count(TARGET, mobile, 0L));
+		tracker.report(TARGET, new UUID(0L, 1L), 1.0D, true, 1L);
+		assertEquals(1, tracker.report(TARGET, mobile, 12.25D, true, 1L));
+		tracker.report(TARGET, new UUID(0L, 1L), 4.0D, false, 2L);
+		assertEquals(0, tracker.report(TARGET, mobile, 12.25D, true, 2L));
+	}
+
+	@Test
 	void staleEngagementsExpire() {
 		GuardEngagementTracker tracker = new GuardEngagementTracker(30, 64);
 		tracker.report(TARGET, new UUID(0L, 1L), 1.0D, 0L);
