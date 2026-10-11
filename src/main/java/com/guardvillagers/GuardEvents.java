@@ -2,6 +2,7 @@ package com.guardvillagers;
 
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.ai.GuardAiController;
+import com.guardvillagers.entity.ai.GuardHuntManager;
 import com.guardvillagers.entity.ai.GuardMovementSlotResolver;
 import com.guardvillagers.navigation.SquadRouteCache;
 import com.guardvillagers.tactics.GuardTacticsMenus;
@@ -65,6 +66,7 @@ final class GuardEvents {
 		ServerTickEvents.END_SERVER_TICK.register(GuardTacticsMenus::tickOpenRosters);
 
 		ServerPlayerEvents.LEAVE.register(player -> {
+			GuardHuntManager.cancel(player.getUUID());
 			GuardDebugManager.forget(player.getUUID());
 			GuardTacticsMenus.forget(player.getUUID());
 		});
@@ -79,6 +81,7 @@ final class GuardEvents {
 			GuardBellRally.clearSessionState();
 			GuardEntity.clearSessionState();
 			GuardAiController.clearSessionState();
+			GuardHuntManager.clear();
 			GuardMovementSlotResolver.clearSessionState();
 			SquadRouteCache.clear();
 		});
@@ -86,6 +89,7 @@ final class GuardEvents {
 
 	private static void onLevelTick(ServerLevel world) {
 		try {
+			GuardHuntManager.tick(world);
 			GuardDebugManager.tick(world);
 			VillageManagerHandler.maintainVillageGuards(world);
 			if (world.dimension() == Level.OVERWORLD) {
@@ -116,12 +120,7 @@ final class GuardEvents {
 			return;
 		}
 		try {
-			long tick = owner.level().getGameTime();
-			for (GuardEntity guard : GuardOwnershipIndex.getOwnedGuards(owner.level().getServer(), owner.getUUID())) {
-				if (guard.isAlive() && !guard.isAlly(target) && isWithinAlertRange(guard, target)) {
-					guard.receiveOwnerAttackAlert(target, tick);
-				}
-			}
+			GuardHuntManager.punch(owner, target);
 		} catch (RuntimeException exception) {
 			GuardVillagersMod.LOGGER.error("Failed owner-attack alert for {}", owner.getName().getString(), exception);
 		}

@@ -15,6 +15,7 @@ import com.guardvillagers.command.hierarchy.GuardHierarchy;
 import com.guardvillagers.data.GuardDiplomacyState;
 import com.guardvillagers.data.GuardTacticsState;
 import com.guardvillagers.entity.GuardEntity;
+import com.guardvillagers.entity.ai.GuardHuntManager;
 import com.guardvillagers.network.GuardGroupResultPayload;
 import com.guardvillagers.shop.GuardShopScreenHandler;
 import com.guardvillagers.tactics.GuardTacticsMenus;
@@ -228,6 +229,7 @@ public final class GuardCommands {
 
 	private static int clearTargets(CommandSourceStack source) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
+		GuardHuntManager.cancel(player.getUUID());
 		List<GuardEntity> guards = ownedGuards(player);
 		for (GuardEntity guard : guards) {
 			guard.clearCombatTarget();

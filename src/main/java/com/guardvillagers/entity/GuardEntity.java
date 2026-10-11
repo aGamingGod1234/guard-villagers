@@ -8,6 +8,7 @@ import com.guardvillagers.GuardVillagersMod;
 import com.guardvillagers.command.hierarchy.GuardHierarchy;
 import com.guardvillagers.command.hierarchy.GuardRank;
 import com.guardvillagers.entity.ai.GuardAiController;
+import com.guardvillagers.entity.ai.GuardHuntManager;
 import com.guardvillagers.entity.ai.GuardAiIntent;
 import com.guardvillagers.entity.ai.GuardBehaviorExecutor;
 import com.guardvillagers.entity.ai.GuardMovementSlotResolver;
@@ -638,6 +639,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		this.holdOrigin = null;
 		this.staying = staying;
 		if (staying) {
+			GuardHuntManager.cancel(this.ownerUuid);
 			this.stayOrigin = this.blockPosition();
 			this.setFollowOverride(false);
 			this.clearCombatTarget();
@@ -764,6 +766,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	public void setHoldPosition(boolean hold) {
 		this.aiController.rallyTo(this.blockPosition(), 0);
 		if (hold) {
+			GuardHuntManager.cancel(this.ownerUuid);
 			this.staying = false;
 			this.stayOrigin = null;
 			this.followOverride = false;
@@ -850,6 +853,10 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 		String trimmed = skinProfileId.trim();
 		this.skinProfileId = trimmed.length() <= MAX_SKIN_PROFILE_LENGTH ? trimmed
 				: trimmed.substring(0, MAX_SKIN_PROFILE_LENGTH);
+	}
+
+	public boolean hasActiveHunt() {
+		return this.aiController.hasActiveHunt();
 	}
 
 	public void clearCombatTarget() {

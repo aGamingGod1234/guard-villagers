@@ -193,7 +193,7 @@ final class CommanderBrain {
 
 	private Control controlOf(GuardEntity guard, List<ActiveOrder> active, GuardEntity commander,
 			CommanderService.OwnerContext context) {
-		if (guard.isStaying() || guard.isHoldingPosition() || guard.isCombatSuspended()
+		if (guard.hasActiveHunt() || guard.isStaying() || guard.isHoldingPosition() || guard.isCombatSuspended()
 				|| CommanderService.isReporting(context, guard)) {
 			return Control.LOCKED;
 		}

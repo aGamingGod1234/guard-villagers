@@ -6,6 +6,7 @@ import com.guardvillagers.entity.FormationType;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.GuardRole;
+import com.guardvillagers.entity.ai.GuardHuntManager;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -134,6 +135,7 @@ public final class OrderExecutor {
 			targets.forEach(guard -> guard.setCommanderRecovery(false));
 		}
 		ServerPlayer speaker = context.speaker();
+		if (order.action() == Action.AS_YOU_WERE) GuardHuntManager.cancel(speaker.getUUID());
 		Optional<LivingEntity> resolvedTarget = Optional.empty();
 		boolean obeys = commanderIncluded;
 		String ack = ack(order.action(), "");

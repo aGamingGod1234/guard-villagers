@@ -94,6 +94,9 @@ public final class GuardAiController {
 
 	private GuardAiIntent currentIntent = GuardAiIntent.IDLE;
 	private GuardBehaviorExecutor behaviorExecutor = GuardBehaviorExecutor.NONE;
+	private GuardHuntManager.Hunt huntOrder;
+	private LivingEntity huntTarget;
+	private long huntPickTick = Long.MIN_VALUE / 2;
 	private UUID mainTargetUuid;
 	private UUID urgentTargetUuid;
 	private int combatCooldown;
@@ -394,10 +397,58 @@ public final class GuardAiController {
 		this.ingestAlert(attacker, AlertReason.DIRECT_DAMAGE, alertTick, true);
 	}
 
+	/** The commander must leave the entire live order alone, including gaps between kills. */
+	public boolean hasActiveHunt() {
+		return this.canAcceptOwnerAlert() && GuardHuntManager.get(this.guard) != null;
+	}
+
+	private void refreshHunt(long now) {
+		GuardHuntManager.Hunt order = this.canAcceptOwnerAlert() ? GuardHuntManager.get(this.guard) : null;
+		if (this.huntTarget != null && (order != this.huntOrder || !order.allows(this.huntTarget, this.guard)
+				|| !this.isTargetStillTrackable(this.huntTarget, true) || this.isSuppressed(this.huntTarget.getUUID(), now))) {
+			this.clearHuntTarget();
+		}
+		this.huntOrder = order;
+		if (order == null) return;
+		boolean betterOrder = this.alerts.stream().anyMatch(alert -> alert.expiresAt() > now
+				&& alert.reason().ownerDirected() && alert.reason().priority() > AlertReason.OWNER_ATTACK.priority());
+		if (betterOrder) {
+			this.clearHuntTarget();
+			return;
+		}
+		if (this.huntTarget != null || now - this.huntPickTick < SCAN_INTERVAL_TICKS) return;
+		this.huntPickTick = now;
+		double best = Double.MAX_VALUE;
+		for (LivingEntity target : order.targets()) {
+			if (!order.allows(target, this.guard) || !this.isTargetStillTrackable(target, true)
+					|| this.isSuppressed(target.getUUID(), now)) continue;
+			int engaged = ENGAGEMENTS.count(target.getUUID(), this.guard.getUUID(), now);
+			double score = engaged * 64.0D + this.guard.distanceTo(target);
+			if (score < best) { best = score; this.huntTarget = target; }
+		}
+	}
+
+	private void clearHuntTarget() {
+		if (this.huntTarget == null) return;
+		UUID id = this.huntTarget.getUUID();
+		boolean independent = this.alerts.stream().anyMatch(alert -> alert.targetUuid().equals(id)
+				&& alert.expiresAt() > this.currentWorldTime());
+		if (!independent && this.guard.getTarget() == this.huntTarget) {
+			this.guard.setTarget(null);
+			this.guard.getNavigation().stop();
+			this.resetCombatTracking();
+			this.releaseEngagement();
+		}
+		if (id.equals(this.mainTargetUuid)) this.mainTargetUuid = null;
+		this.huntTarget = null;
+	}
+
 	private LivingEntity selectTargets(ServerLevel world, long now) {
 		this.releaseCandidates();
+		this.refreshHunt(now);
 		LivingEntity currentTarget = this.guard.getTarget();
 		this.addCandidate(currentTarget, AlertReason.CURRENT_TARGET, now, true);
+		if (this.huntTarget != null) this.addCandidate(this.huntTarget, AlertReason.OWNER_ATTACK, now, false);
 		for (int i = 0; i < this.alerts.size(); i++) {
 			GuardAlert alert = this.alerts.get(i);
 			this.addCandidate(this.resolveEntity(world, alert.targetUuid()), alert.reason(), alert.alertTick(), false);
@@ -950,6 +1001,7 @@ public final class GuardAiController {
 	private void broadcastToAlliedGuards(ServerLevel world, LivingEntity target, long alertTick) {
 		// A scoped command is not evidence that every allied guard should attack the same entity.
 		// Sharing only independent threats prevents an order from returning through allied-alert echoes.
+		if (target == this.huntTarget) return;
 		if (!(target instanceof Enemy) && this.alerts.stream().noneMatch(alert -> alert.targetUuid().equals(target.getUUID())
 				&& alert.expiresAt() > alertTick && alert.reason() != AlertReason.DIRECTIVE_PRIORITY
 				&& alert.reason() != AlertReason.DIRECTIVE_PRIMARY && alert.reason() != AlertReason.ALLY_BROADCAST)) {
