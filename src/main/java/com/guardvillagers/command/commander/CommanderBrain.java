@@ -335,7 +335,8 @@ final class CommanderBrain {
 				continue;
 			}
 			for (GuardEntity guard : this.roster) {
-				if (OrderExecutor.covers(order.order().scope(), guard, commander) && !guard.isAlly(target.get())) {
+				if (context.book.effectiveFor(scope -> OrderExecutor.covers(scope, guard, commander))
+						.map(effective -> effective.id() == order.id()).orElse(false) && !guard.isAlly(target.get())) {
 					guard.setPriorityTarget(target.get());
 					busy.add(guard);
 				}

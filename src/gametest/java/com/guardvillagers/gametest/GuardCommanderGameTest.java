@@ -649,4 +649,107 @@ public class GuardCommanderGameTest {
 			helper.succeed();
 		});
 	}
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 60)
+	public void captainPinsPreserveCommanderAndStayWithTheirGroup(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		GuardEntity commander = owned(helper, owner, CENTER - 3.5, CENTER + 0.5, GuardRole.SWORDSMAN, 0);
+		GuardEntity alpha = owned(helper, owner, CENTER - 1.5, CENTER + 0.5, GuardRole.SWORDSMAN, 600);
+		GuardEntity beta = owned(helper, owner, CENTER + 2.5, CENTER + 0.5, GuardRole.SWORDSMAN, 0);
+		group(commander, 0, "Alpha");
+		group(alpha, 0, "Alpha");
+		group(beta, 1, "Beta");
+		var server = helper.getLevel().getServer();
+		GuardHierarchy.appointCommander(server, owner.getUUID(), commander);
+		GuardHierarchy.appointCaptain(server, owner.getUUID(), alpha);
+		GuardHierarchy.appointCaptain(server, owner.getUUID(), beta);
+		helper.assertTrue(commander.getRank() == GuardRank.COMMANDER, "captain appointment revoked commander pin");
+		group(alpha, 1, "Beta");
+		GuardHierarchy.elect(server, owner.getUUID());
+		helper.assertTrue(beta.getRank() == GuardRank.CAPTAIN, "moving captain stole destination group's appointment");
+		helper.assertFalse(GuardHierarchy.isPinned(server, owner.getUUID(), alpha.getUUID()), "old group pin survived move");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 60)
+	public void pinnedCaptainSuccessionRemainsStable(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		GuardEntity commander = owned(helper, owner, CENTER - 3.5, CENTER + 0.5, GuardRole.SWORDSMAN, 1000);
+		GuardEntity alpha = owned(helper, owner, CENTER - 1.5, CENTER + 0.5, GuardRole.SWORDSMAN, 600);
+		GuardEntity beta = owned(helper, owner, CENTER + 2.5, CENTER + 0.5, GuardRole.SWORDSMAN, 300);
+		owned(helper, owner, CENTER + 4.5, CENTER + 0.5, GuardRole.SWORDSMAN, 0);
+		group(alpha, 0, "Alpha");
+		group(beta, 1, "Beta");
+		var server = helper.getLevel().getServer();
+		GuardHierarchy.appointCommander(server, owner.getUUID(), commander);
+		GuardHierarchy.appointCaptain(server, owner.getUUID(), alpha);
+		GuardHierarchy.appointCaptain(server, owner.getUUID(), beta);
+		commander.kill(helper.getLevel());
+		GuardHierarchy.elect(server, owner.getUUID());
+		helper.assertTrue(alpha.getRank() == GuardRank.COMMANDER, "senior captain did not succeed");
+		for (int i = 0; i < 4; i++) GuardHierarchy.elect(server, owner.getUUID());
+		helper.assertTrue(alpha.getRank() == GuardRank.COMMANDER, "successor alternated with another pinned captain");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 60)
+	public void broaderOrderLeavesNarrowerHoldIntact(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		GuardEntity liam = owned(helper, owner, CENTER - 2.5, CENTER + 0.5, GuardRole.SWORDSMAN, 0);
+		GuardEntity ava = owned(helper, owner, CENTER + 2.5, CENTER + 0.5, GuardRole.SWORDSMAN, 600);
+		group(liam, 0, "Alpha");
+		group(ava, 0, "Alpha");
+		liam.setCustomName(net.minecraft.network.chat.Component.literal("Liam"));
+		CommanderService.hear(owner, "Liam hold", true);
+		CommanderService.hear(owner, "Alpha follow", true);
+		helper.assertTrue(liam.isHoldingPosition(), "broader follow cleared Liam's specific hold");
+		helper.assertTrue(ava.hasFollowOverride(), "broader follow did not reach the remaining guard");
+		helper.succeed();
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void delayedLanguageCannotReplaceNewerOrderOrMoveItsAnchor(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		ServerPlayer owner = GuardTestSupport.survivalPlayer(helper, CENTER + 0.5, 1, CENTER + 0.5);
+		GuardEntity guard = owned(helper, owner, CENTER - 2.5, CENTER + 0.5, GuardRole.SWORDSMAN, 0);
+		group(guard, 0, "Alpha");
+		var previous = CommanderService.interpreter();
+		var pending = new java.util.ArrayDeque<java.util.concurrent.CompletableFuture<String>>();
+		var llm = new com.guardvillagers.command.language.llm.LlmInterpreter(body -> {
+			var future = new java.util.concurrent.CompletableFuture<String>();
+			pending.add(future);
+			return future;
+		}, com.guardvillagers.command.language.llm.LlmConfig.defaults(), System::currentTimeMillis);
+		CommanderService.setInterpreter(new com.guardvillagers.command.language.OrderInterpreter(
+				new com.guardvillagers.command.language.GrammarInterpreter(), new com.guardvillagers.command.order.OrderValidator(),
+				java.util.Optional.of(llm)));
+		GuardTestSupport.onFinish(helper, () -> CommanderService.setInterpreter(previous));
+		CommanderService.hear(owner, "Alpha dig in", true);
+		helper.assertTrue(pending.size() == 1, "first request did not reach fake transport");
+		CommanderService.hear(owner, "Alpha follow", true);
+		pending.remove().complete(delayedOrder("hold"));
+		// No newer command supersedes this request: only its spatial context becomes invalid.
+		CommanderService.hear(owner, "Alpha establish a post", true);
+		helper.assertTrue(pending.size() == 1, "second request did not reach fake transport");
+		GuardTestSupport.moveTo(helper, owner, CENTER + 5.5, 1, CENTER + 0.5);
+		pending.remove().complete(delayedOrder("patrol_here"));
+		helper.runAfterDelay(2, () -> {
+			helper.assertFalse(guard.isHoldingPosition(), "older delayed hold replaced the newer follow");
+			helper.assertTrue(guard.hasFollowOverride(), "follow did not survive delayed results");
+			helper.assertTrue(guard.getHome().isEmpty(), "delayed patrol silently used the player's new location");
+			helper.succeed();
+		});
+	}
+
+	private static String delayedOrder(String action) {
+		var call = new com.google.gson.JsonObject();
+		call.addProperty("type", "function_call");
+		call.addProperty("name", "issue_orders");
+		call.addProperty("arguments", "{\"orders\":[{\"action\":\"" + action
+				+ "\",\"scope_kind\":\"group\",\"scope_name\":\"Alpha\",\"formation\":null,\"target\":null,\"radius\":null}],\"reply\":\"\"}");
+		return "{\"output\":[" + call + "]}";
+	}
+
 }
