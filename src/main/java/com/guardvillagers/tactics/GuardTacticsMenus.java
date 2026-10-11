@@ -29,8 +29,12 @@ public final class GuardTacticsMenus {
 	 */
 	private static final int MIN_OPEN_INTERVAL_TICKS = 10;
 	private static final int REFRESH_INTERVAL_TICKS = 20;
-	/** Content hash of the last roster sent to each player with the screen open. */
+	private static long nextSnapshot;
 	private static final Map<UUID, Integer> LAST_ROSTER_HASH = new ConcurrentHashMap<>();
+	private static final Map<UUID, Integer> LAST_SENT_TICK = new ConcurrentHashMap<>();
+	private static final Set<UUID> PENDING = ConcurrentHashMap.newKeySet();
+	/** Next periodic refresh, spread out for large rosters to bound serialization work. */
+	private static final Map<UUID, Integer> NEXT_ROSTER_TICK = new ConcurrentHashMap<>();
 	private static final Map<UUID, Integer> LAST_OPEN_TICK = new ConcurrentHashMap<>();
 
 	private GuardTacticsMenus() {
@@ -52,7 +56,7 @@ public final class GuardTacticsMenus {
 		}
 		LAST_OPEN_TICK.put(player.getUUID(), now);
 		try {
-			syncOwnedGuardRoster(player);
+			sendRoster(player, true);
 			player.openMenu(new SimpleMenuProvider(
 					(syncId, playerInventory, ignoredPlayer) -> new GuardTacticsScreenHandler(syncId, playerInventory, player),
 					Component.translatable(titleKey)));
@@ -70,46 +74,52 @@ public final class GuardTacticsMenus {
 
 	public static void forget(UUID playerId) {
 		LAST_OPEN_TICK.remove(playerId);
+		NEXT_ROSTER_TICK.remove(playerId);
+		PENDING.remove(playerId);
+		LAST_SENT_TICK.remove(playerId);
 		LAST_ROSTER_HASH.remove(playerId);
 	}
 
 	public static void clearSessionState() {
 		LAST_OPEN_TICK.clear();
+		NEXT_ROSTER_TICK.clear();
+		PENDING.clear();
+		LAST_SENT_TICK.clear();
 		LAST_ROSTER_HASH.clear();
 	}
 
-	/** Sends the roster now (screen open, after a group command). */
+	/** Coalesce command bursts into at most two snapshots per second per owner. */
 	public static void syncOwnedGuardRoster(ServerPlayer player) {
-		if (!ServerPlayNetworking.canSend(player, GuardRosterSyncPayload.ID)) {
-			return;
-		}
-		GuardRosterSyncPayload payload = buildRoster(player);
-		LAST_ROSTER_HASH.put(player.getUUID(), payload.contentHash());
-		ServerPlayNetworking.send(player, payload);
+		PENDING.add(player.getUUID());
 	}
 
-	/**
-	 * Once a second, re-sends the roster to players looking at the tactics/groups screen, only when what they would
-	 * see changed. Players who closed the screen are forgotten, so nothing is built for them.
-	 */
-	public static void tickOpenRosters(MinecraftServer server) {
-		if (server.getTickCount() % REFRESH_INTERVAL_TICKS != 0) {
-			return;
+	private static void sendRoster(ServerPlayer player, boolean force) {
+		if (!ServerPlayNetworking.canSend(player, GuardRosterSyncPayload.ID)) return;
+		GuardRosterSyncPayload roster = buildRoster(player);
+		// Large rosters are checked at most once per five seconds instead of hashing every second.
+		int interval = Math.max(REFRESH_INTERVAL_TICKS, Math.min(100, roster.guards().size() / 10));
+		NEXT_ROSTER_TICK.put(player.getUUID(), player.level().getServer().getTickCount() + interval);
+		int hash = roster.contentHash();
+		Integer previous = LAST_ROSTER_HASH.put(player.getUUID(), hash);
+		if (!force && previous != null && previous == hash) return;
+		for (GuardRosterSyncPayload packet : roster.chunks(player.registryAccess(), ++nextSnapshot)) {
+			ServerPlayNetworking.send(player, packet);
 		}
-		LAST_ROSTER_HASH.keySet().removeIf(id -> {
+		LAST_SENT_TICK.put(player.getUUID(), player.level().getServer().getTickCount());
+	}
+
+	public static void tickOpenRosters(MinecraftServer server) {
+		NEXT_ROSTER_TICK.keySet().removeIf(id -> {
 			ServerPlayer player = server.getPlayerList().getPlayer(id);
 			return player == null || !(player.containerMenu instanceof GuardTacticsScreenHandler);
 		});
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-			if (!(player.containerMenu instanceof GuardTacticsScreenHandler)
-					|| !ServerPlayNetworking.canSend(player, GuardRosterSyncPayload.ID)) {
-				continue;
-			}
-			GuardRosterSyncPayload payload = buildRoster(player);
-			int hash = payload.contentHash();
-			Integer previous = LAST_ROSTER_HASH.put(player.getUUID(), hash);
-			if (previous == null || previous != hash) {
-				ServerPlayNetworking.send(player, payload);
+			boolean requested = PENDING.contains(player.getUUID())
+					&& server.getTickCount() - LAST_SENT_TICK.getOrDefault(player.getUUID(), -MIN_OPEN_INTERVAL_TICKS) >= MIN_OPEN_INTERVAL_TICKS;
+			if (requested) PENDING.remove(player.getUUID());
+			if (requested || (player.containerMenu instanceof GuardTacticsScreenHandler
+					&& server.getTickCount() >= NEXT_ROSTER_TICK.getOrDefault(player.getUUID(), 0))) {
+				sendRoster(player, requested);
 			}
 		}
 	}
@@ -134,9 +144,6 @@ public final class GuardTacticsMenus {
 		List<GuardRosterSyncPayload.GuardSummary> guards = new ArrayList<>();
 		Set<UUID> loadedIds = new HashSet<>();
 		for (GuardEntity guard : ownedGuards) {
-			if (guards.size() >= GuardRosterSyncPayload.MAX_GUARDS) {
-				break;
-			}
 			loadedIds.add(guard.getUUID());
 			int groupIndex = guard.getGroupIndex();
 			double distance = guard.level() == player.level() ? Math.sqrt(guard.distanceToSqr(player)) : -1.0D;
@@ -150,11 +157,11 @@ public final class GuardTacticsMenus {
 					distance,
 					groupIndex,
 					groupName(groupNames, groupIndex, guard.getGroupName()),
-					guard.getMainHandItem(),
-					guard.getItemBySlot(EquipmentSlot.HEAD),
-					guard.getItemBySlot(EquipmentSlot.CHEST),
-					guard.getItemBySlot(EquipmentSlot.LEGS),
-					guard.getItemBySlot(EquipmentSlot.FEET),
+					distance >= 0 && distance <= 64 ? guard.getMainHandItem() : net.minecraft.world.item.ItemStack.EMPTY,
+					distance >= 0 && distance <= 64 ? guard.getItemBySlot(EquipmentSlot.HEAD) : net.minecraft.world.item.ItemStack.EMPTY,
+					distance >= 0 && distance <= 64 ? guard.getItemBySlot(EquipmentSlot.CHEST) : net.minecraft.world.item.ItemStack.EMPTY,
+					distance >= 0 && distance <= 64 ? guard.getItemBySlot(EquipmentSlot.LEGS) : net.minecraft.world.item.ItemStack.EMPTY,
+					distance >= 0 && distance <= 64 ? guard.getItemBySlot(EquipmentSlot.FEET) : net.minecraft.world.item.ItemStack.EMPTY,
 					true,
 					guard.getBehavior().name(),
 					guard.getFormationType().name(),
@@ -166,9 +173,6 @@ public final class GuardTacticsMenus {
 					guard.getRank().id()));
 		}
 		for (GuardOwnershipIndex.UnloadedGuard unloaded : GuardOwnershipIndex.getUnloadedOwnedGuards(server, player.getUUID(), loadedIds)) {
-			if (guards.size() >= GuardRosterSyncPayload.MAX_GUARDS) {
-				break;
-			}
 			guards.add(GuardRosterSyncPayload.GuardSummary.unloaded(unloaded.guardId(), unloaded.name(), unloaded.groupIndex(),
 					groupName(groupNames, unloaded.groupIndex(), "")));
 		}

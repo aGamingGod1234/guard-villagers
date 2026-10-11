@@ -15,17 +15,20 @@ import net.minecraft.world.item.ItemStack;
  * Server -> client snapshot of the player's group names and owned guards, loaded ones first, then guards in unloaded
  * chunks (from the persistent ownership index, {@code loaded == false}, with only their last known name and group).
  */
-public record GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary> guards) implements CustomPacketPayload {
+public record GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary> guards, long snapshotId, int offset, boolean last) implements CustomPacketPayload {
 	public static final int MAX_GROUPS = 64;
+	/** Per-packet count, not an ownership or roster limit. */
 	public static final int MAX_GUARDS = 1_024;
+	/** Leave ample room below vanilla's 1 MiB clientbound custom payload limit. */
+	public static final int MAX_PACKET_BYTES = 512 * 1024;
 	public static final int MAX_GROUP_NAME_LENGTH = 24;
 	public static final int MAX_GUARD_NAME_LENGTH = 64;
 	public static final int MAX_ENUM_NAME_LENGTH = 32;
 	private static final int WIRE_MAX_GROUPS = 256;
 	private static final int WIRE_MAX_GUARDS = MAX_GUARDS;
 
-	/** v3 added the per-guard state fields, v4 the rank; the id changes so an older peer never decodes newer bytes. */
-	public static final Type<GuardRosterSyncPayload> ID = new Type<>(Identifier.fromNamespaceAndPath(GuardVillagersMod.MOD_ID, "guard_roster_sync_v4"));
+	/** v5 adds chunk identity, offset and completion; the id changes so an older peer never decodes newer bytes. */
+	public static final Type<GuardRosterSyncPayload> ID = new Type<>(Identifier.fromNamespaceAndPath(GuardVillagersMod.MOD_ID, "guard_roster_sync_v5"));
 	public static final StreamCodec<RegistryFriendlyByteBuf, GuardRosterSyncPayload> CODEC = CustomPacketPayload.codec(
 			GuardRosterSyncPayload::write,
 			GuardRosterSyncPayload::new);
@@ -36,14 +39,57 @@ public record GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary>
 			trimmedGroups.add(trim(groupNames.get(i), MAX_GROUP_NAME_LENGTH));
 		}
 		groupNames = List.copyOf(trimmedGroups);
-		guards = List.copyOf(guards.subList(0, Math.min(MAX_GUARDS, guards.size())));
+		guards = List.copyOf(guards);
+		if (offset < 0) throw new IllegalArgumentException("Negative roster offset");
+	}
+
+	public GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary> guards) {
+		this(groupNames, guards, 0L, 0, true);
+	}
+
+	/** Exact encoded byte accounting includes arbitrary enchanted/custom equipment components. */
+	public List<GuardRosterSyncPayload> chunks(net.minecraft.core.RegistryAccess registries, long id) {
+		List<GuardRosterSyncPayload> packets = new ArrayList<>();
+		RegistryFriendlyByteBuf scratch = new RegistryFriendlyByteBuf(io.netty.buffer.Unpooled.buffer(), registries);
+		try {
+			new GuardRosterSyncPayload(this.groupNames, List.of()).write(scratch);
+			int overhead = scratch.readableBytes() + 5; // offset varint can grow
+			int bytes = overhead;
+			int start = 0;
+			List<GuardSummary> page = new ArrayList<>();
+			for (GuardSummary original : this.guards) {
+				GuardSummary row = original;
+				scratch.clear();
+				row.write(scratch);
+				if (scratch.readableBytes() + overhead > MAX_PACKET_BYTES) {
+					// A single item can carry huge custom components. Retain the guard, omit its gear preview.
+					row = row.withoutEquipment();
+					scratch.clear();
+					row.write(scratch);
+				}
+				int size = scratch.readableBytes();
+				if (!page.isEmpty() && (bytes + size > MAX_PACKET_BYTES || page.size() == MAX_GUARDS)) {
+					packets.add(new GuardRosterSyncPayload(this.groupNames, page, id, start, false));
+					start += page.size();
+					page = new ArrayList<>();
+					bytes = overhead;
+				}
+				page.add(row);
+				bytes += size;
+			}
+			packets.add(new GuardRosterSyncPayload(this.groupNames, page, id, start, true));
+			return List.copyOf(packets);
+		} finally {
+			scratch.release();
+		}
 	}
 
 	private GuardRosterSyncPayload(RegistryFriendlyByteBuf buf) {
-		this(readGroupNames(buf), readGuardSummaries(buf));
+		this(readGroupNames(buf), readGuardSummaries(buf), buf.readLong(), buf.readVarInt(), buf.readBoolean());
 	}
 
 	private void write(RegistryFriendlyByteBuf buf) {
+		if (this.guards.size() > MAX_GUARDS) throw new IllegalArgumentException("Split roster before encoding");
 		buf.writeInt(this.groupNames.size());
 		for (String groupName : this.groupNames) {
 			buf.writeUtf(groupName, MAX_GROUP_NAME_LENGTH);
@@ -52,6 +98,9 @@ public record GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary>
 		for (GuardSummary guard : this.guards) {
 			guard.write(buf);
 		}
+		buf.writeLong(this.snapshotId);
+		buf.writeVarInt(this.offset);
+		buf.writeBoolean(this.last);
 	}
 
 	private static List<String> readGroupNames(RegistryFriendlyByteBuf buf) {
@@ -151,6 +200,12 @@ public record GuardRosterSyncPayload(List<String> groupNames, List<GuardSummary>
 			chest = chest.copy();
 			legs = legs.copy();
 			boots = boots.copy();
+		}
+
+		public GuardSummary withoutEquipment() {
+			return new GuardSummary(guardUuid, displayName, level, health, maxHealth, experience, distance,
+					groupIndex, groupName, ItemStack.EMPTY, ItemStack.EMPTY, ItemStack.EMPTY, ItemStack.EMPTY,
+					ItemStack.EMPTY, loaded, behavior, formation, role, staying, following, holding, hasHome, rank);
 		}
 
 		/** Hash of everything the client renders; ItemStack has identity equality, so stacks hash item + components + count. */
