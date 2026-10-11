@@ -1,6 +1,14 @@
 package com.guardvillagers.gametest.perf;
 
 import com.guardvillagers.GuardVillagersMod;
+import com.mojang.authlib.GameProfile;
+import io.netty.channel.embedded.EmbeddedChannel;
+import net.minecraft.network.Connection;
+import net.minecraft.network.protocol.PacketFlow;
+import net.minecraft.network.protocol.game.ServerboundPlayerLoadedPacket;
+import net.minecraft.server.network.CommonListenerCookie;
+import net.minecraft.world.level.GameType;
+import java.util.UUID;
 import com.guardvillagers.entity.GuardBehavior;
 import com.guardvillagers.entity.GuardEntity;
 import java.io.IOException;
@@ -40,7 +48,7 @@ final class PerfRunner {
 	private static final Logger LOGGER = LoggerFactory.getLogger("GuardPerf");
 
 	private static final int ARENA_MIN = 12;
-	private static final int ARENA_SIZE = 48;
+	private static final int ARENA_SIZE = 80;
 	private static final int ARENA_MAX = ARENA_MIN + ARENA_SIZE - 1;
 	private static final double CENTER = ARENA_MIN + ARENA_SIZE / 2.0;
 	private static final int IDLE_VILLAGERS = 16;
@@ -55,7 +63,7 @@ final class PerfRunner {
 	private static PerfRunner active;
 	private static boolean listenersRegistered;
 
-	enum Kind { EMPTY, VILLAGERS, HUSKS, IDLE, FOLLOW, COMBAT, PATROL }
+	enum Kind { EMPTY, VILLAGERS, HUSKS, VANILLA_COMBAT, IDLE, FOLLOW, COMBAT, PATROL, COMMANDER, MIXED }
 
 	record Phase(String name, Kind kind, int n, int warmup, int measure, boolean recorded) {
 	}
@@ -86,6 +94,8 @@ final class PerfRunner {
 	private final List<Entity> others = new ArrayList<>();
 	private Random random;
 	private ServerPlayer player;
+	private final List<ServerPlayer> owners = new ArrayList<>();
+	private int nextGuard;
 	private double followAngle;
 	private int phaseIndex = -1;
 	private int tickInPhase;
@@ -133,7 +143,7 @@ final class PerfRunner {
 	private static List<Phase> buildPhases() {
 		int warmup = Integer.getInteger("guardvillagers.perf.warmup", 100);
 		int measure = Integer.getInteger("guardvillagers.perf.measure", 600);
-		int[] sizes = Arrays.stream(System.getProperty("guardvillagers.perf.sizes", "16,64,128").split(","))
+		int[] sizes = Arrays.stream(System.getProperty("guardvillagers.perf.sizes", "16,64,128,256,512").split(","))
 				.map(String::trim).mapToInt(Integer::parseInt).toArray();
 		String only = System.getProperty("guardvillagers.perf.only", "");
 		List<String> filters = only.isBlank() ? List.of() : Arrays.stream(only.split(",")).map(String::trim).toList();
@@ -141,7 +151,7 @@ final class PerfRunner {
 		List<Phase> all = new ArrayList<>();
 		// Unrecorded JIT warmup: run every scenario kind once so no measured phase pays for compilation.
 		int jitWarmup = Integer.getInteger("guardvillagers.perf.jitwarmup", 200);
-		for (Kind kind : List.of(Kind.VILLAGERS, Kind.HUSKS, Kind.IDLE, Kind.FOLLOW, Kind.COMBAT, Kind.PATROL)) {
+		for (Kind kind : List.of(Kind.VILLAGERS, Kind.HUSKS, Kind.IDLE, Kind.FOLLOW, Kind.COMBAT, Kind.PATROL, Kind.COMMANDER, Kind.MIXED)) {
 			all.add(new Phase("jit_warmup_" + kind.name().toLowerCase(Locale.ROOT), kind, 64, 0, jitWarmup, false));
 		}
 		all.add(new Phase("empty", Kind.EMPTY, 0, warmup, measure, true));
@@ -151,6 +161,9 @@ final class PerfRunner {
 				all.add(new Phase("villagers_" + n, Kind.VILLAGERS, n, warmup, measure, true));
 			}
 			all.add(new Phase("husks_" + (n / 2), Kind.HUSKS, n / 2, warmup, measure, true));
+			all.add(new Phase("vanilla_combat_" + n, Kind.VANILLA_COMBAT, n, warmup, measure, true));
+			all.add(new Phase("commander_" + n, Kind.COMMANDER, n, warmup, measure, true));
+			all.add(new Phase("mixed_" + n, Kind.MIXED, n, warmup, measure, true));
 			all.add(new Phase("idle_" + n, Kind.IDLE, n, warmup, measure, true));
 			all.add(new Phase("follow_" + n, Kind.FOLLOW, n, warmup, measure, true));
 			all.add(new Phase("combat_" + n, Kind.COMBAT, n, warmup, measure, true));
@@ -160,7 +173,7 @@ final class PerfRunner {
 			return all;
 		}
 		return all.stream()
-				.filter(p -> !p.recorded() || p.kind() == Kind.EMPTY || filters.stream().anyMatch(f -> p.name().startsWith(f)))
+				.filter(p -> !p.recorded() || p.kind() == Kind.EMPTY || p.kind() == Kind.VILLAGERS || p.kind() == Kind.VANILLA_COMBAT || p.kind() == Kind.HUSKS || filters.stream().anyMatch(f -> p.name().startsWith(f)))
 				.toList();
 	}
 
@@ -215,6 +228,7 @@ final class PerfRunner {
 		this.tickNanos = new long[phase.measure()];
 		this.allocBytes = new long[phase.measure()];
 		this.huskRespawns = 0;
+		this.nextGuard = 0;
 		this.guardRespawns = 0;
 		this.random = new Random(phase.name().hashCode());
 		LOGGER.info("[perf] phase {} ({} ticks warmup, {} measured)", phase.name(), phase.warmup(), phase.measure());
@@ -244,7 +258,7 @@ final class PerfRunner {
 				}
 			}
 			case FOLLOW -> {
-				this.player = this.helper.makeMockServerPlayerInLevel();
+				this.player = this.makeOwner(0);
 				this.followAngle = 0;
 				this.movePlayer();
 				for (int i = 0; i < phase.n(); i++) {
@@ -253,9 +267,13 @@ final class PerfRunner {
 					this.guards.add(guard);
 				}
 			}
-			case COMBAT -> {
+			case COMBAT, COMMANDER, MIXED, VANILLA_COMBAT -> {
+				if (phase.kind() == Kind.COMMANDER || phase.kind() == Kind.MIXED) {
+					int count = phase.kind() == Kind.MIXED ? 4 : 1;
+					for (int i = 0; i < count; i++) this.makeOwner(i);
+				}
 				for (int i = 0; i < phase.n(); i++) {
-					this.guards.add(this.spawnGuard(this.randomNear(CENTER, CENTER, 8), GuardBehavior.DEFENSIVE));
+					this.guards.add(this.spawnCombatant(phase));
 				}
 				for (int i = 0; i < phase.n() / 2; i++) {
 					this.husks.add(this.helper.spawn(EntityType.HUSK, this.randomEdgePos()));
@@ -276,11 +294,11 @@ final class PerfRunner {
 	private void maintain(Phase phase) {
 		switch (phase.kind()) {
 			case FOLLOW -> this.movePlayer();
-			case COMBAT -> {
+			case COMBAT, COMMANDER, MIXED, VANILLA_COMBAT -> {
 				// Keep the fight going at a constant size so every measured tick sees the same load.
 				this.huskRespawns += this.topUp(this.husks, phase.n() / 2, () -> this.helper.spawn(EntityType.HUSK, this.randomEdgePos()));
 				this.guardRespawns += this.topUp(this.guards, phase.n(),
-						() -> this.spawnGuard(this.randomNear(CENTER, CENTER, 8), GuardBehavior.DEFENSIVE));
+						() -> this.spawnCombatant(phase));
 			}
 			default -> {
 			}
@@ -326,6 +344,36 @@ final class PerfRunner {
 		return guard;
 	}
 
+	private ServerPlayer makeOwner(int index) {
+		var server = this.level.getServer();
+		GameProfile profile = new GameProfile(new UUID(0x50455246L, index + 1), "perf" + index);
+		CommonListenerCookie cookie = CommonListenerCookie.createInitial(profile, false);
+		ServerPlayer owner = new ServerPlayer(server, this.level, profile, cookie.clientInformation());
+		Connection connection = new Connection(PacketFlow.SERVERBOUND);
+		new EmbeddedChannel(connection);
+		server.getPlayerList().placeNewPlayer(connection, owner, cookie);
+		owner.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
+		owner.setGameMode(GameType.CREATIVE);
+		Vec3 pos = this.helper.absoluteVec(new Vec3(CENTER + index * 3, 1, CENTER));
+		owner.snapTo(pos.x, pos.y, pos.z, 0, 0);
+		this.owners.add(owner);
+		return owner;
+	}
+
+	private Entity spawnCombatant(Phase phase) {
+		Vec3 pos = this.randomNear(CENTER, CENTER, 12);
+		if (phase.kind() == Kind.VANILLA_COMBAT) return this.helper.spawn(EntityType.VILLAGER, pos);
+		GuardEntity guard = this.spawnGuard(pos, GuardBehavior.DEFENSIVE);
+		if (!this.owners.isEmpty()) {
+			int index = this.nextGuard++;
+			guard.setOwnerUuid(this.owners.get(index % this.owners.size()).getUUID());
+			guard.setGroupIndex((index / this.owners.size()) % 4);
+			guard.setGroupName("Group " + guard.getGroupIndex());
+			guard.setExperience(index == 0 ? 1000 : index % 300);
+		}
+		return guard;
+	}
+
 	private void movePlayer() {
 		this.followAngle += FOLLOW_SPEED / FOLLOW_RADIUS;
 		Vec3 rel = new Vec3(CENTER + Math.cos(this.followAngle) * FOLLOW_RADIUS, 1, CENTER + Math.sin(this.followAngle) * FOLLOW_RADIUS);
@@ -349,9 +397,9 @@ final class PerfRunner {
 	}
 
 	private Vec3 randomEdgePos() {
-		double along = ARENA_MIN + 2 + this.random.nextDouble() * (ARENA_SIZE - 4);
-		double near = ARENA_MIN + 2;
-		double far = ARENA_MAX - 1;
+		double along = CENTER - 22 + this.random.nextDouble() * 44;
+		double near = CENTER - 22;
+		double far = CENTER + 22;
 		return switch (this.random.nextInt(4)) {
 			case 0 -> new Vec3(along, 1, near);
 			case 1 -> new Vec3(along, 1, far);
@@ -409,10 +457,9 @@ final class PerfRunner {
 		for (Entity entity : this.level.getEntities((Entity) null, this.arenaBox(), e -> !(e instanceof Player))) {
 			entity.discard();
 		}
-		if (this.player != null) {
-			this.level.getServer().getPlayerList().remove(this.player);
-			this.player = null;
-		}
+		for (ServerPlayer owner : this.owners) this.level.getServer().getPlayerList().remove(owner);
+		this.owners.clear();
+		this.player = null;
 	}
 
 	// ---- reporting ----
@@ -430,8 +477,8 @@ final class PerfRunner {
 		for (Result r : this.results) {
 			Phase p = r.phase();
 			String baselineName = switch (p.kind()) {
-				case IDLE -> "villagers_" + IDLE_VILLAGERS;
-				case COMBAT -> "husks_" + (p.n() / 2);
+				case IDLE, FOLLOW, PATROL -> "villagers_" + p.n();
+				case COMBAT, COMMANDER, MIXED -> "vanilla_combat_" + p.n();
 				case EMPTY -> "";
 				default -> "empty";
 			};
@@ -441,8 +488,8 @@ final class PerfRunner {
 			}
 			double deltaMean = base == null ? 0 : r.meanMs() - base.meanMs();
 			double deltaP95 = base == null ? 0 : r.pctMs(0.95) - base.pctMs(0.95);
-			boolean guardScenario = p.kind() == Kind.IDLE || p.kind() == Kind.FOLLOW || p.kind() == Kind.COMBAT || p.kind() == Kind.PATROL;
-			String perGuard = guardScenario && p.n() > 0 ? String.format(Locale.ROOT, "%.1f", deltaMean * 1000.0 / p.n()) : "";
+			boolean guardScenario = p.kind() == Kind.IDLE || p.kind() == Kind.FOLLOW || p.kind() == Kind.COMBAT || p.kind() == Kind.PATROL || p.kind() == Kind.COMMANDER || p.kind() == Kind.MIXED;
+			String perGuard = guardScenario && p.n() > 0 ? String.format(Locale.ROOT, "%.1f", (r.meanMs() - empty.meanMs()) * 1000.0 / p.n()) : "";
 			md.append(String.format(Locale.ROOT, "| %s | %d | %.3f | %.3f | %.3f | %.3f | %.1f | %s | %s | %s | %s |\n",
 					p.name(), p.n(), r.meanMs(), r.pctMs(0.5), r.pctMs(0.95), r.pctMs(0.99), r.allocKbPerTick(),
 					base == null ? "-" : baselineName,

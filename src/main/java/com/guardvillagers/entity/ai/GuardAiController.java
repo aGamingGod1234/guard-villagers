@@ -6,6 +6,10 @@ import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.entity.goal.GuardMeleeAttackGoal;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.EnumMap;
+import java.util.function.Predicate;
+import net.minecraft.world.level.entity.EntityTypeTest;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -78,6 +82,11 @@ public final class GuardAiController {
 
 	private final GuardEntity guard;
 	private final List<GuardAlert> alerts = new ArrayList<>();
+	private final Map<AlertReason, Map<UUID, GuardAlert>> alertsByReason = new EnumMap<>(AlertReason.class);
+	private final Map<LivingEntity, TargetAccumulator> candidatesByEntity = new IdentityHashMap<>();
+	private final List<LivingEntity> hostileScanBuffer = new ArrayList<>();
+	private final List<Raider> raidScanBuffer = new ArrayList<>();
+	private final List<GuardEntity> broadcastBuffer = new ArrayList<>();
 	private final Map<UUID, Long> suppressedTargets = new HashMap<>();
 	private final List<TargetAccumulator> candidates = new ArrayList<>();
 	private final List<TargetAccumulator> accumulatorPool = new ArrayList<>();
@@ -300,6 +309,7 @@ public final class GuardAiController {
 
 	public void clearCombatTarget() {
 		this.alerts.clear();
+		this.alertsByReason.clear();
 		this.suppressedTargets.clear();
 		this.scannedHostiles.clear();
 		this.scannedRaidTarget = null;
@@ -317,7 +327,7 @@ public final class GuardAiController {
 		if (target == null) {
 			return;
 		}
-		this.alerts.removeIf(alert -> alert.targetUuid().equals(target) && alert.reason() == AlertReason.DIRECTIVE_PRIORITY);
+		this.removeAlerts(alert -> alert.targetUuid().equals(target) && alert.reason() == AlertReason.DIRECTIVE_PRIORITY);
 		boolean independentlyTracked = this.alerts.stream().anyMatch(alert -> alert.targetUuid().equals(target)
 				&& alert.expiresAt() > this.currentWorldTime());
 		if (!independentlyTracked) {
@@ -608,7 +618,7 @@ public final class GuardAiController {
 			GuardAlert alert = this.alerts.get(i);
 			if (alert.expiresAt() <= now
 					|| !this.isTargetStillTrackable(this.resolveEntity(world, alert.targetUuid()), alert.reason().ownerDirected())) {
-				this.alerts.remove(i);
+				this.removeAlert(i);
 			}
 		}
 
@@ -652,10 +662,12 @@ public final class GuardAiController {
 		Raid raid = world.getRaidAt(this.guard.blockPosition());
 		this.cachedRaid = raid != null && raid.isActive() ? raid : null;
 		if (this.cachedRaid != null) {
-			List<Raider> raiders = world.getEntitiesOfClass(
-					Raider.class,
+			List<Raider> raiders = this.raidScanBuffer;
+			raiders.clear();
+			world.getEntities(
+					EntityTypeTest.forClass(Raider.class),
 					this.guard.getBoundingBox().inflate(RAID_SCAN_RANGE),
-					entity -> this.isTargetStillTrackable(entity, false) && !this.isSuppressed(entity.getUUID(), now));
+					entity -> this.isTargetStillTrackable(entity, false) && !this.isSuppressed(entity.getUUID(), now), raiders);
 			raiders.sort((a, b) -> Double.compare(this.guard.distanceToSqr(a), this.guard.distanceToSqr(b)));
 			for (int checks = 0; checks < Math.min(MAX_SCAN_SIGHT_CHECKS, raiders.size()); checks++) {
 				this.raidScanCursor = Math.floorMod(this.raidScanCursor, raiders.size());
@@ -667,13 +679,15 @@ public final class GuardAiController {
 			}
 		}
 
-		List<LivingEntity> hostiles = world.getEntitiesOfClass(
-				LivingEntity.class,
+		List<LivingEntity> hostiles = this.hostileScanBuffer;
+		hostiles.clear();
+		world.getEntities(
+				EntityTypeTest.forClass(LivingEntity.class),
 				this.guard.getBoundingBox().inflate(HOSTILE_SCAN_RANGE),
 				entity -> (entity instanceof Monster
 						|| (!this.guard.hasOwner() && entity instanceof Player
 								&& GuardReputationManager.shouldGuardsTurnHostile(world, entity.getUUID(), this.guard.blockPosition())))
-						&& this.isTargetStillTrackable(entity, false) && !this.isSuppressed(entity.getUUID(), now));
+						&& this.isTargetStillTrackable(entity, false) && !this.isSuppressed(entity.getUUID(), now), hostiles);
 		if (hostiles.isEmpty()) {
 			return;
 		}
@@ -772,7 +786,7 @@ public final class GuardAiController {
 			return;
 		}
 		this.suppressedTargets.put(targetUuid, currentTick + TARGET_SUPPRESSION_TICKS);
-		this.alerts.removeIf(alert -> targetUuid.equals(alert.targetUuid()));
+		this.removeAlerts(alert -> targetUuid.equals(alert.targetUuid()));
 		this.scannedHostiles.removeIf(entity -> targetUuid.equals(entity.getUUID()));
 		if (this.scannedRaidTarget != null && targetUuid.equals(this.scannedRaidTarget.getUUID())) {
 			this.scannedRaidTarget = null;
@@ -804,15 +818,28 @@ public final class GuardAiController {
 		if (reason.ownerDirected()) {
 			this.lastAcceptedOwnerAlertTick = Math.max(this.lastAcceptedOwnerAlertTick, alertTick);
 		}
-		for (int i = 0; i < this.alerts.size(); i++) {
-			GuardAlert existing = this.alerts.get(i);
-			if (existing.targetUuid().equals(targetUuid) && existing.reason() == reason) {
-				this.alerts.set(i, new GuardAlert(targetUuid, reason, alertTick, Math.max(existing.expiresAt(), expiresAt)));
-				return true;
-			}
+		Map<UUID, GuardAlert> byTarget = this.alertsByReason.computeIfAbsent(reason, ignored -> new HashMap<>());
+		GuardAlert existing = byTarget.get(targetUuid);
+		if (existing != null) {
+			existing.alertTick = alertTick;
+			existing.expiresAt = Math.max(existing.expiresAt, expiresAt);
+			return true;
 		}
-		this.alerts.add(new GuardAlert(targetUuid, reason, alertTick, expiresAt));
+		GuardAlert alert = new GuardAlert(targetUuid, reason, alertTick, expiresAt);
+		byTarget.put(targetUuid, alert);
+		this.alerts.add(alert);
 		return true;
+	}
+
+	private void removeAlert(int index) {
+		GuardAlert removed = this.alerts.remove(index);
+		this.alertsByReason.get(removed.reason()).remove(removed.targetUuid());
+	}
+
+	private void removeAlerts(Predicate<GuardAlert> predicate) {
+		for (int i = this.alerts.size() - 1; i >= 0; i--) {
+			if (predicate.test(this.alerts.get(i))) this.removeAlert(i);
+		}
 	}
 
 	private void addCandidate(LivingEntity entity, AlertReason reason, long tick, boolean sticky) {
@@ -822,16 +849,11 @@ public final class GuardAiController {
 		if (!this.isTargetStillTrackable(entity, reason.ownerDirected()) || this.isSuppressed(entity.getUUID(), tick)) {
 			return;
 		}
-		TargetAccumulator accumulator = null;
-		for (int i = 0; i < this.candidates.size(); i++) {
-			if (this.candidates.get(i).entity == entity) {
-				accumulator = this.candidates.get(i);
-				break;
-			}
-		}
+		TargetAccumulator accumulator = this.candidatesByEntity.get(entity);
 		if (accumulator == null) {
 			accumulator = this.acquireAccumulator(entity, this.guard.distanceToSqr(entity), this.scoreThreat(entity));
 			this.candidates.add(accumulator);
+			this.candidatesByEntity.put(entity, accumulator);
 		}
 		accumulator.include(reason, tick, sticky);
 	}
@@ -850,6 +872,7 @@ public final class GuardAiController {
 			this.accumulatorPool.add(this.candidates.get(i));
 		}
 		this.candidates.clear();
+		this.candidatesByEntity.clear();
 	}
 
 
@@ -935,14 +958,16 @@ public final class GuardAiController {
 		double range = Mth.clamp(this.guard.getAttributeValue(Attributes.FOLLOW_RANGE), MIN_ALLY_ALERT_RANGE,
 				MAX_ALLY_ALERT_RANGE);
 		double rangeSq = range * range;
-		for (GuardEntity other : world.getEntitiesOfClass(
-				GuardEntity.class,
+		this.broadcastBuffer.clear();
+		world.getEntities(
+				EntityTypeTest.forClass(GuardEntity.class),
 				this.guard.getBoundingBox().inflate(range),
 				entity -> entity != this.guard
 						&& entity.isAlive()
 						&& entity.getTarget() != target
 						&& entity.distanceToSqr(this.guard) <= rangeSq
-						&& this.guard.isSameGroup(entity))) {
+						&& this.guard.isSameGroup(entity), this.broadcastBuffer);
+		for (GuardEntity other : this.broadcastBuffer) {
 			other.receiveAlliedAlert(target, alertTick);
 		}
 
@@ -960,7 +985,23 @@ public final class GuardAiController {
 		return this.guard.level() instanceof ServerLevel world ? world.getGameTime() : Long.MIN_VALUE;
 	}
 
-	private record GuardAlert(UUID targetUuid, AlertReason reason, long alertTick, long expiresAt) {
+	private static final class GuardAlert {
+		private final UUID targetUuid;
+		private final AlertReason reason;
+		private long alertTick;
+		private long expiresAt;
+
+		private GuardAlert(UUID targetUuid, AlertReason reason, long alertTick, long expiresAt) {
+			this.targetUuid = targetUuid;
+			this.reason = reason;
+			this.alertTick = alertTick;
+			this.expiresAt = expiresAt;
+		}
+
+		UUID targetUuid() { return this.targetUuid; }
+		AlertReason reason() { return this.reason; }
+		long alertTick() { return this.alertTick; }
+		long expiresAt() { return this.expiresAt; }
 	}
 
 	private enum AlertReason {

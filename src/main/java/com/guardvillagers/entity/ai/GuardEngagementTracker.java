@@ -14,7 +14,7 @@ import java.util.UUID;
 public final class GuardEngagementTracker {
 	private final int entryTtlTicks;
 	private final int maxTargets;
-	private final Map<UUID, Map<UUID, Engagement>> byTarget = new HashMap<>();
+	private final Map<UUID, TargetEngagements> byTarget = new HashMap<>();
 	private long lastSweepTick = Long.MIN_VALUE;
 	private long latestTick = Long.MIN_VALUE;
 
@@ -35,15 +35,17 @@ public final class GuardEngagementTracker {
 	public synchronized int report(UUID target, UUID guard, double distanceSq, boolean frontlineEligible, long tick) {
 		this.observe(tick);
 		this.maybeSweep(tick);
-		Map<UUID, Engagement> engagers = this.byTarget.get(target);
+		TargetEngagements engagers = this.byTarget.get(target);
 		if (engagers == null) {
 			if (this.byTarget.size() >= this.maxTargets) {
 				this.sweep(tick, true);
 			}
-			engagers = new HashMap<>();
+			engagers = new TargetEngagements();
 			this.byTarget.put(target, engagers);
 		}
+		engagers.refreshCount(tick, this.entryTtlTicks);
 		Engagement engagement = engagers.get(guard);
+		if (engagement == null || tick - engagement.tick > this.entryTtlTicks) engagers.liveCount++;
 		if (engagement == null) {
 			engagement = new Engagement();
 			engagers.put(guard, engagement);
@@ -69,26 +71,24 @@ public final class GuardEngagementTracker {
 	/** Number of live engagers of {@code target}, not counting {@code exclude}. */
 	public synchronized int count(UUID target, UUID exclude, long tick) {
 		this.observe(tick);
-		Map<UUID, Engagement> engagers = this.byTarget.get(target);
+		TargetEngagements engagers = this.byTarget.get(target);
 		if (engagers == null) {
 			return 0;
 		}
-		int count = 0;
-		for (Map.Entry<UUID, Engagement> entry : engagers.entrySet()) {
-			if (!entry.getKey().equals(exclude) && tick - entry.getValue().tick <= this.entryTtlTicks) {
-				count++;
-			}
-		}
-		return count;
+		engagers.refreshCount(tick, this.entryTtlTicks);
+		Engagement excluded = engagers.get(exclude);
+		return engagers.liveCount - (excluded != null && tick - excluded.tick <= this.entryTtlTicks ? 1 : 0);
 	}
 
 	public synchronized void release(UUID target, UUID guard) {
 		if (target == null) {
 			return;
 		}
-		Map<UUID, Engagement> engagers = this.byTarget.get(target);
+		TargetEngagements engagers = this.byTarget.get(target);
 		if (engagers != null) {
-			engagers.remove(guard);
+			Engagement removed = engagers.remove(guard);
+			if (removed != null && engagers.countedTick != Long.MIN_VALUE
+					&& engagers.countedTick - removed.tick <= this.entryTtlTicks) engagers.liveCount--;
 			if (engagers.isEmpty()) {
 				this.byTarget.remove(target);
 			}
@@ -121,9 +121,10 @@ public final class GuardEngagementTracker {
 
 	private void sweep(long tick, boolean forceCapacity) {
 		this.lastSweepTick = tick;
-		Iterator<Map<UUID, Engagement>> iterator = this.byTarget.values().iterator();
+		Iterator<TargetEngagements> iterator = this.byTarget.values().iterator();
 		while (iterator.hasNext()) {
-			Map<UUID, Engagement> engagers = iterator.next();
+			TargetEngagements engagers = iterator.next();
+			engagers.countedTick = Long.MIN_VALUE;
 			engagers.values().removeIf(engagement -> tick - engagement.tick > this.entryTtlTicks);
 			if (engagers.isEmpty()) {
 				iterator.remove();
@@ -135,6 +136,21 @@ public final class GuardEngagementTracker {
 			if (keys.hasNext()) {
 				keys.next();
 				keys.remove();
+			}
+		}
+	}
+
+	/** Recount once per target/tick; reports and releases keep that count exact within the tick. */
+	private static final class TargetEngagements extends HashMap<UUID, Engagement> {
+		private long countedTick = Long.MIN_VALUE;
+		private int liveCount;
+
+		private void refreshCount(long tick, int ttl) {
+			if (this.countedTick == tick) return;
+			this.countedTick = tick;
+			this.liveCount = 0;
+			for (Engagement engagement : this.values()) {
+				if (tick - engagement.tick <= ttl) this.liveCount++;
 			}
 		}
 	}

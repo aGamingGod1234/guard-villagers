@@ -58,4 +58,47 @@ final class GuardEngagementTrackerTest {
 		tracker.release(new UUID(1L, 199L), guard);
 		assertEquals(0, tracker.count(new UUID(1L, 199L), null, 199L));
 	}
+
+	@Test
+	void cachedCountTracksReportsReleasesExpiryAndClockReset() {
+		GuardEngagementTracker tracker = new GuardEngagementTracker(3, 64);
+		UUID a = new UUID(0, 1);
+		UUID b = new UUID(0, 2);
+		tracker.report(TARGET, a, 1, 0);
+		assertEquals(1, tracker.count(TARGET, null, 0));
+		tracker.report(TARGET, b, 2, 0);
+		assertEquals(2, tracker.count(TARGET, null, 0));
+		tracker.release(TARGET, a);
+		assertEquals(1, tracker.count(TARGET, null, 0));
+		assertEquals(1, tracker.count(TARGET, null, 3));
+		assertEquals(0, tracker.count(TARGET, null, 4));
+		tracker.report(TARGET, b, 2, 4);
+		assertEquals(1, tracker.count(TARGET, null, 4));
+		assertEquals(0, tracker.count(TARGET, b, 4));
+		assertEquals(0, tracker.count(TARGET, null, 0));
+	}
+
+	@Test
+	void cachedCountsMatchNaiveRosterUnderInterleavedOperations() {
+		GuardEngagementTracker tracker = new GuardEngagementTracker(30, 64);
+		java.util.Map<UUID, Long> naive = new java.util.HashMap<>();
+		java.util.Random random = new java.util.Random(42);
+		for (long tick = 0; tick < 300; tick++) {
+			for (int operation = 0; operation < 100; operation++) {
+				UUID guard = new UUID(0, random.nextInt(512));
+				if (random.nextInt(4) == 0) {
+					tracker.release(TARGET, guard);
+					naive.remove(guard);
+				} else {
+					tracker.report(TARGET, guard, random.nextDouble(), tick);
+					naive.put(guard, tick);
+				}
+				int expected = 0;
+				for (var entry : naive.entrySet()) {
+					if (!entry.getKey().equals(guard) && tick - entry.getValue() <= 30) expected++;
+				}
+				assertEquals(expected, tracker.count(TARGET, guard, tick));
+			}
+		}
+	}
 }
