@@ -106,6 +106,7 @@ public class GuardVillagersMod implements ModInitializer {
 		registerDispenserBehavior();
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> GuardCommands.register(dispatcher));
 		GuardEvents.register();
+		com.guardvillagers.village.VillageManagerHandler.register();
 		com.guardvillagers.command.hierarchy.CommandModule.init();
 		LOGGER.info("Guard Villagers initialized");
 	}
@@ -262,7 +263,7 @@ public class GuardVillagersMod implements ModInitializer {
 	}
 
 	private static boolean isColumnLoaded(ServerLevel world, BlockPos pos) {
-		return world.getChunkSource().hasChunk(SectionPos.blockToSectionCoord(pos.getX()), SectionPos.blockToSectionCoord(pos.getZ()));
+		return world.getChunkSource().getChunkNow(SectionPos.blockToSectionCoord(pos.getX()), SectionPos.blockToSectionCoord(pos.getZ())) != null;
 	}
 
 	public static boolean canGuardSpawnAt(ServerLevel world, BlockPos feetPos) {
