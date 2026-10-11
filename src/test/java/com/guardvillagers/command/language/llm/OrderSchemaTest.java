@@ -46,7 +46,7 @@ final class OrderSchemaTest {
 		JsonObject props = item.getAsJsonObject("properties");
 		assertEquals(13, props.getAsJsonObject("action").getAsJsonArray("enum").size());
 		assertEquals(List.of("all", "commander", "group", "guard"), strings(props.getAsJsonObject("scope_kind").getAsJsonArray("enum")));
-		assertEquals(24, props.getAsJsonObject("scope_name").get("maxLength").getAsInt());
+		assertEquals(OrderSchema.MAX_SCOPE_NAME, props.getAsJsonObject("scope_name").get("maxLength").getAsInt());
 		JsonArray formationEnum = props.getAsJsonObject("formation").getAsJsonArray("enum");
 		assertTrue(formationEnum.get(formationEnum.size() - 1).isJsonNull());
 		assertEquals(8, props.getAsJsonObject("radius").get("minimum").getAsInt());
@@ -103,7 +103,7 @@ final class OrderSchemaTest {
 				order("hold", "group", null, null, null, null)));
 		assertEquals(List.of("bad_radius", "bad_radius", "missing_scope_name"), parsed.rejected());
 
-		OrderSchema.Parsed longName = OrderSchema.parseArguments(args("", order("hold", "group", "x".repeat(25), null, null, null)));
+		OrderSchema.Parsed longName = OrderSchema.parseArguments(args("", order("hold", "group", "x".repeat(OrderSchema.MAX_SCOPE_NAME + 1), null, null, null)));
 		assertEquals(List.of("scope_name_too_long"), longName.rejected());
 		OrderSchema.Parsed stringRadius = OrderSchema.parseArguments(args("", order("patrol_here", "all", null, null, null, "\"16\"")));
 		assertEquals(List.of("bad_radius"), stringRadius.rejected());

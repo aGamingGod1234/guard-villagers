@@ -142,4 +142,26 @@ public class GuardPersistenceGameTest {
 		helper.assertValueEqual(copy.getFormationType(), FormationType.FOLLOW, "formation");
 		helper.succeed();
 	}
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 40)
+	public void offlineOwnerReloadReconcilesStaleCommander(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		UUID owner = UUID.randomUUID();
+		GuardEntity incumbent = GuardTestSupport.swordsman(helper, CENTER - 2.5, 1, CENTER + 0.5);
+		GuardEntity stale = GuardTestSupport.swordsman(helper, CENTER + 2.5, 1, CENTER + 0.5);
+		incumbent.setOwnerUuid(owner);
+		stale.setOwnerUuid(owner);
+		var hierarchy = com.guardvillagers.command.hierarchy.GuardHierarchy.state(helper.getLevel().getServer());
+		hierarchy.getOrCreate(owner).setPinnedCommander(incumbent.getUUID());
+		com.guardvillagers.command.hierarchy.GuardHierarchy.elect(helper.getLevel().getServer(), owner);
+		com.guardvillagers.command.hierarchy.GuardHierarchy.tick(helper.getLevel().getServer());
+		stale.setRank(com.guardvillagers.command.hierarchy.GuardRank.COMMANDER);
+		GuardEntity copy = roundTrip(helper.getLevel(), stale);
+		helper.succeedWhen(() -> {
+			helper.assertTrue(copy.getRank() == com.guardvillagers.command.hierarchy.GuardRank.SOLDIER, "loaded stale rank never reconciled");
+			helper.assertTrue(incumbent.getRank() == com.guardvillagers.command.hierarchy.GuardRank.COMMANDER, "incumbent changed");
+			GuardOwnershipIndex.untrack(copy);
+			GuardOwnershipIndex.track(stale);
+		});
+	}
+
 }

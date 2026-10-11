@@ -23,6 +23,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
@@ -120,18 +122,48 @@ public final class OpenAiLlmTransport implements LlmTransport, AutoCloseable {
 				.build();
 
 		CompletableFuture<HttpResponse<InputStream>> inFlight = this.client.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream());
-		CompletableFuture<String> body = inFlight.thenApplyAsync(this::readResponse, this.executor);
+		AtomicBoolean abandoned = new AtomicBoolean();
+		AtomicReference<InputStream> openBody = new AtomicReference<>();
+		Runnable abort = () -> {
+			abandoned.set(true);
+			closeBody(openBody.getAndSet(null));
+			inFlight.cancel(true);
+		};
+		CompletableFuture<HttpResponse<InputStream>> ready = inFlight.thenApply(response -> {
+			InputStream stream = response.body();
+			openBody.set(stream);
+			if (abandoned.get()) {
+				closeBody(openBody.getAndSet(null));
+				throw new CompletionException(new TimeoutException());
+			}
+			return response;
+		});
+		CompletableFuture<String> body = ready.thenApplyAsync(response -> {
+			try {
+				return readResponse(response);
+			} finally {
+				openBody.compareAndSet(response.body(), null);
+			}
+		}, this.executor);
 		CompletableFuture<String> result = new CompletableFuture<>();
 		body.orTimeout(this.timeout.toMillis(), TimeUnit.MILLISECONDS).whenComplete((value, error) -> {
 			if (error == null) {
 				result.complete(value);
 				return;
 			}
-			inFlight.cancel(true);
+			abort.run();
 			body.cancel(true);
 			result.completeExceptionally(map(error));
 		});
+		result.whenComplete((value, error) -> {
+			if (result.isCancelled()) { abort.run(); body.cancel(true); }
+		});
 		return result;
+	}
+
+	private static void closeBody(InputStream stream) {
+		if (stream == null) return;
+		try { stream.close(); } catch (IOException ignored) { }
 	}
 
 	/** Re-enables calls after an auth failure, e.g. on {@code /guards voice reload}. */

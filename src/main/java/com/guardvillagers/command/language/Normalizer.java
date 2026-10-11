@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import com.guardvillagers.command.order.OwnerRoster;
 
 /**
  * Turns a transcript or chat line into grammar tokens: lowercase, accents and punctuation stripped, number words
@@ -48,6 +49,37 @@ public final class Normalizer {
 		return removeFillers(withNumbers);
 	}
 
+	/** Keep exact roster names intact before stripping conversational filler. */
+	public static List<String> tokens(String text, OwnerRoster roster) {
+		List<String> raw = nameTokens(text);
+		List<String> out = new ArrayList<>();
+		int plainStart = 0;
+		for (int i = 0; i < raw.size();) {
+			int length = nameLengthAt(raw, i, roster);
+			if (length == 0) { i++; continue; }
+			out.addAll(removeFillers(raw.subList(plainStart, i)));
+			out.addAll(raw.subList(i, i + length));
+			i += length;
+			plainStart = i;
+		}
+		out.addAll(removeFillers(raw.subList(plainStart, raw.size())));
+		return out;
+	}
+
+	static int nameLengthAt(List<String> tokens, int start, OwnerRoster roster) {
+		int longest = 0;
+		List<String> names = new ArrayList<>(roster.groupNames());
+		names.addAll(roster.guardNames());
+		for (String name : names) {
+			List<String> candidate = nameTokens(name);
+			int n = candidate.size();
+			if (n > longest && start + n <= tokens.size() && tokens.subList(start, start + n).equals(candidate)) {
+				longest = n;
+			}
+		}
+		return longest;
+	}
+
 	/** {@link #tokens(String)} joined by single spaces. */
 	public static String normalize(String text) {
 		return String.join(" ", tokens(text));
@@ -69,7 +101,7 @@ public final class Normalizer {
 				.replace("'", "")
 				.replace("’", "");
 		List<String> out = new ArrayList<>();
-		for (String token : folded.split("[^a-z0-9]+")) {
+		for (String token : folded.split("[^\\p{L}\\p{N}]+")) {
 			if (!token.isEmpty()) {
 				out.add(token);
 			}

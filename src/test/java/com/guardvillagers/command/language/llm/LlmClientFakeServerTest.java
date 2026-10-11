@@ -171,7 +171,7 @@ final class LlmClientFakeServerTest {
 				.getAsJsonObject();
 		assertEquals(LlmInterpreter.MAX_TRANSCRIPT_CHARS, context.get("transcript").getAsString().length());
 		assertEquals(LlmInterpreter.MAX_GUARD_NAMES, context.getAsJsonArray("guards").size());
-		assertEquals(LlmInterpreter.MAX_NAME_CHARS, context.getAsJsonArray("groups").get(0).getAsString().length());
+		assertEquals("y".repeat(60), context.getAsJsonArray("groups").get(0).getAsString());
 	}
 
 	@Test
@@ -315,4 +315,43 @@ final class LlmClientFakeServerTest {
 		assertEquals(256, config.maxOutputTokens());
 		assertEquals("gpt-4.1-mini", new LlmConfig(true, "gpt-4.1-mini", null, null, null, 6, "", 1024).model());
 	}
+	@Test
+	void timedOutBodyClosesConnectionWithoutClosingTransport() throws Exception {
+		try (var peer = new java.net.ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+				var threads = Executors.newVirtualThreadPerTaskExecutor();
+				var client = new OpenAiLlmTransport("http://127.0.0.1:" + peer.getLocalPort(),
+						() -> Optional.of("test"), Duration.ofMillis(1500), System::currentTimeMillis)) {
+			var eof = threads.submit(() -> {
+				try (var socket = peer.accept()) {
+					socket.setSoTimeout(7000);
+					var in = new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+					int length = 0;
+					String line;
+					while (!(line = in.readLine()).isEmpty()) {
+						if (line.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:")) length = Integer.parseInt(line.substring(15).strip());
+					}
+					for (int i = 0; i < length; i++) in.read();
+					socket.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 10000\r\n\r\n{".getBytes(StandardCharsets.UTF_8));
+					socket.getOutputStream().flush();
+					return in.read();
+				}
+			});
+			var failure = client.send("{}").handle((value, error) -> error).get(10, TimeUnit.SECONDS);
+			assertEquals(LlmTransportException.Kind.TIMEOUT, ((LlmTransportException) failure).kind());
+			assertEquals(-1, eof.get(10, TimeUnit.SECONDS));
+		}
+	}
+
+	@Test
+	void fullGuardIdentityIsSentAndAccepted() throws Exception {
+		String name = "Sir Bartholomew the Brave Knight";
+		var roster = OwnerRoster.of(List.of(), List.of(name, name.substring(0, 24)));
+		var request = JsonParser.parseString(interpreter.buildRequest(name + " dig in", roster)).getAsJsonObject();
+		var context = JsonParser.parseString(request.getAsJsonArray("input").get(0).getAsJsonObject().get("content").getAsString()).getAsJsonObject();
+		assertEquals(name, context.getAsJsonArray("guards").get(0).getAsString());
+		var parsed = OrderSchema.parseArguments(OrderSchemaTest.args("", OrderSchemaTest.order("hold", "guard", name, null, null, null)));
+		var validated = new com.guardvillagers.command.order.OrderValidator().validateAll(parsed.orders(), roster);
+		assertEquals(List.of(Order.of(Action.HOLD, Scope.guard(name))), validated.accepted());
+	}
+
 }

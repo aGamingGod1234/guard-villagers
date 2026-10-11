@@ -14,8 +14,8 @@ import java.util.function.Predicate;
  * Active player orders for one owner, with priority and expiry. Time comes from an injected clock in game ticks so
  * the book is deterministic in tests and pauses with the server.
  *
- * <p>Rules: a new order replaces orders on the same scope whose priority is not higher; an order for every guard
- * ({@link Scope#ALL}) also replaces narrower orders whose priority is not higher. An order is refused when a
+ * <p>Rules: a new order replaces orders on the same scope whose priority is not higher. Overlapping scopes remain
+ * available for per-recipient precedence, including narrower orders under ALL. An order is refused when a
  * higher-priority order already covers the same scope. "As you were" clears the scope (everything for ALL) up to its
  * own priority. Instant actions (status, appointments) are never stored.
  */
@@ -49,6 +49,7 @@ public final class OrderBook {
 	private final long timedExpiryTicks;
 	private final List<ActiveOrder> entries = new ArrayList<>();
 	private long nextId = 1L;
+	private final List<ActiveOrder> pendingExpired = new ArrayList<>();
 
 	public OrderBook(LongSupplier gameTimeTicks) {
 		this(gameTimeTicks, DEFAULT_TIMED_EXPIRY_TICKS);
@@ -63,7 +64,7 @@ public final class OrderBook {
 		Objects.requireNonNull(order, "order");
 		Objects.requireNonNull(source, "source");
 		long now = this.clock.getAsLong();
-		purgeExpired(now);
+		this.pendingExpired.addAll(purgeExpired(now));
 		Scope scope = order.scope();
 
 		if (order.action() == Action.AS_YOU_WERE) {
@@ -80,9 +81,12 @@ public final class OrderBook {
 			}
 		}
 		List<ActiveOrder> removed = removeIf(entry -> entry.priority() <= source.priority()
-				&& (entry.order().scope().sameAs(scope) || scope.kind() == Scope.Kind.ALL));
+				&& entry.order().scope().sameAs(scope));
 		if (this.entries.size() >= MAX_ACTIVE) {
 			ActiveOrder weakest = this.entries.stream().min(EFFECTIVE_ORDER).orElseThrow();
+			if (weakest.priority() > source.priority()) {
+				return new IssueResult(Status.OUTRANKED, Optional.empty(), List.of());
+			}
 			this.entries.remove(weakest);
 			removed = concat(removed, weakest);
 		}
@@ -103,6 +107,14 @@ public final class OrderBook {
 				.max(EFFECTIVE_ORDER);
 	}
 
+	/** Whether an incoming persistent order would win for a concrete recipient supplied by the caller. */
+	public synchronized boolean wouldBeEffective(Order order, OrderSource source, Predicate<Scope> coversGuard) {
+		if (!coversGuard.test(order.scope())) return false;
+		return effectiveFor(coversGuard).map(existing -> source.priority() > existing.priority()
+				|| (source.priority() == existing.priority()
+						&& order.scope().specificity() >= existing.order().scope().specificity())).orElse(true);
+	}
+
 	/** Live orders, oldest first. */
 	public synchronized List<ActiveOrder> active() {
 		long now = this.clock.getAsLong();
@@ -111,7 +123,10 @@ public final class OrderBook {
 
 	/** Removes and returns orders whose time is up. Call from the owner's tick to announce or undo them. */
 	public synchronized List<ActiveOrder> expire() {
-		return purgeExpired(this.clock.getAsLong());
+		List<ActiveOrder> expired = new ArrayList<>(this.pendingExpired);
+		this.pendingExpired.clear();
+		expired.addAll(purgeExpired(this.clock.getAsLong()));
+		return List.copyOf(expired);
 	}
 
 	/** Ends an order early (target died, formation reached). */

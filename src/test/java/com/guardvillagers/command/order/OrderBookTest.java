@@ -62,15 +62,15 @@ final class OrderBookTest {
 	}
 
 	@Test
-	void narrowerScopeWinsAtEqualPriorityAndAllReplacesNarrower() {
+	void narrowerScopeWinsAtEqualPriorityInEitherIssueOrder() {
 		this.book.issue(Order.of(Action.FOLLOW, Scope.ALL), OrderSource.VOICE);
 		this.book.issue(Order.of(Action.HOLD, Scope.group("Alpha")), OrderSource.VOICE);
 		assertEquals(Action.HOLD, this.book.effectiveFor(LIAM).orElseThrow().order().action());
 		assertEquals(Action.FOLLOW, this.book.effectiveFor(scope -> scope.kind() == Scope.Kind.ALL).orElseThrow().order().action());
 
 		OrderBook.IssueResult all = this.book.issue(Order.form(Scope.ALL, FormationType.LINE), OrderSource.VOICE);
-		assertEquals(2, all.removed().size());
-		assertEquals(Action.FORM, this.book.effectiveFor(LIAM).orElseThrow().order().action());
+		assertEquals(1, all.removed().size());
+		assertEquals(Action.HOLD, this.book.effectiveFor(LIAM).orElseThrow().order().action());
 	}
 
 	@Test
@@ -127,4 +127,26 @@ final class OrderBookTest {
 		assertEquals(2, cleared.size(), "Alpha's own order and the everyone order");
 		assertEquals(List.of(Action.STAY), this.book.active().stream().map(order -> order.order().action()).toList());
 	}
+	@Test
+	void interveningIssuesDoNotConsumeExpiryNotifications() {
+		for (Action action : List.of(Action.STATUS_REPORT, Action.FOLLOW, Action.AS_YOU_WERE)) {
+			var book = new OrderBook(now::get, 10);
+			var expired = book.issue(Order.form(Scope.group("Alpha"), FormationType.CIRCLE), OrderSource.VOICE).order().orElseThrow();
+			now.addAndGet(10);
+			book.issue(Order.of(action, Scope.ALL), OrderSource.VOICE);
+			assertEquals(List.of(expired), book.expire());
+			assertTrue(book.expire().isEmpty());
+		}
+	}
+
+	@Test
+	void weakCandidateCannotEvictHigherPriority() {
+		for (int i = 0; i < OrderBook.MAX_ACTIVE; i++) {
+			book.issue(Order.of(Action.HOLD, Scope.guard("guard" + i)), OrderSource.TYPED);
+		}
+		var before = book.active();
+		assertEquals(OrderBook.Status.OUTRANKED, book.issue(Order.of(Action.FOLLOW, Scope.ALL), OrderSource.VOICE).status());
+		assertEquals(before, book.active());
+	}
+
 }

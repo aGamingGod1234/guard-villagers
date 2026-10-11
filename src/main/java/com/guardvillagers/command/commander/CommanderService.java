@@ -60,6 +60,7 @@ public final class CommanderService {
 		 */
 		final Map<GuardEntity, Long> suspended = new IdentityHashMap<>();
 		Approach approach;
+		long inputSequence;
 
 		OwnerContext(MinecraftServer server, UUID owner) {
 			this.owner = owner;
@@ -108,18 +109,21 @@ public final class CommanderService {
 		MinecraftServer server = speaker.level().getServer();
 		OwnerRoster roster = roster(speaker);
 		OrderInterpreter current = interpreter;
+		OwnerContext intake = context(server, speaker.getUUID());
+		long sequence = ++intake.inputSequence;
 		// Grammar first, offline. The LLM is only asked when the grammar found nothing in words addressed to the
 		// guards, the speaker has loaded guards to command, and the per-player and server-wide LLM budgets allow it.
 		Interpretation local = current.interpretLocally(text, roster);
 		boolean addressed = local.addressed() || explicitlyAddressed;
 		boolean askLlm = !local.understood() && local.rejected().isEmpty() && current.llmAvailable() && addressed
-				&& !roster.guardNames().isEmpty();
+				&& !roster.guardNames().isEmpty() && current.allowsLlmFallback(text, roster);
 		Runnable releaseLlm = askLlm ? VoiceCommandBridge.acquireLlm(speaker.getUUID()) : null;
 		if (releaseLlm == null) {
 			handle(speaker, new Interpretation(local.origin(), local.orders(), local.rejected(), addressed, local.reply(),
 					local.llmStatus(), local.retryAfter()));
 			return;
 		}
+		PendingOrderContext spokenContext = PendingOrderContext.capture(speaker);
 		CompletableFuture<Interpretation> future;
 		try {
 			future = current.interpret(speaker.getUUID(), text, roster, explicitlyAddressed);
@@ -135,7 +139,8 @@ public final class CommanderService {
 		UUID speakerId = speaker.getUUID();
 		future.whenComplete((interpretation, error) -> server.execute(() -> {
 			ServerPlayer online = server.getPlayerList().getPlayer(speakerId);
-			if (online == null) {
+			if (online != speaker || interpreter != current || CONTEXTS.get(speakerId) != intake
+					|| intake.inputSequence != sequence) {
 				return;
 			}
 			if (error != null || interpretation == null) {
@@ -143,8 +148,40 @@ public final class CommanderService {
 						"Commander couldn't hear you, try again."), CommanderCallouts.Kind.ACK);
 				return;
 			}
+			if (!spokenContext.stillValid(online, interpretation.orders())) {
+				CommanderCallouts.say(server, speakerId, "The order's target or location changed. Please repeat it.", CommanderCallouts.Kind.ACK);
+				return;
+			}
 			handle(online, interpretation);
 		}));
+	}
+
+	/** A delayed interpretation may execute only while its spoken references still denote the same context. */
+	private record PendingOrderContext(net.minecraft.server.level.ServerLevel level, BlockPos anchor,
+			net.minecraft.core.Direction facing, Map<com.guardvillagers.command.order.TargetRef, UUID> targets) {
+		static PendingOrderContext capture(ServerPlayer player) {
+			Map<com.guardvillagers.command.order.TargetRef, UUID> targets = new java.util.EnumMap<>(com.guardvillagers.command.order.TargetRef.class);
+			for (var ref : com.guardvillagers.command.order.TargetRef.values()) {
+				com.guardvillagers.command.order.TargetResolver.resolve(player, ref).ifPresent(target -> targets.put(ref, target.getUUID()));
+			}
+			return new PendingOrderContext(player.level(), player.blockPosition().immutable(), player.getDirection(), Map.copyOf(targets));
+		}
+
+		boolean stillValid(ServerPlayer player, List<Order> orders) {
+			if (player.level() != level) return false;
+			for (Order order : orders) {
+				if (order.action() == Action.ATTACK_TARGET) {
+					var ref = order.target().orElse(com.guardvillagers.command.order.TargetRef.MY_TARGET);
+					UUID current = com.guardvillagers.command.order.TargetResolver.resolve(player, ref).map(LivingEntity::getUUID).orElse(null);
+					if (current == null || !current.equals(targets.get(ref))) return false;
+				}
+				if (switch (order.action()) {
+					case PATROL_HERE, COME_HERE, FORM, RETREAT, DEFEND_VILLAGE -> true;
+					default -> false;
+				} && (!player.blockPosition().equals(anchor) || player.getDirection() != facing)) return false;
+			}
+			return true;
+		}
 	}
 
 	/** Applies an interpretation: orders, a clarifying reply, or "I did not catch that". */
@@ -178,6 +215,7 @@ public final class CommanderService {
 		MinecraftServer server = speaker.level().getServer();
 		UUID owner = speaker.getUUID();
 		OwnerContext context = context(server, owner);
+		context.inputSequence++;
 		List<GuardEntity> allGuards = livingGuards(server, owner);
 		GuardEntity commander = GuardHierarchy.commanderAmong(server, owner, allGuards);
 		// Orders act at the speaker's position and on things the speaker sees, so only guards in the speaker's
@@ -199,7 +237,16 @@ public final class CommanderService {
 						CommanderCallouts.Kind.STATUS);
 				continue;
 			}
-			OrderExecutor.Context execution = new OrderExecutor.Context(speaker, guards, localCommander, ticks);
+			List<GuardEntity> recipients = guards;
+			if (order.action().persistence() != Action.Persistence.INSTANT && order.action() != Action.AS_YOU_WERE) {
+				recipients = guards.stream().filter(guard -> context.book.wouldBeEffective(order, source,
+						scope -> OrderExecutor.covers(scope, guard, localCommander))).toList();
+				if (recipients.isEmpty()) {
+					CommanderCallouts.say(server, owner, "Standing by: an earlier order still holds.", CommanderCallouts.Kind.ACK);
+					continue;
+				}
+			}
+			OrderExecutor.Context execution = new OrderExecutor.Context(speaker, recipients, localCommander, ticks);
 			// An order that would reach nobody must not replace the orders standing on its scope.
 			Optional<OrderExecutor.Result> refused = OrderExecutor.precheck(order, execution);
 			if (refused.isPresent()) {
@@ -266,6 +313,7 @@ public final class CommanderService {
 		// Created if missing: after a relog the saved orders are only in the book once a context exists, and they
 		// must be cleared too or they come back and pin the guards.
 		OwnerContext context = context(server, player.getUUID());
+		context.inputSequence++;
 		for (ActiveOrder removed : context.book.clearCovering(scope)) {
 			context.attackTargets.remove(removed.id());
 		}

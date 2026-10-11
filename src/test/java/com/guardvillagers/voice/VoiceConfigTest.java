@@ -95,4 +95,13 @@ class VoiceConfigTest {
 		assertEquals(Optional.empty(), config.apiKey(Map.of("OPENAI_API_KEY", "sk-other")::get));
 		assertEquals(Optional.empty(), config.apiKey(Map.of("GUARD_KEY", "  ")::get));
 	}
+	@Test
+	void reasoningCanBeOmittedForCustomModels() {
+		var custom = VoiceConfig.parse("{\"llm\":{\"model\":\"gpt-4.1-mini\"}}");
+		assertEquals("", custom.llm().reasoningEffort());
+		assertEquals("", VoiceConfig.parse(custom.toJson()).llm().reasoningEffort());
+		assertEquals("low", VoiceConfig.defaults().llm().reasoningEffort());
+		assertEquals("", VoiceConfig.parse("{\"llm\":{\"reasoningEffort\":\"\"}}").llm().reasoningEffort());
+	}
+
 }

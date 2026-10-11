@@ -64,10 +64,15 @@ public final class OrderInterpreter implements AutoCloseable {
 		Interpretation local = interpretLocally(text, roster);
 		boolean grammarMatched = local.understood() || !local.rejected().isEmpty();
 		boolean addressed = local.addressed() || explicitlyAddressed;
-		if (grammarMatched || this.llm.isEmpty() || !addressed) {
+		if (grammarMatched || this.llm.isEmpty() || !addressed || !allowsLlmFallback(text, roster)) {
 			return CompletableFuture.completedFuture(withAddressed(local, addressed));
 		}
 		return this.llm.get().interpret(speaker, text, roster).thenApply(result -> fromLlm(result, roster));
+	}
+
+	/** A fallback cannot represent a group/timing qualifier that the appointment model discards. */
+	public boolean allowsLlmFallback(String text, OwnerRoster roster) {
+		return this.grammar.parse(text, roster).failure().orElse(null) != GrammarInterpreter.Failure.UNSUPPORTED_QUALIFIER;
 	}
 
 	@Override
