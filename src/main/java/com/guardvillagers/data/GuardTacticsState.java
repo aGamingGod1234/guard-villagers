@@ -1,11 +1,13 @@
 package com.guardvillagers.data;
 
+import com.guardvillagers.GuardSecurityLimits;
 import com.guardvillagers.entity.FormationType;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -43,8 +45,9 @@ public final class GuardTacticsState extends SavedData {
 	}
 
 	private GuardTacticsState(Map<UUID, PlayerTactics> entries) {
-		this.entries = new HashMap<>();
+		this.entries = new LinkedHashMap<>();
 		for (Map.Entry<UUID, PlayerTactics> entry : entries.entrySet()) {
+			// Existing saved owners must survive even when a later version lowers the creation limit.
 			this.entries.put(entry.getKey(), entry.getValue().copy());
 		}
 	}
@@ -53,6 +56,9 @@ public final class GuardTacticsState extends SavedData {
 		PlayerTactics existing = this.entries.get(ownerId);
 		if (existing != null) {
 			return existing;
+		}
+		if (!this.canCreate(ownerId)) {
+			throw new IllegalStateException("Guard tactics owner limit reached");
 		}
 		PlayerTactics created = new PlayerTactics();
 		this.entries.put(ownerId, created);
@@ -71,6 +77,10 @@ public final class GuardTacticsState extends SavedData {
 
 	private Map<UUID, PlayerTactics> entriesForCodec() {
 		return Collections.unmodifiableMap(this.entries);
+	}
+
+	public boolean canCreate(UUID ownerId) {
+		return this.entries.containsKey(ownerId) || this.entries.size() < GuardSecurityLimits.MAX_TACTICS_PLAYERS;
 	}
 
 	public static final class PlayerTactics {
@@ -144,14 +154,10 @@ public final class GuardTacticsState extends SavedData {
 				this.rowColumnZones.put(toRowColumnKey(rowColumn[0], rowColumn[1]), colorId);
 			}
 			this.groupNames = new ArrayList<>();
-			for (String name : effectiveNames) {
-				if (this.groupNames.size() >= MAX_GROUPS) {
-					break;
-				}
-				String sanitized = sanitizeGroupName(name);
-				if (!sanitized.isEmpty()) {
-					this.groupNames.add(sanitized);
-				}
+			List<String> sanitizedNames = effectiveNames.stream().limit(MAX_GROUPS).map(PlayerTactics::sanitizeGroupName).toList();
+			for (String name : sanitizedNames) {
+				// A replacement for a duplicate must not steal a later row's otherwise unique name.
+				this.groupNames.add(this.uniqueGroupName(name, sanitizedNames));
 			}
 			this.preferredFormationId = normalizeFormationId(preferredFormationId);
 		}
@@ -242,12 +248,16 @@ public final class GuardTacticsState extends SavedData {
 				return false;
 			}
 			int normalizedRow = normalizeRow(row);
-			this.ensureGroupCount(normalizedRow + 1);
-			String normalized = sanitizeGroupName(name);
-			if (!this.isGroupNameAvailable(normalized, normalizedRow)) {
+			String sanitized = sanitizeGroupName(name);
+			if (!this.isGroupNameAvailable(sanitized, normalizedRow)) {
 				return false;
 			}
-			this.groupNames.set(normalizedRow, normalized);
+			this.ensureGroupCount(normalizedRow + 1);
+			// ensureGroupCount may have created a preceding row with this name.
+			if (!this.isGroupNameAvailable(sanitized, normalizedRow)) {
+				return false;
+			}
+			this.groupNames.set(normalizedRow, sanitized);
 			return true;
 		}
 
@@ -256,8 +266,8 @@ public final class GuardTacticsState extends SavedData {
 				return -1;
 			}
 			int index = this.groupNames.size();
-			String name = this.nextDefaultGroupName(index);
-			this.groupNames.add(name);
+			String name = index < GROUP_NAME_CYCLE.size() ? GROUP_NAME_CYCLE.get(index) : "Group " + (index + 1);
+			this.groupNames.add(this.uniqueGroupName(name));
 			return this.groupNames.size() - 1;
 		}
 
@@ -269,37 +279,15 @@ public final class GuardTacticsState extends SavedData {
 			this.ensureGroupCount(normalizedRow + 1);
 			String current = this.groupNames.get(normalizedRow);
 			int index = GROUP_NAME_CYCLE.indexOf(current);
-			for (int step = 1; step <= GROUP_NAME_CYCLE.size(); step++) {
-				int nextIndex = (index + step) % GROUP_NAME_CYCLE.size();
-				String candidate = GROUP_NAME_CYCLE.get(nextIndex);
-				if (this.isGroupNameAvailable(candidate, normalizedRow)) {
-					this.groupNames.set(normalizedRow, candidate);
+			for (int offset = 1; offset <= GROUP_NAME_CYCLE.size(); offset++) {
+				int nextIndex = (index + offset) % GROUP_NAME_CYCLE.size();
+				String next = GROUP_NAME_CYCLE.get(nextIndex);
+				if (this.isGroupNameAvailable(next, normalizedRow)) {
+					this.groupNames.set(normalizedRow, next);
 					return nextIndex;
 				}
 			}
-			return -1;
-		}
-
-		private boolean isGroupNameAvailable(String name, int exceptRow) {
-			if (name.equalsIgnoreCase("Unassigned")) {
-				return false;
-			}
-			for (int i = 0; i < this.groupNames.size(); i++) {
-				if (i != exceptRow && name.equalsIgnoreCase(this.groupNames.get(i))) {
-					return false;
-				}
-			}
-			return true;
-		}
-
-		private String nextDefaultGroupName(int index) {
-			for (int candidateIndex = index; ; candidateIndex++) {
-				String candidate = candidateIndex < GROUP_NAME_CYCLE.size()
-						? GROUP_NAME_CYCLE.get(candidateIndex) : "Group " + (candidateIndex + 1);
-				if (this.isGroupNameAvailable(candidate, -1)) {
-					return candidate;
-				}
-			}
+			return index;
 		}
 
 		public void ensureGroupCount(int count) {
@@ -311,9 +299,36 @@ public final class GuardTacticsState extends SavedData {
 				return;
 			}
 			while (this.groupNames.size() < normalizedCount) {
-				int index = this.groupNames.size();
-				String name = this.nextDefaultGroupName(index);
-				this.groupNames.add(name);
+				this.addGroup();
+			}
+		}
+
+		private boolean isGroupNameAvailable(String name, int exceptRow) {
+			if (name.equalsIgnoreCase("Unassigned")) {
+				return false;
+			}
+			for (int row = 0; row < this.groupNames.size(); row++) {
+				if (row != exceptRow && this.groupNames.get(row).equalsIgnoreCase(name)) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		private String uniqueGroupName(String name) {
+			return this.uniqueGroupName(name, List.of());
+		}
+
+		private String uniqueGroupName(String name, List<String> reservedNames) {
+			if (this.isGroupNameAvailable(name, -1)) {
+				return name;
+			}
+			for (int suffix = 2; ; suffix++) {
+				String ending = " " + suffix;
+				String candidate = name.substring(0, Math.min(name.length(), MAX_GROUP_NAME_LENGTH - ending.length())) + ending;
+				if (this.isGroupNameAvailable(candidate, -1) && reservedNames.stream().noneMatch(candidate::equalsIgnoreCase)) {
+					return candidate;
+				}
 			}
 		}
 

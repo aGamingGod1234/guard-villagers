@@ -1,55 +1,93 @@
 package com.guardvillagers.data;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
-import java.util.Locale;
+import com.guardvillagers.GuardSecurityLimits;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.mojang.serialization.JsonOps;
 import java.util.HashSet;
-import java.util.Set;
+import java.util.Locale;
 import java.util.UUID;
-import net.minecraft.nbt.NbtOps;
 import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
 
-final class GuardTacticsStateTest {
+class GuardTacticsStateTest {
 	@Test
-	void addingOwnersPreservesAllSavedConfigurationsAcrossReloads() {
-		GuardTacticsState state = new GuardTacticsState();
-		for (int i = 0; i < 2_050; i++) {
-			GuardTacticsState.PlayerTactics tactics = state.getOrCreate(new UUID(0, i));
-			tactics.addGroup();
-			tactics.setGroupName(0, "Owner " + i);
-			tactics.setRowColumnZone(0, 1, 7);
+	void reachingOwnerLimitPreservesExistingSettingsAndRejectsCreation() {
+		var state = new GuardTacticsState();
+		UUID first = new UUID(0, 0);
+		for (int i = 0; i < GuardSecurityLimits.MAX_TACTICS_PLAYERS; i++) {
+			state.getOrCreate(new UUID(0, i)).addGroup();
 		}
-		GuardTacticsState restored = GuardTacticsState.CODEC.parse(NbtOps.INSTANCE,
-				GuardTacticsState.CODEC.encodeStart(NbtOps.INSTANCE, state).getOrThrow()).getOrThrow();
-		assertEquals(2_050, restored.trackedPlayerCount());
-		for (int i = 0; i < 2_050; i++) {
-			GuardTacticsState.PlayerTactics tactics = restored.getOrDefault(new UUID(0, i));
-			assertEquals("Owner " + i, tactics.getGroupName(0));
-			assertEquals(7, tactics.getRowColumnZone(0, 1));
+		state.getOrCreate(first).setGroupName(0, "Veterans");
+		state.getOrCreate(first).setZoneColor(3, 4, 7);
+		UUID newcomer = UUID.randomUUID();
+		assertFalse(state.canCreate(newcomer));
+		assertThrows(IllegalStateException.class, () -> state.getOrCreate(newcomer));
+		assertTrue(state.canCreate(first));
+		var loaded = GuardTacticsState.CODEC.parse(JsonOps.INSTANCE,
+				GuardTacticsState.CODEC.encodeStart(JsonOps.INSTANCE, state).getOrThrow()).getOrThrow();
+		assertEquals(GuardSecurityLimits.MAX_TACTICS_PLAYERS, loaded.trackedPlayerCount());
+		assertEquals("Veterans", loaded.getOrDefault(first).getGroupName(0));
+		assertEquals(7, loaded.getOrDefault(first).getZoneColor(3, 4));
+		assertEquals(0, loaded.getOrDefault(newcomer).groupCount());
+	}
+
+	@Test
+	void loadingMoreThanCreationLimitNeverDiscardsSavedOwners() {
+		JsonObject players = new JsonObject();
+		for (int i = 0; i <= GuardSecurityLimits.MAX_TACTICS_PLAYERS; i++) {
+			players.add(new UUID(0, i).toString(), JsonParser.parseString("{\"groups\":[\"Veterans\"]}"));
+		}
+		JsonObject saved = new JsonObject();
+		saved.add("players", players);
+		var state = GuardTacticsState.CODEC.parse(JsonOps.INSTANCE, saved).getOrThrow();
+		var reloaded = GuardTacticsState.CODEC.parse(JsonOps.INSTANCE,
+				GuardTacticsState.CODEC.encodeStart(JsonOps.INSTANCE, state).getOrThrow()).getOrThrow();
+		assertEquals(players.size(), reloaded.trackedPlayerCount());
+		for (int i = 0; i < players.size(); i++) {
+			assertEquals("Veterans", reloaded.getOrDefault(new UUID(0, i)).getGroupName(0));
 		}
 	}
 
 	@Test
-	void namesStayUniqueAfterRenameAddCycleAndNormalization() {
-		GuardTacticsState.PlayerTactics tactics = new GuardTacticsState.PlayerTactics();
+	void namesStayUniqueAfterRenameAddTruncationAndCycling() {
+		var tactics = new GuardTacticsState.PlayerTactics();
 		tactics.addGroup();
 		assertTrue(tactics.setGroupName(0, "Beta"));
 		tactics.addGroup();
-		assertEquals("Gamma", tactics.getGroupName(1));
-		assertFalse(tactics.setGroupName(1, " beta "));
-		assertFalse(tactics.setGroupName(1, " unassigned "));
-		String longPrefix = "x".repeat(24);
-		assertTrue(tactics.setGroupName(0, longPrefix + " first"));
-		assertFalse(tactics.setGroupName(1, longPrefix + " second"));
-		tactics.ensureGroupCount(GuardTacticsState.PlayerTactics.MAX_GROUPS);
-		for (int row = 0; row < tactics.groupCount(); row++) {
-			tactics.cycleGroupName(row);
+		assertFalse(tactics.getGroupName(0).equalsIgnoreCase(tactics.getGroupName(1)));
+		assertFalse(tactics.setGroupName(1, "  bEtA  "));
+		assertFalse(tactics.setGroupName(1, " Unassigned "));
+		assertTrue(tactics.setGroupName(0, "x".repeat(24) + "a"));
+		assertFalse(tactics.setGroupName(1, "X".repeat(24) + "b"));
+		tactics.ensureGroupCount(64);
+		for (int i = 0; i < 64; i++) {
+			tactics.cycleGroupName(i);
 		}
-		Set<String> names = new HashSet<>();
+		assertUnique(tactics);
+	}
+
+	@Test
+	void legacyCollisionsAreMigratedWithoutChangingRowIdentity() {
+		var tactics = GuardTacticsState.PlayerTactics.CODEC.parse(JsonOps.INSTANCE,
+				JsonParser.parseString("{\"groups\":[\"Alpha\",\"alpha\",\"Unassigned\",\"Alpha 2\"]}")).getOrThrow();
+		assertEquals(4, tactics.groupCount());
+		assertEquals("Alpha", tactics.getGroupName(0));
+		assertEquals("Alpha 2", tactics.getGroupName(3));
+		assertUnique(tactics);
+		var copy = tactics.copy();
+		for (int row = 0; row < 4; row++) {
+			assertEquals(tactics.getGroupName(row), copy.getGroupName(row));
+		}
+	}
+
+	private static void assertUnique(GuardTacticsState.PlayerTactics tactics) {
+		var names = new HashSet<String>();
+		names.add("unassigned");
 		for (int row = 0; row < tactics.groupCount(); row++) {
-			assertTrue(names.add(tactics.getGroupName(row).toLowerCase(Locale.ROOT)));
+			String name = tactics.getGroupName(row);
+			assertTrue(name.length() <= 24);
+			assertTrue(names.add(name.toLowerCase(Locale.ROOT)), name);
 		}
 	}
 }

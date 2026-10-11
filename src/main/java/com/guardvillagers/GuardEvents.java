@@ -33,6 +33,7 @@ final class GuardEvents {
 	}
 
 	static void register() {
+		GuardTacticsManager.register();
 		AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
 			if (world.isClientSide() || !(player instanceof ServerPlayer serverPlayer) || !(entity instanceof LivingEntity target)) {
 				return InteractionResult.PASS;
