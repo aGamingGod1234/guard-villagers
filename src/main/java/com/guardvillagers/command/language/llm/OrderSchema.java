@@ -29,7 +29,7 @@ import java.util.Set;
 public final class OrderSchema {
 	public static final String TOOL_NAME = "issue_orders";
 	public static final int MAX_ORDERS = OrderValidator.MAX_ORDERS;
-	public static final int MAX_SCOPE_NAME = 24;
+	public static final int MAX_SCOPE_NAME = 512;
 	public static final int MAX_REPLY = OrderValidator.MAX_REPLY_CODE_POINTS;
 
 	private static final Set<String> TOP_KEYS = Set.of("orders", "reply");

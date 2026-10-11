@@ -226,7 +226,9 @@ public final class LlmInterpreter implements AutoCloseable {
 			if (seen.size() >= max) {
 				break;
 			}
-			String clean = clip(value, MAX_NAME_CHARS);
+			// Display names are identity keys: never send a prefix that can name another guard.
+			if (value == null || value.codePointCount(0, value.length()) > MAX_NAME_CHARS) continue;
+			String clean = value;
 			if (!clean.isEmpty()) {
 				seen.add(clean);
 			}
