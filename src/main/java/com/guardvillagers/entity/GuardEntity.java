@@ -74,13 +74,10 @@ import net.minecraft.world.entity.ai.goal.FloatGoal;
 import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
 import net.minecraft.world.entity.ai.goal.OpenDoorGoal;
 import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
-import net.minecraft.world.entity.ai.village.poi.PoiManager;
-import net.minecraft.world.entity.ai.village.poi.PoiTypes;
 import net.minecraft.world.entity.animal.golem.IronGolem;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.monster.RangedAttackMob;
 import net.minecraft.world.entity.npc.villager.Villager;
-import net.minecraft.world.entity.npc.villager.VillagerProfession;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
 import net.minecraft.world.entity.raid.Raider;
@@ -936,53 +933,7 @@ public class GuardEntity extends PathfinderMob implements RangedAttackMob {
 	}
 
 	public BlockPos findSafeRetreatPoint(ServerLevel world) {
-		Villager bestCleric = null;
-		double bestDistance = Double.MAX_VALUE;
-		for (Villager villager : world.getEntitiesOfClass(Villager.class,
-				this.getBoundingBox().inflate(32.0D), Villager::isAlive)) {
-			if (!villager.getVillagerData().profession().is(VillagerProfession.CLERIC)) {
-				continue;
-			}
-			double distanceSq = this.distanceToSqr(villager);
-			if (distanceSq < bestDistance) {
-				bestDistance = distanceSq;
-				bestCleric = villager;
-			}
-		}
-		if (bestCleric != null) {
-			return this.resolveAnchorSlot(GuardMovementSlotResolver.AnchorKind.RETREAT, bestCleric.blockPosition(), false);
-		}
-
-		Optional<BlockPos> bedPos = world.getPoiManager().findClosest(
-				entry -> entry.is(PoiTypes.HOME),
-				this.blockPosition(),
-				48,
-				PoiManager.Occupancy.ANY);
-		if (bedPos.isPresent()) {
-			return this.resolveAnchorSlot(GuardMovementSlotResolver.AnchorKind.RETREAT, bedPos.get(), false);
-		}
-
-		if (this.home != null) {
-			return this.resolveAnchorSlot(GuardMovementSlotResolver.AnchorKind.RETREAT, this.home, false);
-		}
-
-		LivingEntity target = this.aiController.getTrackedCombatTarget(world);
-		if (target != null) {
-			Vec3 away = this.position().subtract(target.position());
-			away = new Vec3(away.x, 0.0D, away.z);
-			if (away.lengthSqr() < 1.0E-4D) {
-				away = new Vec3(1.0D, 0.0D, 0.0D);
-			}
-			Vec3 destination = this.position().add(away.normalize().scale(12.0D));
-			// Ground near the guard's own height (path-safe), not the heightmap top.
-			BlockPos grounded = GuardGrounding.findStandableNear(this, Mth.floor(destination.x), Mth.floor(destination.z),
-					this.getBlockY(), 4, 4, 2);
-			if (grounded != null) {
-				return grounded;
-			}
-		}
-
-		return this.blockPosition();
+		return TacticalRetreatGoal.findSafePoint(this, world, this.aiController.getTrackedCombatTarget(world));
 	}
 
 	public ServerPlayer resolveOwner(ServerLevel world) {

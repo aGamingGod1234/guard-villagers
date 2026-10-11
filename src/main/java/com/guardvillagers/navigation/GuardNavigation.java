@@ -461,6 +461,10 @@ public class GuardNavigation extends GroundPathNavigation {
 	 * classified by the walk pathfinder. No heightmap probing, so roofs and canopies are never picked.
 	 */
 	public BlockPos findNearbyDryExit() {
+		return this.findNearbyDryExit(candidate -> true);
+	}
+
+	public BlockPos findNearbyDryExit(java.util.function.Predicate<BlockPos> reachable) {
 		BlockPos origin = this.guard.blockPosition();
 		for (int radius = 1; radius <= WATER_EXIT_SEARCH_RADIUS; radius++) {
 			BlockPos best = null;
@@ -476,7 +480,7 @@ public class GuardNavigation extends GroundPathNavigation {
 						continue;
 					}
 					double distanceSq = candidate.distSqr(origin);
-					if (distanceSq < bestDistanceSq) {
+					if (distanceSq < bestDistanceSq && reachable.test(candidate)) {
 						bestDistanceSq = distanceSq;
 						best = candidate;
 					}

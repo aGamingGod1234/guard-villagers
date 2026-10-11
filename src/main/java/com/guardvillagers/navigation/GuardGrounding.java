@@ -12,8 +12,8 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 /**
  * Finds standing spots using the same block classification the walk pathfinder uses, instead of
  * heightmap tops (roofs, tree canopies) or spawn checks. A spot is standable when the feet block is
- * {@link PathType#WALKABLE}, the head block is open, and the floor is not a fence/wall-height
- * block. Vertical search prefers the level closest to the reference height, so a slot next to a
+ * {@link PathType#WALKABLE} or {@link PathType#WATER_BORDER}, the head block is open, and the floor
+ * is not a fence/wall-height block. Vertical search prefers the level closest to the reference height, so a slot next to a
  * house picks the street rather than the roof. Unloaded chunks are never touched.
  */
 public final class GuardGrounding {
@@ -34,27 +34,28 @@ public final class GuardGrounding {
 	}
 
 	/**
-	 * Like {@link #findStandable} but falls back to the surrounding columns (Chebyshev rings up to
-	 * {@code horizontalRadius}) when the requested column has no standing spot.
+	 * Like {@link #findStandable}, considering all nearby columns at each height before moving
+	 * farther vertically. This prefers a neighbouring street over the requested column's roof.
 	 */
 	public static BlockPos findStandableNear(Mob mob, int x, int z, int refY, int maxUp, int maxDown,
 			int horizontalRadius) {
 		Level level = mob.level();
 		PathfindingContext context = new PathfindingContext(level, mob);
 		BlockPos.MutableBlockPos scratch = new BlockPos.MutableBlockPos();
-		BlockPos found = findInColumn(level, context, scratch, x, z, refY, maxUp, maxDown);
-		if (found != null) {
-			return found;
-		}
-		for (int radius = 1; radius <= horizontalRadius; radius++) {
-			for (int dx = -radius; dx <= radius; dx++) {
-				for (int dz = -radius; dz <= radius; dz++) {
-					if (Math.max(Math.abs(dx), Math.abs(dz)) != radius) {
-						continue;
-					}
-					found = findInColumn(level, context, scratch, x + dx, z + dz, refY, maxUp, maxDown);
-					if (found != null) {
-						return found;
+		for (int step = 0; step <= Math.max(maxUp, maxDown); step++) {
+			for (int dy : step == 0 ? new int[] {0} : new int[] {step, -step}) {
+				if (dy > maxUp || -dy > maxDown) {
+					continue;
+				}
+				for (int radius = 0; radius <= horizontalRadius; radius++) {
+					for (int dx = -radius; dx <= radius; dx++) {
+						for (int dz = -radius; dz <= radius; dz++) {
+							if (Math.max(Math.abs(dx), Math.abs(dz)) == radius
+									&& level.isLoaded(scratch.set(x + dx, refY + dy, z + dz))
+									&& isStandable(level, context, scratch, x + dx, refY + dy, z + dz)) {
+								return new BlockPos(x + dx, refY + dy, z + dz);
+							}
+						}
 					}
 				}
 			}
@@ -84,7 +85,8 @@ public final class GuardGrounding {
 		if (y <= level.getMinY() + 1 || y >= level.getMaxY() - 1) {
 			return false;
 		}
-		if (WalkNodeEvaluator.getPathTypeStatic(context, scratch.set(x, y, z)) != PathType.WALKABLE) {
+		PathType feet = WalkNodeEvaluator.getPathTypeStatic(context, scratch.set(x, y, z));
+		if (feet != PathType.WALKABLE && feet != PathType.WATER_BORDER) {
 			return false;
 		}
 		if (WalkNodeEvaluator.getPathTypeStatic(context, scratch.set(x, y + 1, z)) != PathType.OPEN) {
