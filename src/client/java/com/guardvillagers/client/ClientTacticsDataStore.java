@@ -253,11 +253,15 @@ public final class ClientTacticsDataStore {
 		this.ensureGroupCount(context, row + 1);
 	}
 
-	public void applyGroupResult(WorldContext context, GuardGroupResultPayload result) {
-		if (result.action() != GuardGroupResultPayload.Action.ADD) return;
+	public GuardGroupResultPayload applyGroupResult(WorldContext context, GuardGroupResultPayload result) {
+		if (result.action() != GuardGroupResultPayload.Action.ADD) return result;
 		ArrayDeque<Integer> pending = this.pendingGroups.get(context.worldId());
-		if (pending != null) pending.pollFirst();
+		Integer expectedRow = pending == null ? null : pending.pollFirst();
 		this.replaceGroupNames(context, this.confirmedGroupNames.getOrDefault(context.worldId(), List.of()));
+		// Rejected adds have no server row; retain the requested row so the screen can roll back dependent edits.
+		return expectedRow != null && result.rejected() > 0
+			? new GuardGroupResultPayload(result.action(), expectedRow, result.applied(), result.rejected(), result.reasonKey())
+			: result;
 	}
 
 	public void clearPendingGroups() {

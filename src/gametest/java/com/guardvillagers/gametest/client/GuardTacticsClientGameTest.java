@@ -212,8 +212,9 @@ public class GuardTacticsClientGameTest implements FabricClientGameTest {
 			store.expectGroup(world, names.size());
 			store.replaceGroupNames(world, names);
 			if (store.groupCount(world) != names.size() + 1) throw new AssertionError("Older roster discarded a queued group add");
-			store.applyGroupResult(world, new com.guardvillagers.network.GuardGroupResultPayload(
+			var rejected = store.applyGroupResult(world, new com.guardvillagers.network.GuardGroupResultPayload(
 					com.guardvillagers.network.GuardGroupResultPayload.Action.ADD, -1, 0, 1, "test.rejected"));
+			if (rejected.groupRow() != names.size()) throw new AssertionError("Failed add lost the dependent edit's row");
 			if (store.groupCount(world) != names.size()) throw new AssertionError("Rejected group add was not rolled back");
 			store.expectGroup(world, names.size());
 			store.replaceGroupNames(world, names);

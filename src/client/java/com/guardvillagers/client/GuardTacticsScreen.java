@@ -2513,6 +2513,10 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 				}
 				case ADD, RENAME -> {
 					if (result.rejected() > 0) {
+						if (result.action() == GuardGroupResultPayload.Action.ADD) {
+							int rejectedRow = result.groupRow();
+							if (rejectedRow >= 0) this.pendingAssignments.entrySet().removeIf(entry -> entry.getValue() == rejectedRow);
+						}
 						// The next roster sync restores the server's group list and names.
 						this.localRevision++;
 						this.setStatus(Component.translatable(KEY + (result.action() == GuardGroupResultPayload.Action.ADD ? "status.add_failed" : "status.rename_failed"),

@@ -41,10 +41,11 @@ public class GuardVillagersClient implements ClientModInitializer {
 		ClientPlayNetworking.registerGlobalReceiver(GuardGroupResultPayload.ID, (payload, context) ->
 			context.client().execute(() -> {
 				Minecraft client = context.client();
+				GuardGroupResultPayload result = payload;
 				if (client.level != null) {
-					ClientTacticsDataStore.getInstance().applyGroupResult(ClientTacticsDataStore.resolveContext(client, client.level), payload);
+					result = ClientTacticsDataStore.getInstance().applyGroupResult(ClientTacticsDataStore.resolveContext(client, client.level), payload);
 				}
-				ClientGuardRosterStore.getInstance().pushGroupResult(payload);
+				ClientGuardRosterStore.getInstance().pushGroupResult(result);
 			})
 		);
 		ClientPlayNetworking.registerGlobalReceiver(GuardDebugSyncPayload.ID, (payload, context) ->
