@@ -4,10 +4,14 @@ import com.guardvillagers.GuardSecurityLimits;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import net.minecraft.core.UUIDUtil;
 import net.minecraft.util.datafix.DataFixTypes;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.saveddata.SavedDataType;
@@ -16,8 +20,10 @@ public final class GuardVillageState extends SavedData {
 	private static final int MIN_GUARD_COUNT = 1;
 	private static final int MAX_GUARD_COUNT = 10_000;
 	private static final Codec<Map<String, VillageData>> VILLAGE_MAP_CODEC = Codec.unboundedMap(Codec.STRING, VillageData.CODEC);
+	private static final Codec<Map<UUID, UUID>> GUARD_MAP_CODEC = Codec.unboundedMap(UUIDUtil.STRING_CODEC, UUIDUtil.STRING_CODEC);
 	public static final Codec<GuardVillageState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
-		VILLAGE_MAP_CODEC.optionalFieldOf("villages", Map.of()).forGetter(GuardVillageState::villagesForCodec)
+		VILLAGE_MAP_CODEC.optionalFieldOf("villages", Map.of()).forGetter(GuardVillageState::villagesForCodec),
+		GUARD_MAP_CODEC.optionalFieldOf("natural_guards", Map.of()).forGetter(state -> Collections.unmodifiableMap(state.naturalGuards))
 	).apply(instance, GuardVillageState::new));
 
 	public static final SavedDataType<GuardVillageState> TYPE = new SavedDataType<>(
@@ -28,16 +34,49 @@ public final class GuardVillageState extends SavedData {
 	);
 
 	private final Map<String, VillageData> villages;
+	private final Map<UUID, UUID> naturalGuards = new HashMap<>();
+	private final Map<UUID, Set<UUID>> guardsBySquad = new HashMap<>();
 
 	public GuardVillageState() {
-		this(Map.of());
+		this(Map.of(), Map.of());
 	}
 
-	private GuardVillageState(Map<String, VillageData> villages) {
+	private GuardVillageState(Map<String, VillageData> villages, Map<UUID, UUID> naturalGuards) {
 		this.villages = new LinkedHashMap<>(Math.max(16, villages.size()), 0.75F, true);
 		for (Map.Entry<String, VillageData> entry : villages.entrySet()) {
 			this.putBounded(entry.getKey(), entry.getValue());
 		}
+		naturalGuards.forEach(this::putNaturalGuard);
+	}
+
+	/** Membership survives chunk unloads and village retirement; only an observed departure removes a guard. */
+	public void recordNaturalGuard(UUID guardId, UUID squadId) {
+		if (!squadId.equals(this.naturalGuards.get(guardId))) {
+			this.removeNaturalGuard(guardId);
+			this.putNaturalGuard(guardId, squadId);
+			this.setDirty();
+		}
+	}
+
+	private void putNaturalGuard(UUID guardId, UUID squadId) {
+		this.naturalGuards.put(guardId, squadId);
+		this.guardsBySquad.computeIfAbsent(squadId, ignored -> new HashSet<>()).add(guardId);
+	}
+
+	public void removeNaturalGuard(UUID guardId) {
+		UUID squadId = this.naturalGuards.remove(guardId);
+		if (squadId != null) {
+			Set<UUID> guards = this.guardsBySquad.get(squadId);
+			guards.remove(guardId);
+			if (guards.isEmpty()) {
+				this.guardsBySquad.remove(squadId);
+			}
+			this.setDirty();
+		}
+	}
+
+	public int countNaturalGuards(UUID squadId) {
+		return this.guardsBySquad.getOrDefault(squadId, Set.of()).size();
 	}
 
 	public VillageData getOrCreate(String villageId, int initialSpawnCount) {

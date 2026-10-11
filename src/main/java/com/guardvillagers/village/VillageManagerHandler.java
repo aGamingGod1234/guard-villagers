@@ -14,6 +14,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.core.SectionPos;
@@ -38,7 +39,6 @@ public final class VillageManagerHandler {
 	private static final int MAX_SPAWNS_PER_VILLAGE = 2;
 	private static final int MAX_GUARDS_PER_VILLAGE = 12;
 	private static final int RESPAWN_COOLDOWN_TICKS = 20 * 60 * 2;
-	private static final int NATURAL_GUARD_SCAN_EXPANSION = 16;
 	private static final int DOOR_COUNT_CACHE_TICKS = 20 * 60;
 	private static final int DOOR_COUNT_CACHE_MAX_ENTRIES = 4096;
 	private static final long VILLAGE_RETENTION_TICKS = 20L * 60L * 60L * 6L;
@@ -56,6 +56,30 @@ public final class VillageManagerHandler {
 	private VillageManagerHandler() {
 	}
 
+	public static void register() {
+		ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> {
+			if (entity instanceof GuardEntity guard) {
+				trackNaturalGuard(world, guard);
+			}
+		});
+		ServerEntityEvents.ENTITY_UNLOAD.register((entity, world) -> {
+			if (entity instanceof GuardEntity guard) {
+				trackNaturalGuard(world, guard);
+			}
+		});
+	}
+
+	private static void trackNaturalGuard(ServerLevel world, GuardEntity guard) {
+		GuardVillageState state = world.getDataStorage().computeIfAbsent(GuardVillageState.TYPE);
+		Entity.RemovalReason reason = guard.getRemovalReason();
+		if (guard.hasOwner() || guard.getHealth() <= 0.0F || guard.getSquadId() == null || guard.getHome().isEmpty()
+				|| (reason != null && (reason.shouldDestroy() || reason == Entity.RemovalReason.CHANGED_DIMENSION))) {
+			state.removeNaturalGuard(guard.getUUID());
+		} else {
+			state.recordNaturalGuard(guard.getUUID(), guard.getSquadId());
+		}
+	}
+
 	public static void clearSessionState() {
 		DOOR_COUNT_CACHE.clear();
 	}
@@ -67,6 +91,11 @@ public final class VillageManagerHandler {
 
 		List<Villager> villagers = collectLoadedVillagers(world);
 		GuardVillageState state = world.getDataStorage().computeIfAbsent(GuardVillageState.TYPE);
+		for (Entity entity : world.getAllEntities()) {
+			if (entity instanceof GuardEntity guard) {
+				trackNaturalGuard(world, guard);
+			}
+		}
 		if (villagers.isEmpty()) {
 			state.retireStale(world.getGameTime(), Set.of(), VILLAGE_RETENTION_TICKS);
 			return;
@@ -316,11 +345,12 @@ public final class VillageManagerHandler {
 	}
 
 	private static int countNaturalGuards(ServerLevel world, VillageDescriptor village) {
-		return world.getEntitiesOfClass(
-			GuardEntity.class,
-			village.toEntityBox(NATURAL_GUARD_SCAN_EXPANSION),
-			guard -> !guard.hasOwner() && village.bounds().isInside(guard.blockPosition())
-		).size();
+		UUID squadId = UUID.nameUUIDFromBytes(village.id().getBytes(StandardCharsets.UTF_8));
+		int count = 0;
+		for (ServerLevel level : world.getServer().getAllLevels()) {
+			count += level.getDataStorage().computeIfAbsent(GuardVillageState.TYPE).countNaturalGuards(squadId);
+		}
+		return count;
 	}
 
 	private static int countBeds(ServerLevel world, VillageDescriptor village) {

@@ -6,13 +6,18 @@ import static com.guardvillagers.gametest.GuardTestSupport.ENV;
 
 import com.guardvillagers.entity.GuardEntity;
 import com.guardvillagers.GuardVillagersMod;
+import com.guardvillagers.data.GuardVillageState;
 import com.guardvillagers.village.VillageManagerHandler;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.UUID;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.level.block.BedBlock;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.properties.BedPart;
@@ -20,6 +25,65 @@ import net.minecraft.world.phys.Vec3;
 
 /** Natural village guards appear around a small hand-built village (beds + villagers). */
 public class GuardVillageGameTest {
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 280)
+	public void movedAndUnloadedGarrisonStillFillsVillageCap(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		bed(helper, CENTER, CENTER);
+		bed(helper, CENTER + 1, CENTER);
+		var level = helper.getLevel();
+		BlockPos home = helper.absolutePos(new BlockPos(CENTER, 1, CENTER - 1));
+		String villageId = level.dimension().identifier() + "|poi|" + (home.getX() >> 4) + "|" + (home.getZ() >> 4);
+		UUID squad = UUID.nameUUIDFromBytes(villageId.getBytes(StandardCharsets.UTF_8));
+		GuardVillageState state = level.getDataStorage().computeIfAbsent(GuardVillageState.TYPE);
+		for (int i = 0; i < 2; i++) {
+			var villager = helper.spawn(EntityType.VILLAGER, new Vec3(CENTER + 0.5, 1, CENTER + 2.5));
+			villager.setNoAi(true);
+			GuardEntity guard = GuardVillagersMod.GUARD_ENTITY_TYPE.create(level, EntitySpawnReason.NATURAL);
+			guard.setSquadId(squad);
+			guard.setHome(home, 32);
+			guard.setNoAi(true);
+			guard.setNoGravity(true);
+			guard.snapTo(home.getX() + 70.5, home.getY() + 80, home.getZ() + 0.5, 0, 0);
+			helper.assertTrue(level.addFreshEntity(guard), "garrison fixture did not load");
+			GuardTestSupport.onFinish(helper, () -> {
+				guard.discard();
+				state.removeNaturalGuard(guard.getUUID());
+			});
+			if (i == 0) {
+				guard.remove(Entity.RemovalReason.UNLOADED_TO_CHUNK);
+			}
+		}
+		helper.assertValueEqual(state.countNaturalGuards(squad), 2, "loaded and unloaded membership");
+		helper.runAfterDelay(240, () -> {
+			helper.assertTrue(level.getEntitiesOfClass(GuardEntity.class, helper.getBounds(), GuardEntity::isAlive).isEmpty(),
+				"village spawned replacements for its living garrison outside the bounds");
+			helper.assertValueEqual(state.countNaturalGuards(squad), 2, "persistent garrison count");
+			helper.succeed();
+		});
+	}
+
+	@GameTest(structure = ARENA, environment = ENV, maxTicks = 160)
+	public void hiringAndDeathReleaseNaturalMembership(GameTestHelper helper) {
+		GuardTestSupport.floor(helper);
+		var level = helper.getLevel();
+		UUID squad = UUID.randomUUID();
+		GuardVillageState state = level.getDataStorage().computeIfAbsent(GuardVillageState.TYPE);
+		GuardEntity guard = GuardVillagersMod.GUARD_ENTITY_TYPE.create(level, EntitySpawnReason.NATURAL);
+		guard.setSquadId(squad);
+		guard.setHome(helper.absolutePos(new BlockPos(CENTER, 1, CENTER)), 32);
+		guard.snapTo(helper.absoluteVec(new Vec3(CENTER + 0.5, 1, CENTER + 0.5)));
+		helper.assertTrue(level.addFreshEntity(guard), "natural guard did not load");
+		helper.assertValueEqual(state.countNaturalGuards(squad), 1, "spawned membership");
+		guard.setOwnerUuid(UUID.randomUUID());
+		helper.runAfterDelay(110, () -> {
+			helper.assertValueEqual(state.countNaturalGuards(squad), 0, "hiring should release membership");
+			guard.setOwnerUuid(null);
+			guard.discard();
+			helper.assertValueEqual(state.countNaturalGuards(squad), 0, "destroyed guards must not be re-recorded");
+			helper.succeed();
+		});
+	}
 
 	@GameTest(structure = ARENA, environment = ENV, maxTicks = 320)
 	public void villageAfterFirst256VillagersStillSpawnsGuards(GameTestHelper helper) {
