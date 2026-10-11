@@ -322,6 +322,10 @@ public class GuardNavigation extends GroundPathNavigation {
 
 	private boolean afterMove(Vec3 targetPos, boolean started) {
 		Path current = this.path;
+		if (current == null && !this.canUpdatePath()) {
+			// Ground navigation defers searches while airborne; no route was evaluated yet.
+			return started;
+		}
 		if (current == null || !current.canReach()) {
 			this.unreachableTargetPos = targetPos;
 			this.unreachableReach = this.lastRequestedReach;
