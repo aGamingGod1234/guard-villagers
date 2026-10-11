@@ -118,7 +118,6 @@ public final class GuardCommandState extends SavedData {
 	/** One owner's chain of command. Mutators do not mark the state dirty; callers do. */
 	public static final class OwnerCommand {
 		/** Guards whose behavior a raid response changed and has not put back yet. */
-		public static final int MAX_RAID_BEHAVIORS = 256;
 
 		private static final Codec<CaptainEntry> CAPTAIN_CODEC = RecordCodecBuilder.create(instance -> instance.group(
 				Codec.intRange(0, MAX_CAPTAINS - 1).fieldOf("group").forGetter(CaptainEntry::group),
@@ -135,7 +134,7 @@ public final class GuardCommandState extends SavedData {
 				Codec.BOOL.optionalFieldOf("autoCommand").forGetter(OwnerCommand::autoCommandChoice),
 				SavedOrder.CODEC.listOf(0, OrderBook.MAX_ACTIVE).optionalFieldOf("orders", List.of()).forGetter(command -> command.orders),
 				Codec.BOOL.optionalFieldOf("voiceConsent").forGetter(command -> Optional.ofNullable(command.voiceConsent)),
-				RaidEntry.CODEC.listOf(0, MAX_RAID_BEHAVIORS).optionalFieldOf("raidBehaviors", List.of())
+				RaidEntry.CODEC.listOf().optionalFieldOf("raidBehaviors", List.of())
 						.forGetter(OwnerCommand::raidEntryList),
 				SavedOrder.CODEC.listOf().optionalFieldOf("pendingCleanup", List.of()).forGetter(command -> command.pendingCleanup),
 				CAPTAIN_CODEC.listOf(0, MAX_CAPTAINS).optionalFieldOf("pinnedCaptainGroups", List.of())
@@ -361,9 +360,6 @@ public final class GuardCommandState extends SavedData {
 				}
 				this.raidBehaviors.put(guard, new RaidBehavior(existing.original(), applied, existing.dimension(), existing.raidCenter(), existing.manuallyChanged()));
 				return true;
-			}
-			if (this.raidBehaviors.size() >= MAX_RAID_BEHAVIORS) {
-				this.raidBehaviors.remove(this.raidBehaviors.keySet().iterator().next());
 			}
 			this.raidBehaviors.put(guard, new RaidBehavior(original, applied, dimension, raidCenter, false));
 			return true;

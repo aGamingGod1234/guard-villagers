@@ -67,6 +67,29 @@ final class GuardRosterSyncPayloadTest {
 	}
 
 	@Test
+	void rosterBeyondOldCountLimitIsSplitWithoutLosingRows() {
+		var rows = java.util.stream.IntStream.range(0, 2500).mapToObj(i ->
+				GuardRosterSyncPayload.GuardSummary.unloaded(new UUID(0, i), "Guard " + i, 0, "Alpha")).toList();
+		var payload = new GuardRosterSyncPayload(List.of("Alpha"), rows);
+		var packets = payload.chunks(RegistryAccess.EMPTY, 42);
+		assertEquals(3, packets.size());
+		int received = 0;
+		for (var packet : packets) {
+			var buf = new RegistryFriendlyByteBuf(Unpooled.buffer(), RegistryAccess.EMPTY);
+			try {
+				GuardRosterSyncPayload.CODEC.encode(buf, packet);
+				assertTrue(buf.readableBytes() <= GuardRosterSyncPayload.MAX_PACKET_BYTES);
+				var decoded = GuardRosterSyncPayload.CODEC.decode(buf);
+				assertEquals(received, decoded.offset());
+				assertEquals(42, decoded.snapshotId());
+				received += decoded.guards().size();
+				assertEquals(received == rows.size(), decoded.last());
+			} finally { buf.release(); }
+		}
+		assertEquals(2500, received);
+	}
+
+	@Test
 	void groupResultRoundTrips() {
 		GuardGroupResultPayload result = new GuardGroupResultPayload(GuardGroupResultPayload.Action.ASSIGN, 2, 3, 1,
 				"commands.guardvillagers.groups.guard_not_found");

@@ -99,6 +99,7 @@ public class GuardVillagersMod implements ModInitializer {
 
 	@Override
 	public void onInitialize() {
+		GuardGameRules.initialize();
 		warmupPersistentStateClasses();
 		ServerLifecycleEvents.SERVER_STARTING.register(GuardSavedData::migrateLegacyFiles);
 		registerPayloads();

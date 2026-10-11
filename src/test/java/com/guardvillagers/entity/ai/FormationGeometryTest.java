@@ -12,7 +12,7 @@ final class FormationGeometryTest {
 
 	@Test
 	void slotsForLargeGroupsNeverOverlap() {
-		for (int count : new int[] {1, 8, 32, 64, 128}) {
+		for (int count : new int[] {1, 8, 32, 64, 128, 300, 1000}) {
 			double[][] slots = new double[count][2];
 			for (int i = 0; i < count; i++) {
 				FormationGeometry.slotOffset(i, false, FIRST, STEP, ARC, 0.7D, slots[i]);

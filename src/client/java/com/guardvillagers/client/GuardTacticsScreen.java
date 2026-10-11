@@ -120,7 +120,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 	private static final int DIALOG_BUTTON_HEIGHT = 16;
 	private static final int MAX_COMMAND_LENGTH = 256;
 	// Mirrors the server's MAX_BATCH_ASSIGN for assignmany.
-	private static final int MAX_UUIDS_PER_COMMAND = 64;
+	private static final int MAX_UUIDS_PER_COMMAND = 1_024;
 	private static final int MAX_BAR_SWATCHES = 10;
 	private static final Pattern GENERIC_GROUP_NAME = Pattern.compile("Role(\\s+\\d+)?");
 
@@ -1694,7 +1694,8 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		}
 		if (collapsed) {
 			int perRow = this.chipsPerRow(w);
-			for (int i = 0; i < members.size(); i++) {
+			for (int i = Math.max(0, (this.listTop - bodyY) / (CHIP_HEIGHT + CHIP_GAP)) * perRow;
+					i < Math.min(members.size(), (Math.max(0, (this.listBottom - bodyY) / (CHIP_HEIGHT + CHIP_GAP)) + 1) * perRow); i++) {
 				int cx = x + 1 + (i % perRow) * (CHIP_WIDTH + CHIP_GAP);
 				int cyy = bodyY + (i / perRow) * (CHIP_HEIGHT + CHIP_GAP);
 				ClientGuardRosterStore.GuardRosterEntry guard = members.get(i);
@@ -1703,7 +1704,8 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			}
 			return;
 		}
-		for (int i = 0; i < members.size(); i++) {
+		for (int i = Math.max(0, (this.listTop - bodyY) / MEMBER_ROW_STRIDE);
+				i < Math.min(members.size(), Math.max(0, (this.listBottom - bodyY) / MEMBER_ROW_STRIDE + 1)); i++) {
 			int ry = bodyY + i * MEMBER_ROW_STRIDE;
 			if (ry > this.listBottom || ry + MEMBER_ROW_HEIGHT < this.listTop) {
 				continue;
@@ -1761,7 +1763,8 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 		}
 		int perRow = this.trayPerRow(w);
 		int chipW = this.trayChipWidth(w);
-		for (int i = 0; i < n; i++) {
+		for (int i = Math.max(0, (this.listTop - trayY - 2) / (TRAY_CHIP_HEIGHT + CHIP_GAP)) * perRow;
+				i < Math.min(n, (Math.max(0, (this.listBottom - trayY - 2) / (TRAY_CHIP_HEIGHT + CHIP_GAP)) + 1) * perRow); i++) {
 			int cx = x + 2 + (i % perRow) * (chipW + CHIP_GAP);
 			int cyy = trayY + 2 + (i / perRow) * (TRAY_CHIP_HEIGHT + CHIP_GAP);
 			ClientGuardRosterStore.GuardRosterEntry guard = this.unassignedList.get(i);
@@ -1987,7 +1990,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			graphics.fill(x + i, y, end, y + 1, color);
 			graphics.fill(x + i, y + h - 1, end, y + h, color);
 		}
-		for (int i = 0; i < h; i += 4) {
+		for (int i = Math.max(0, (this.listTop - y) / 4 * 4); i < Math.min(h, this.listBottom - y + 1); i += 4) {
 			int end = Math.min(y + i + 2, y + h);
 			graphics.fill(x, y + i, x + 1, end, color);
 			graphics.fill(x + w - 1, y + i, x + w, end, color);
@@ -2443,7 +2446,7 @@ public final class GuardTacticsScreen extends AbstractContainerScreen<GuardTacti
 			}
 		}
 		this.pendingAssignments.keySet().removeAll(unsent.keySet());
-		// Each accepted batch makes the server push a fresh roster; confirmation is checked against it.
+		// The server coalesces accepted batches into roster updates; confirmation is checked against them.
 		this.awaitingConfirmation.putAll(this.pendingAssignments);
 		this.awaitingSentCount = this.awaitingConfirmation.size();
 		this.awaitingSince = System.currentTimeMillis();

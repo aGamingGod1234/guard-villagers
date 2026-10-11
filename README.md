@@ -24,7 +24,7 @@ A Fabric mod that adds villager guards. Villages raise their own garrison, and y
 ## Features
 
 - Village guards that spawn around populated villages and answer the village bell.
-- Up to 16 personal guards per player, hired in a shop or claimed from a village.
+- Unlimited personal guards by default, hired in a shop or claimed from a village. Server operators can set a cap.
 - Two roles (Swordsman, Bowman), four behaviors, formations, patrol zones and a hold mode.
 - A chain of command: one commander per player and one captain per group, chosen by seniority or by you.
 - Orders in plain English through `/guards say`, a `!g` chat prefix, or your voice with Simple Voice Chat.
@@ -66,7 +66,7 @@ The Guard Whistle and the Guard Spawn Egg are in the mod's creative tab. The whi
 ### Village guards and personal guards
 
 - **Village guards** spawn around villages based on how many villagers and doors the village has, and are replaced over time. They defend the village and gather at the bell when it rings.
-- **Personal guards** belong to one player. You can own up to 16. Get them by:
+- **Personal guards** belong to one player. Ownership is unlimited by default. Get them by:
   - hiring in `/guards shop` (emerald blocks), or
   - right-clicking an unowned guard with emeralds, if your reputation is at least `0.50`. Price: `4 + 2 x (level - 1)` emeralds.
 
@@ -264,7 +264,11 @@ Singleplayer map notes are stored per save folder, so renaming a world keeps its
 
 ![Shop](docs/images/shop-armor.png)
 
-**Hiring.** Click the card to hire one guard, shift-click to hire as many as you can afford (up to your 16-guard limit). The guard spawns in your own block column or the hire fails and you are refunded. Free in creative.
+**Server ownership cap.** `/gamerule guardvillagers:max_personal_guards 0` allows unlimited guards (the default). Set a positive integer, for example `/gamerule guardvillagers:max_personal_guards 300`, to cap each player's total across dimensions and unloaded chunks. Lowering the cap keeps existing guards and blocks further purchases/claims until below it. The shop and `/guards count` show `?` when unlimited.
+
+Large rosters are sent in packets below 512 KiB and assembled before the sidebar updates. Equipment previews are omitted beyond 64 blocks or in unloaded chunks; an individually oversized preview is also omitted. Large open rosters refresh every 1?5 seconds, with command changes coalesced over half a second. The sidebar only draws visible guard rows. Groups retain their 64-group limit, with no per-group guard cap.
+
+**Hiring.** Click the card to hire one guard, shift-click to hire as many as you can afford (subject to the server?s configured cap; creative shift-click buys 16 per click). The guard spawns in your own block column or the hire fails and you are refunded. Free in creative.
 
 Hire price is `4 + 2 x (loadout tier - 1)`, where loadout tier is `1 + armor + weapon + support` upgrade levels. Reputation scales it: `1.5x` at `0.00`, `1.125x` at `0.50`, `0.75x` at `1.00`, never below 1 block. Recruits receive the purchased equipment and support upgrades, but start at XP level 1 with zero experience. The loadout tier is a price factor, not the guard's XP level.
 

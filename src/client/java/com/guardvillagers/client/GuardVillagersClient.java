@@ -35,7 +35,7 @@ public class GuardVillagersClient implements ClientModInitializer {
 				}
 				ClientTacticsDataStore.WorldContext worldContext = ClientTacticsDataStore.resolveContext(client, client.level);
 				ClientGuardRosterStore.getInstance().applyPayload(worldContext, payload);
-				ClientTacticsDataStore.getInstance().replaceGroupNames(worldContext, payload.groupNames());
+				if (payload.last()) ClientTacticsDataStore.getInstance().replaceGroupNames(worldContext, payload.groupNames());
 			})
 		);
 		ClientPlayNetworking.registerGlobalReceiver(GuardGroupResultPayload.ID, (payload, context) ->

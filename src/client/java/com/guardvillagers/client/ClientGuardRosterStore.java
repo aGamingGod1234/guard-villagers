@@ -14,6 +14,9 @@ public final class ClientGuardRosterStore {
 
 	private final Map<String, List<GuardRosterEntry>> rostersByWorld = new HashMap<>();
 	private int revision;
+	private long pendingSnapshot;
+	private String pendingWorld;
+	private final java.util.ArrayList<GuardRosterEntry> pendingEntries = new java.util.ArrayList<>();
 	// Results of group commands, drained by the open tactics screen; capped so nothing piles up while it is closed.
 	private final ArrayDeque<GuardGroupResultPayload> groupResults = new ArrayDeque<>();
 	private static final int MAX_QUEUED_RESULTS = 32;
@@ -30,10 +33,21 @@ public final class ClientGuardRosterStore {
 			return;
 		}
 
-		List<GuardRosterEntry> entries = payload.guards().stream()
-				.map(ClientGuardRosterStore::toEntry)
-				.toList();
-		this.rostersByWorld.put(this.key(context), entries);
+		String world = this.key(context);
+		if (payload.offset() == 0) {
+			this.pendingSnapshot = payload.snapshotId();
+			this.pendingWorld = world;
+			this.pendingEntries.clear();
+		}
+		if (payload.snapshotId() != this.pendingSnapshot || !world.equals(this.pendingWorld)
+				|| payload.offset() != this.pendingEntries.size()) return;
+		for (GuardRosterSyncPayload.GuardSummary row : payload.guards()) {
+			this.pendingEntries.add(toEntry(row));
+		}
+		if (!payload.last()) return;
+		this.rostersByWorld.put(world, List.copyOf(this.pendingEntries));
+		this.pendingEntries.clear();
+		this.pendingWorld = null;
 		this.revision++;
 	}
 
@@ -74,6 +88,8 @@ public final class ClientGuardRosterStore {
 
 	public void clear() {
 		this.rostersByWorld.clear();
+		this.pendingEntries.clear();
+		this.pendingWorld = null;
 		this.groupResults.clear();
 		this.revision++;
 	}

@@ -52,8 +52,8 @@ public final class GuardCommands {
 	private static final int MIN_ZONE_RADIUS = 8;
 	private static final int MAX_ZONE_RADIUS = 128;
 	private static final double ZONE_ASSIGN_RANGE = 96.0D;
-	/** Upper bound for one {@code groups assignmany} call; the roster never holds more owned guards than this per screen. */
-	private static final int MAX_BATCH_ASSIGN = 64;
+	/** Upper bound for one {@code groups assignmany} call; larger selections are split across calls by the client. */
+	private static final int MAX_BATCH_ASSIGN = 1_024;
 	private static final double APPOINT_RANGE = 8.0D;
 
 	private GuardCommands() {
@@ -447,7 +447,7 @@ public final class GuardCommands {
 		int owned = GuardOwnershipIndex.countOwnedGuards(server, player.getUUID());
 		int loaded = GuardOwnershipIndex.getOwnedGuards(server, player.getUUID()).size();
 		source.sendSuccess(() -> Component.translatable("commands.guardvillagers.count", owned, loaded,
-				GuardSecurityLimits.MAX_PERSONAL_GUARDS_PER_PLAYER), false);
+				com.guardvillagers.GuardGameRules.displayLimit(player.level())), false);
 		return owned;
 	}
 

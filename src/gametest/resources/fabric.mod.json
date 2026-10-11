@@ -10,6 +10,7 @@
 			"com.guardvillagers.gametest.GuardCombatReviewGameTest",
 			"com.guardvillagers.gametest.GuardCombatScenariosGameTest",
 			"com.guardvillagers.gametest.GuardOwnershipGameTest",
+            "com.guardvillagers.gametest.GuardScaleGameTest",
 			"com.guardvillagers.gametest.GuardMovementGameTest",
 			"com.guardvillagers.gametest.GuardNavigationRegressionGameTest",
 			"com.guardvillagers.gametest.GuardPersistenceGameTest",

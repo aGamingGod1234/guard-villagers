@@ -16,6 +16,7 @@ import net.minecraft.world.item.BowItem;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.level.entity.EntityTypeTest;
 
 /**
  * Bow combat, modelled on vanilla RangedBowAttackGoal with three guard-specific additions:
@@ -234,14 +235,10 @@ public final class GuardBowAttackGoal extends Goal {
 		Vec3 from = this.guard.getEyePosition();
 		Vec3 to = new Vec3(target.getX(), target.getY(0.5D), target.getZ());
 		AABB sweep = new AABB(from, to).inflate(0.5D);
-		for (Entity entity : world.getEntities(this.guard, sweep,
-				entity -> entity != target && entity instanceof LivingEntity && entity.isAlive() && entity.canBeHitByProjectile())) {
-			boolean protectedEntity = this.guard.isAlly(entity) || entity instanceof Player;
-			if (protectedEntity && entity.getBoundingBox().inflate(0.3D).clip(from, to).isPresent()) {
-				return false;
-			}
-		}
-		return true;
+		return !world.hasEntities(EntityTypeTest.forClass(LivingEntity.class), sweep,
+				entity -> entity != this.guard && entity != target && entity.isAlive() && entity.canBeHitByProjectile()
+						&& (this.guard.isAlly(entity) || entity instanceof Player)
+						&& entity.getBoundingBox().inflate(0.3D).clip(from, to).isPresent());
 	}
 
 	private boolean hasValidTarget() {

@@ -2,6 +2,11 @@ package com.guardvillagers.navigation;
 
 import com.guardvillagers.entity.GuardEntity;
 import java.util.function.Supplier;
+import java.util.Map;
+import java.util.WeakHashMap;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.tags.FluidTags;
@@ -46,6 +51,13 @@ public class GuardNavigation extends GroundPathNavigation {
 	private static final double CROWD_JAM_RADIUS = 0.9D;
 	private static final int CROWD_CHECK_INTERVAL_TICKS = 5;
 
+	// Shared across dimensions, keyed weakly so a stopped server cannot leak into the next session.
+	private static final Map<MinecraftServer, PathRequestBudget> PATH_BUDGETS = new WeakHashMap<>();
+	private static final int MOVEMENT_REQUESTS_PER_TICK = 64;
+	private final PathRequestBudget.Ticket pathTicket = new PathRequestBudget.Ticket();
+	private final PathRequestBudget.Ticket recomputeTicket = new PathRequestBudget.Ticket();
+	private boolean deferredMove;
+	private Entity deferredEntity;
 	private final GuardEntity guard;
 
 	private BlockPos lastTargetPos;
@@ -177,6 +189,10 @@ public class GuardNavigation extends GroundPathNavigation {
 		if (target == null) {
 			return;
 		}
+		if (!this.acquireMovementBudget(this.recomputeTicket)) {
+			this.hasDelayedRecomputation = true;
+			return;
+		}
 		this.timeLastRecompute = now;
 		SquadRouteCache.invalidateSquadRoute(this.level.dimension(), this.guard.getSquadId(), target);
 		int reach = this.followReach;
@@ -208,9 +224,10 @@ public class GuardNavigation extends GroundPathNavigation {
 		if (entity == null) {
 			return false;
 		}
+		this.deferredEntity = entity;
 		Vec3 targetPos = entity.position();
 		if (!this.shouldIssueMove(targetPos, speed, RouteMode.DYNAMIC, 1)) {
-			return !this.isDone();
+			return this.deferredMove || !this.isDone();
 		}
 		this.routeMode = RouteMode.DYNAMIC;
 		this.lastTargetPos = entity.blockPosition().immutable();
@@ -246,9 +263,10 @@ public class GuardNavigation extends GroundPathNavigation {
 	}
 
 	private boolean startMovingToStatic(double x, double y, double z, double speed, int reachRange) {
+		this.deferredEntity = null;
 		Vec3 targetPos = new Vec3(x, y, z);
 		if (!this.shouldIssueMove(targetPos, speed, RouteMode.STATIC, reachRange)) {
-			return !this.isDone();
+			return this.deferredMove || !this.isDone();
 		}
 		this.routeMode = RouteMode.STATIC;
 		this.lastTargetPos = BlockPos.containing(x, y, z);
@@ -259,8 +277,9 @@ public class GuardNavigation extends GroundPathNavigation {
 		if (targetPos == null) {
 			return false;
 		}
+		this.deferredEntity = null;
 		if (!this.shouldIssueMove(targetPos, speed, RouteMode.DYNAMIC, 1)) {
-			return !this.isDone();
+			return this.deferredMove || !this.isDone();
 		}
 		this.routeMode = RouteMode.DYNAMIC;
 		this.lastTargetPos = BlockPos.containing(targetPos.x, targetPos.y, targetPos.z);
@@ -282,6 +301,19 @@ public class GuardNavigation extends GroundPathNavigation {
 
 	@Override
 	public void tick() {
+		if (this.deferredMove) {
+			this.deferredMove = false;
+			if (this.deferredEntity != null) {
+				if (this.deferredEntity.isAlive() && this.deferredEntity.level() == this.level) {
+					this.moveTo(this.deferredEntity, this.lastRequestedSpeed);
+				} else {
+					this.pathTicket.cancel();
+					this.deferredEntity = null;
+				}
+			} else {
+				this.resumeRequestedMove();
+			}
+		}
 		super.tick();
 		if (this.recoveryHoldTicks > 0 && (--this.recoveryHoldTicks == 0 || this.isDone())) {
 			this.recoveryHoldTicks = 0;
@@ -311,6 +343,10 @@ public class GuardNavigation extends GroundPathNavigation {
 
 	@Override
 	public void stop() {
+		this.deferredMove = false;
+		this.deferredEntity = null;
+		this.pathTicket.cancel();
+		this.recomputeTicket.cancel();
 		super.stop();
 		this.followTarget = null;
 		this.lastRequestedTargetPos = null;
@@ -418,6 +454,15 @@ public class GuardNavigation extends GroundPathNavigation {
 				|| currentTick - this.lastMoveCommandTick >= minInterval;
 
 		if (shouldIssue) {
+			// Reusing the current path does not run A*. Keep walking it while new requests wait.
+			boolean reuse = this.path != null && !this.path.isDone()
+					&& this.path.getTarget().equals(BlockPos.containing(targetPos)) && this.followReach <= reachRange;
+			if (!reuse && !this.acquireMovementBudget(this.pathTicket)) {
+				this.deferredMove = true;
+				return false;
+			}
+			this.deferredMove = false;
+			this.pathTicket.cancel();
 			this.lastMoveCommandTick = currentTick;
 			this.lastIssuedTargetPos = targetPos;
 			this.lastIssuedRouteMode = mode;
@@ -427,6 +472,15 @@ public class GuardNavigation extends GroundPathNavigation {
 		return shouldIssue;
 	}
 
+	private boolean acquireMovementBudget(PathRequestBudget.Ticket ticket) {
+		// Survival probes must remain immediate. The quota governs normal movement/recompute
+		// requests, not direct reachability probes or emergency air/water escape searches.
+		if (!(this.level instanceof ServerLevel world) || this.guard.getAirSupply() < 80 || this.guard.isInWater()) return true;
+		MinecraftServer server = world.getServer();
+		return PATH_BUDGETS.computeIfAbsent(server, ignored -> new PathRequestBudget(MOVEMENT_REQUESTS_PER_TICK))
+				.tryAcquire(ticket, server.getTickCount());
+	}
+
 	private boolean hasNearbyGuardCrowding() {
 		long now = this.level.getGameTime();
 		if (now - this.lastCrowdCheckTick < CROWD_CHECK_INTERVAL_TICKS && this.lastCrowdCheckTick != Long.MIN_VALUE) {
@@ -434,10 +488,10 @@ public class GuardNavigation extends GroundPathNavigation {
 		}
 		this.lastCrowdCheckTick = now;
 		AABB crowdBox = this.guard.getBoundingBox().inflate(CROWD_JAM_RADIUS, 0.0D, CROWD_JAM_RADIUS);
-		this.lastCrowdCheckResult = !this.level.getEntitiesOfClass(
-				GuardEntity.class,
+		this.lastCrowdCheckResult = this.level.hasEntities(
+				EntityTypeTest.forClass(GuardEntity.class),
 				crowdBox,
-				entity -> entity != this.guard && entity.isAlive()).isEmpty();
+				entity -> entity != this.guard && entity.isAlive());
 		return this.lastCrowdCheckResult;
 	}
 
@@ -465,7 +519,7 @@ public class GuardNavigation extends GroundPathNavigation {
 	}
 
 	private boolean isOccupiedByGuard(BlockPos pos) {
-		return !this.level.getEntitiesOfClass(GuardEntity.class, new AABB(pos), entity -> entity != this.guard).isEmpty();
+		return this.level.hasEntities(EntityTypeTest.forClass(GuardEntity.class), new AABB(pos), entity -> entity != this.guard);
 	}
 
 	private boolean isInOrAgainstFlowingWater() {

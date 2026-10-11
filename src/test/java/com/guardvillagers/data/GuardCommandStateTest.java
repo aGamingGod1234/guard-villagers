@@ -21,6 +21,24 @@ import org.junit.jupiter.api.Test;
 
 final class GuardCommandStateTest {
 	@Test
+	void thousandRaidBehaviorsAndOrderRecipientsSurviveSaving() {
+		var command = new GuardCommandState.OwnerCommand();
+		var recipients = new java.util.HashSet<UUID>();
+		for (int i = 0; i < 1000; i++) {
+			UUID id = new UUID(99, i);
+			recipients.add(id);
+			command.recordRaidBehavior(id, GuardBehavior.PERIMETER, GuardBehavior.OFFENSIVE);
+		}
+		var order = new ActiveOrder(1, Order.of(Action.HOLD, Scope.ALL), OrderSource.VOICE, 0, ActiveOrder.NEVER)
+				.withRecipients(recipients);
+		command.setOrders(List.of(order));
+		var encoded = GuardCommandState.OwnerCommand.CODEC.encodeStart(JsonOps.INSTANCE, command).getOrThrow();
+		var decoded = GuardCommandState.OwnerCommand.CODEC.parse(JsonOps.INSTANCE, encoded).getOrThrow();
+		assertEquals(1000, decoded.raidBehaviors().size());
+		assertEquals(recipients, decoded.orders().getFirst().recipients().orElseThrow());
+	}
+
+	@Test
 	void capacityPreservesExplicitChoices() {
 		GuardCommandState state = new GuardCommandState();
 		UUID first = new UUID(1, 0);
