@@ -63,8 +63,8 @@ Guard Villagers is a Fabric mod for Minecraft `1.21.11` (Java 21) that turns pas
 | --- | --- |
 | Minecraft | `1.21.11` |
 | Java | `21` |
-| Fabric Loader | `0.18.2` or newer |
-| Fabric API | `0.139.4+1.21.11` |
+| Fabric Loader | `0.20.1` or newer |
+| Fabric API | `0.141.6+1.21.11` or newer for Minecraft `1.21.11` |
 
 ## Installation
 
@@ -73,7 +73,7 @@ Guard Villagers is a Fabric mod for Minecraft `1.21.11` (Java 21) that turns pas
 1. Install Minecraft `1.21.11`.
 2. Install Fabric Loader for the same version.
 3. Install Fabric API.
-4. Place the built `guard-villagers-1.0.0.jar` into your `mods` folder.
+4. Place the built `guard-villagers-1.0.1.jar` into your `mods` folder.
 5. Launch the game with the Fabric profile.
 
 ### Where The Jar Comes From
@@ -381,6 +381,14 @@ Debug mode is intended for operators and advanced troubleshooting. It can show:
 
 ## Building From Source
 
+Install a Java 21 JDK and make sure `JAVA_HOME` points to it. Use the checked-in
+Gradle wrapper; no separate Gradle installation is needed. The first build downloads
+Gradle, Minecraft, and Fabric dependencies.
+
+`build` compiles both common and client code, runs the JUnit tests, and produces the
+remapped mod jar. It does not launch Minecraft or verify gameplay. Test reports are
+available at `build/reports/tests/test/index.html`.
+
 ### Windows
 
 ```powershell
@@ -397,7 +405,12 @@ Debug mode is intended for operators and advanced troubleshooting. It can show:
 ./gradlew build
 ```
 
-Build outputs are written to `build/libs/`.
+Build outputs are written to `build/libs/`. Install `guard-villagers-1.0.1.jar`;
+the `-sources.jar` is for development and does not go in the `mods` folder.
+
+CI runs the same build on Java 21, validates the Gradle wrapper, and uploads the
+mod jars and test reports. Gradle downloads are checked against the SHA-256 checksum
+in `gradle/wrapper/gradle-wrapper.properties`.
 
 ## License
 
